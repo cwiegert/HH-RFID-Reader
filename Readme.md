@@ -62,8 +62,8 @@ updates require only a `git pull` and Klipper restart.
 
 ```bash
 cd ~
-git clone YOUR_REPO_URL_HERE emu-nfc-reader
-bash ~/emu-nfc-reader/install.sh
+git clone https://github.com/cwiegert/NFC-Reader.git
+bash ~/nfc-reader/install.sh
 ```
 
 Then follow the setup guide for your hardware path above.
@@ -78,8 +78,8 @@ Mainsail / Fluidd update panel alongside Klipper:
 ```ini
 [update_manager emu_nfc_reader]
 type: git_repo
-path: ~/emu-nfc-reader
-origin: YOUR_REPO_URL_HERE
+path: ~/nfc-reader
+origin: https://github.com/cwiegert/NFC-Reader.git
 primary_branch: main
 managed_services: klipper
 install_script: install.sh
@@ -99,7 +99,7 @@ to refresh the symlinks, and restarts Klipper.
 ## Repository Layout
 
 ```
-emu-nfc-reader/
+nfc-reader/
 │
 ├── install.sh                        ← run once after cloning; re-run after manual git pull
 │
