@@ -215,9 +215,9 @@ class NFCGate:
                 "nfc_gate: [%s] spoolman_url not set — set spoolman_url in "
                 "[nfc_gate] or [nfc_gate %s].", self._name, self._name)
 
-        i2c = bus_module.MCU_I2C.lookup(config,
-                                         default_addr=0x24,
-                                         default_speed=400000)
+        i2c = bus_module.MCU_I2C_from_config(config,
+                                              default_addr=0x24,
+                                              default_speed=400000)
 
         self._reader     = PN532Driver(i2c, self._gate,
                                        transceive_delay, crc_delay,
@@ -427,7 +427,8 @@ class NFCGateManager:
 
     def _setup_spi(self, config, ppins):
         spi_speed   = config.getint('spi_speed', 1000000, minval=100000)
-        primary_spi = bus_module.MCU_SPI.lookup(config, default_speed=spi_speed)
+        primary_spi = bus_module.MCU_SPI_from_config(config, mode=0,
+                                                     default_speed=spi_speed)
         self._mcu   = primary_spi._mcu
 
         extra_cs_names = [p.strip()
@@ -460,8 +461,9 @@ class NFCGateManager:
                 "nfc_gates: gate_i2c_addresses parse error: %s" % e)
 
         i2c_speed   = config.getint('i2c_speed', 400000, minval=10000)
-        primary_i2c = bus_module.MCU_I2C.lookup(config, default_addr=addrs[0],
-                                                  default_speed=i2c_speed)
+        primary_i2c = bus_module.MCU_I2C_from_config(config,
+                                                     default_addr=addrs[0],
+                                                     default_speed=i2c_speed)
         self._mcu   = primary_i2c._mcu
 
         all_i2cs = [primary_i2c]
