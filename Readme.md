@@ -137,8 +137,8 @@ nfc-reader/
 │   └── extras/
 │       ├── nfc_gates/                ← Klipper extras package
 │       │   ├── __init__.py           ← thin entry point for [nfc_gates] (SPI/RC522 path)
-│       │   ├── manager.py            ← all gate coordination: GateState, KlipperInterface,
-│       │   │                             NfcGateDefaults, NfcGate, NfcGateManager
+│       │   ├── NFC_manager.py        ← all gate coordination: GateState, KlipperInterface,
+│       │   │                             NFCGateDefaults, NFCGate, NFCGateManager
 │       │   ├── rc522_driver.py       ← RC522 ISO14443A driver (SPI)
 │       │   ├── pn532_driver.py       ← PN532 ISO14443A driver (I2C)
 │       │   ├── spoolman_client.py    ← Spoolman REST API client (UID lookup)
@@ -156,7 +156,7 @@ nfc-reader/
 │   ├── simulate.py                   ← Interactive full-pipeline simulator (no hardware needed)
 │   ├── lookup_uid.py                 ← Live Spoolman UID lookup test
 │   ├── test_gate_state.py            ← Unit tests for GateState debounce logic
-│   ├── test_nfc_gate_config.py       ← Unit tests for NfcGateDefaults config handler
+│   ├── test_nfc_gate_config.py       ← Unit tests for NFCGateDefaults config handler
 │   ├── test_pn532_driver.py          ← PN532 driver tests (mock I2C)
 │   └── test_rc522_driver.py          ← RC522 driver tests (mock SPI)
 │

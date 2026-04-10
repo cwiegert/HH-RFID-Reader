@@ -19,18 +19,18 @@
 #      [include nfc_gate_i2c_pn532.cfg]
 # 5. sudo systemctl restart klipper
 
-from nfc_gates.NFC_manager import NfcGate, NfcGateDefaults, _lane_instances
+from nfc_gates.NFC_manager import NFCGate, NFCGateDefaults, _lane_instances
 
 
 def load_config(config):
     # Handles the base [nfc_gate] section — shared defaults only, no hardware.
-    return NfcGateDefaults(config)
+    return NFCGateDefaults(config)
 
 
 def load_config_prefix(config):
     # Handles [nfc_gate lane0], [nfc_gate lane1], etc.
     printer  = config.get_printer()
     defaults = printer.lookup_object('nfc_gate', None)
-    gate     = NfcGate(config, defaults)
+    gate     = NFCGate(config, defaults)
     _lane_instances.append(gate)
     return gate

@@ -3,7 +3,7 @@
 # PN532 NFC reader driver — I2C variant, using Klipper's MCU_I2C.
 #
 # Drop-in replacement for rc522_driver.py.  The public interface is identical:
-# init(), is_alive(), and read_tag() return the same types so NfcGateManager
+# init(), is_alive(), and read_tag() return the same types so NFCGateManager
 # works unchanged regardless of which driver is selected.
 #
 # Integration model
@@ -105,7 +105,7 @@ class PN532Driver:
     Reads only the tag UID (Approach B — UID lookup via Spoolman).
     No data is read from tag memory; tags never need to be written to.
 
-    The public interface is identical to RC522Driver — NfcGateManager can use
+    The public interface is identical to RC522Driver — NFCGateManager can use
     either driver without any other code changes.
 
     Parameters

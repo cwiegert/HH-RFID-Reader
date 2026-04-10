@@ -2,9 +2,9 @@
 #
 # All gate coordination logic for both hardware paths:
 #
-#   NfcGateDefaults  — shared config defaults from the base [nfc_gate] section
-#   NfcGate          — per-lane manager for [nfc_gate laneN] (one PN532 per EBB42)
-#   NfcGateManager   — shared-MCU manager for [nfc_gates] (RC522/PN532 on a Pico)
+#   NFCGateDefaults  — shared config defaults from the base [nfc_gate] section
+#   NFCGate          — per-lane manager for [nfc_gate laneN] (one PN532 per EBB42)
+#   NFCGateManager   — shared-MCU manager for [nfc_gates] (RC522/PN532 on a Pico)
 #
 # Internal helpers (not imported externally):
 #   GateState        — per-gate debounce state machine
@@ -129,20 +129,20 @@ class KlipperInterface:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# NfcGateDefaults / NfcGate — per-lane I2C/PN532 path
+# NFCGateDefaults / NFCGate — per-lane I2C/PN532 path
 # ─────────────────────────────────────────────────────────────────────────────
 #
-# One NfcGate instance per [nfc_gate laneN] config section.
+# One NFCGate instance per [nfc_gate laneN] config section.
 # Each manages a single PN532 on one EBB42 lane board (I2C, per-lane MCU).
 #
-# NfcGateDefaults holds shared values from the optional base [nfc_gate]
+# NFCGateDefaults holds shared values from the optional base [nfc_gate]
 # section.  Lane sections inherit these and can override any key locally.
 
 # Module-level registry for NFC_GATE_STATUS across all configured lanes.
 _lane_instances = []
 
 
-class NfcGateDefaults:
+class NFCGateDefaults:
     def __init__(self, config):
         self.spoolman_url       = config.get('spoolman_url', '')
         self.spoolman_rfid_key  = config.get('spoolman_rfid_key', 'rfid')
@@ -165,7 +165,7 @@ class NfcGateDefaults:
             configure(log_file)
 
 
-class NfcGate:
+class NFCGate:
     def __init__(self, config, defaults=None):
         self.printer  = config.get_printer()
         self.reactor  = self.printer.get_reactor()
@@ -342,7 +342,7 @@ def _cmd_lane_status(gcmd):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# NfcGateManager — shared-MCU orchestrator for [nfc_gates]
+# NFCGateManager — shared-MCU orchestrator for [nfc_gates]
 # ─────────────────────────────────────────────────────────────────────────────
 #
 # Handles 1–8 RC522 or PN532 readers all wired to a single CAN-connected MCU
@@ -352,7 +352,7 @@ def _cmd_lane_status(gcmd):
 #   gate_i2c_addresses present  → I2C / PN532 path
 #   gate_i2c_addresses absent   → SPI / RC522 path
 
-class NfcGateManager:
+class NFCGateManager:
     def __init__(self, config):
         self.printer = config.get_printer()
         self.reactor = self.printer.get_reactor()
