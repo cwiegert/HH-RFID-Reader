@@ -8,8 +8,8 @@
 
 One **PN532 NFC module** is wired to each EBB42 lane board using the board's
 **software I2C bus** on PB3 (SCL) and PB4 (SDA). The PN532 shares these two wires
-with the existing BME280 temperature sensor at address 0x76 — there is no conflict
-because the PN532 uses a different I2C address (0x24).
+with the existing BME280 temperature sensor at address 118 (0x76) — there is no conflict
+because the PN532 uses a different I2C address 36 (0x24).
 
 No separate MCU or CAN transceiver is needed. The EBB42 lane MCUs are already on
 the CAN bus via Happy Hare's `mmu_hardware.cfg`.
@@ -28,11 +28,11 @@ EBB42 Lane Board                  PN532 Module
 └──────────────────┘              └──────────────────┘
                                   (also wired to BME280
                                    on PB3/PB4 — different
-                                   I2C address 0x76)
+                                   I2C address 118 (0x76))
 ```
 
-> **Address:** The PN532 default I2C address is `0x24` (36 decimal).
-> The BME280 is at `0x76` — both devices are on the same two wires with no conflict.
+> **Address:** The PN532 default I2C address is `36` (0x24).
+> The BME280 is at `118` (0x76) — both devices are on the same two wires with no conflict.
 
 ---
 
@@ -64,12 +64,12 @@ The PN532's I2C address is hardware-selectable via address pads on some modules:
 
 | A1 pad | A0 pad | I2C Address |
 |---|---|---|
-| 0 | 0 | 0x24 (default) |
-| 0 | 1 | 0x25 |
-| 1 | 0 | 0x26 |
-| 1 | 1 | 0x27 |
+| 0 | 0 | 36 (0x24) — default |
+| 0 | 1 | 37 (0x25) |
+| 1 | 0 | 38 (0x26) |
+| 1 | 1 | 39 (0x27) |
 
-All gates in this configuration use address 0x24 because each PN532 is on its own
+All gates in this configuration use address 36 (0x24) because each PN532 is on its own
 dedicated I2C bus (one EBB42 per gate). Address selection only matters if you are
 putting multiple PN532 readers on a shared bus (not this configuration).
 
@@ -80,17 +80,17 @@ putting multiple PN532 readers on a shared bus (not this configuration).
 Each gate is completely independent — the PB3/PB4 bus on lane 0 has no connection to
 the PB3/PB4 bus on lane 1, etc. Each bus carries:
 
-- One BME280 at address 0x76 (already installed by Happy Hare)
-- One PN532 at address 0x24 (new, added by this project)
+- One BME280 at address 118 (0x76) — already installed by Happy Hare
+- One PN532 at address 36 (0x24) — new, added by this project
 
 ```
 CAN bus
   │
-  ├─ lane0 MCU (EBB42)  ←── PB3/PB4 ──→  BME280@0x76  +  PN532@0x24  (Gate 0)
-  ├─ lane1 MCU (EBB42)  ←── PB3/PB4 ──→  BME280@0x76  +  PN532@0x24  (Gate 1)
-  ├─ lane2 MCU (EBB42)  ←── PB3/PB4 ──→  BME280@0x76  +  PN532@0x24  (Gate 2)
-  ├─ lane3 MCU (EBB42)  ←── PB3/PB4 ──→  BME280@0x76  +  PN532@0x24  (Gate 3)
-  └─ lane4 MCU (EBB42)  ←── PB3/PB4 ──→  BME280@0x76  +  PN532@0x24  (Gate 4)
+  ├─ lane0 MCU (EBB42)  ←── PB3/PB4 ──→  BME280@118  +  PN532@36  (Gate 0)
+  ├─ lane1 MCU (EBB42)  ←── PB3/PB4 ──→  BME280@118  +  PN532@36  (Gate 1)
+  ├─ lane2 MCU (EBB42)  ←── PB3/PB4 ──→  BME280@118  +  PN532@36  (Gate 2)
+  ├─ lane3 MCU (EBB42)  ←── PB3/PB4 ──→  BME280@118  +  PN532@36  (Gate 3)
+  └─ lane4 MCU (EBB42)  ←── PB3/PB4 ──→  BME280@118  +  PN532@36  (Gate 4)
 ```
 
 ---
