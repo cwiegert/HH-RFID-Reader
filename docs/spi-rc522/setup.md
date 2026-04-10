@@ -237,4 +237,47 @@ sudo systemctl restart klipper
 
 ---
 
+---
+
+## Uninstalling
+
+### 1 — Remove the Klipper extra symlinks
+
+```bash
+rm ~/klipper/klippy/extras/nfc_gate.py
+rm -rf ~/klipper/klippy/extras/nfc_gates
+```
+
+### 2 — Remove the printer config files
+
+```bash
+rm -rf ~/printer_data/config/NFC
+```
+
+Remove the three `[include NFC/...]` lines from `printer.cfg`.
+
+### 3 — Remove the Moonraker update manager entry
+
+Delete the `[update_manager emu_nfc_reader]` block from `moonraker.conf`, then restart Moonraker:
+
+```bash
+sudo systemctl restart moonraker
+```
+
+### 4 — Remove the repo clone
+
+```bash
+rm -rf ~/emu-nfc-reader
+```
+
+### 5 — Restart Klipper
+
+```bash
+sudo systemctl restart klipper
+```
+
+> The Pico firmware does not need to be reflashed — it will simply stop receiving commands from Klipper. If you want to repurpose the Pico, flash any other RP2040 UF2 image via BOOTSEL mode.
+
+---
+
 **Next:** [Wiring Diagram →](wiring.md) | [Troubleshooting →](troubleshooting.md)

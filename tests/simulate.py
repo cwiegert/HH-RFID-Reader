@@ -36,7 +36,7 @@ for _name in ('extras', 'extras.bus'):
 _EXTRAS = os.path.join(os.path.dirname(__file__), '..', 'klippy', 'extras')
 sys.path.insert(0, _EXTRAS)
 
-from nfc_gates.manager       import GateState, EVENT_CHANGED, EVENT_UID_ONLY, EVENT_REMOVED
+from nfc_gates.NFC_manager   import GateState, EVENT_CHANGED, EVENT_UID_ONLY, EVENT_REMOVED
 from nfc_gates.spoolman_client import SpoolmanClient
 
 

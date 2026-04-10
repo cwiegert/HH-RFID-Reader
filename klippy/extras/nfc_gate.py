@@ -19,7 +19,7 @@
 #      [include nfc_gate_i2c_pn532.cfg]
 # 5. sudo systemctl restart klipper
 
-from nfc_gates.manager import NfcGate, NfcGateDefaults, _lane_instances
+from nfc_gates.NFC_manager import NfcGate, NfcGateDefaults, _lane_instances
 
 
 def load_config(config):

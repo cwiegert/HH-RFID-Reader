@@ -47,7 +47,7 @@ _stub('nfc_gates.pn532_driver',   PN532Driver=object)
 _stub('nfc_gates.rc522_driver',   RC522Driver=object)
 _stub('nfc_gates.spoolman_client', SpoolmanClient=object)
 
-from nfc_gates.manager import NfcGateDefaults
+from nfc_gates.NFC_manager import NfcGateDefaults
 
 
 # ─────────────────────────────────────────────────────────────────────────────
