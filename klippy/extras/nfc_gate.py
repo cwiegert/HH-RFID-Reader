@@ -38,5 +38,12 @@ def load_config_prefix(config):
         del _lane_instances[:]
     defaults = printer.lookup_object('nfc_gate', None)
     gate     = NFCGate(config, defaults)
+    # Replace any existing entry for this lane name (guards against Klipper
+    # calling load_config_prefix more than once per section in a single run).
+    name = config.get_name()
+    for i, existing in enumerate(_lane_instances):
+        if existing._name == gate._name:
+            _lane_instances[i] = gate
+            return gate
     _lane_instances.append(gate)
     return gate
