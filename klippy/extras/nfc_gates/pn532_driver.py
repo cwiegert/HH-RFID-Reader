@@ -209,48 +209,66 @@ class PN532Driver:
         self._i2c.i2c_write(frame)
         time.sleep(_ACK_DELAY_S)
 
-    def _recv(self, delay, expected_cmd_resp, read_len=_MAX_RESPONSE_BYTES):
+    def def _recv(self, delay, expected_cmd_resp, read_len=_MAX_RESPONSE_BYTES):
         """
         Wait *delay* seconds then read a response frame from the PN532.
-        Handles the mandatory ACK frame consumption before reading data.
+        Consumes the ACK frame before fetching the data frame.
         """
+        if self._debug >= 2:
+            logger.debug("nfc_gates: gate %d (PN532) _recv start: waiting %.3fs", 
+                         self._gate, delay)
+        
         time.sleep(delay)
 
-        # 1. Consume the ACK frame (Status + 00 00 FF 00 FF 00)
-        # We read 7 bytes to clear the status byte and the 6-byte ACK frame.
+        # --- PHASE 1: CONSUME ACK ---
+        # The PN532 sends [Status, 00, 00, FF, 00, FF, 00] to acknowledge receipt.
         try:
-            ack_params = self._i2c.i2c_read([], 7)
-            ack_raw = bytearray(ack_params['response'])
-        except Exception:
+            ack_data = self._i2c.i2c_read([], 7)
+            ack_raw = bytearray(ack_data['response'])
+            
+            if self._debug >= 2:
+                logger.debug("nfc_gates: gate %d (PN532) ACK PHASE: raw=%s",
+                             self._gate, ' '.join('%02X' % b for b in ack_raw))
+        except Exception as e:
+            logger.error("nfc_gates: gate %d (PN532) ACK read failed: %s", 
+                         self._gate, str(e))
             return None
 
-        # 2. Small pause to allow the PN532 to prepare the actual response buffer
-        time.sleep(0.005)
+        # --- PHASE 2: WAIT FOR DATA ---
+        # Give the PN532 time to move the actual result into the I2C buffer.
+        time.sleep(0.010)
 
-        # 3. Read the actual data frame
-        params = self._i2c.i2c_read([], read_len)
-        raw = bytearray(params['response'])
-        
-        # PN532 returns CMD + 1 (e.g., 0x02 becomes 0x03)
-        payload = self._check_frame(raw, expected_cmd_resp + 1)
+        # --- PHASE 3: READ DATA FRAME ---
+        try:
+            params = self._i2c.i2c_read([], read_len)
+            raw = bytearray(params['response'])
+            
+            # Response ID is always Command + 1
+            expect_id = expected_cmd_resp + 1
+            payload = self._check_frame(raw, expect_id)
 
-        if self._debug >= 2:
-            status_byte = raw[0] if raw else 0xFF
-            ack_hex = ' '.join('%02X' % b for b in ack_raw)
-            if payload is not None:
-                logger.debug(
-                    "nfc_gates: gate %d (PN532) RX  expect=0x%02X  ACK=%s  "
-                    "status=0x%02X  raw=%s  payload=%s",
-                    self._gate, expected_cmd_resp + 1, ack_hex, status_byte,
-                    ' '.join('%02X' % b for b in raw),
-                    ' '.join('%02X' % b for b in payload))
-            else:
-                logger.debug(
-                    "nfc_gates: gate %d (PN532) RX  expect=0x%02X  ACK=%s  "
-                    "status=0x%02X  FRAME ERROR  raw=%s",
-                    self._gate, expected_cmd_resp + 1, ack_hex, status_byte,
-                    ' '.join('%02X' % b for b in raw) if raw else '(empty)')
-        return payload
+            if self._debug >= 2:
+                status_byte = raw[0] if raw else 0xFF
+                if payload is not None:
+                    logger.debug(
+                        "nfc_gates: gate %d (PN532) DATA PHASE: expect=0x%02X "
+                        "status=0x%02X raw=%s",
+                        self._gate, expect_id, status_byte,
+                        ' '.join('%02X' % b for b in raw))
+                    logger.debug("nfc_gates: gate %d (PN532) DECODED PAYLOAD: %s",
+                                 self._gate, ' '.join('%02X' % b for b in payload))
+                else:
+                    logger.debug(
+                        "nfc_gates: gate %d (PN532) DATA PHASE ERROR: expect=0x%02X "
+                        "status=0x%02X raw=%s",
+                        self._gate, expect_id, status_byte,
+                        ' '.join('%02X' % b for b in raw) if raw else '(empty)')
+            return payload
+
+        except Exception as e:
+            logger.error("nfc_gates: gate %d (PN532) DATA read failed: %s", 
+                         self._gate, str(e))
+            return None
     # ─────────────────────────────────────────────────────────────────────────
     # Initialisation
     # ─────────────────────────────────────────────────────────────────────────
