@@ -302,15 +302,38 @@ class PN532Driver:
                 self._i2c.i2c_write(frame)
                 time.sleep(wait)
 
-                # Single read — STATUS byte is first byte of the response.
-                # If the chip NACKs, i2c_read raises; we catch it below.
+                # --- PHASE 1: CONSUME ACK ---
+                # PN532 sends [Status, 00, 00, FF, 00, FF, 00] to acknowledge.
+                if self._debug >= 2:
+                    logger.debug(
+                        "nfc_gates: gate %d (PN532) wake attempt %d — "
+                        "reading ACK (7 bytes)",
+                        self._gate, attempt + 1)
+                ack_result = self._i2c.i2c_read([], 7)
+                ack_raw    = bytearray(ack_result['response'])
+                if self._debug >= 2:
+                    logger.debug(
+                        "nfc_gates: gate %d (PN532) wake attempt %d — "
+                        "ACK raw=%s",
+                        self._gate, attempt + 1,
+                        ' '.join('%02X' % b for b in ack_raw) if ack_raw else '(empty)')
+
+                # --- PHASE 2: WAIT FOR DATA ---
+                time.sleep(0.010)
+
+                # --- PHASE 3: READ DATA FRAME ---
+                if self._debug >= 2:
+                    logger.debug(
+                        "nfc_gates: gate %d (PN532) wake attempt %d — "
+                        "reading response (15 bytes)",
+                        self._gate, attempt + 1)
                 result = self._i2c.i2c_read([], 15)
                 raw    = bytearray(result['response'])
 
                 if self._debug >= 2:
                     logger.debug(
                         "nfc_gates: gate %d (PN532) wake attempt %d — "
-                        "raw response (%d bytes): %s",
+                        "DATA raw (%d bytes): %s",
                         self._gate, attempt + 1, len(raw),
                         ' '.join('%02X' % b for b in raw) if raw else '(empty)')
 
