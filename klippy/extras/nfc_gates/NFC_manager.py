@@ -166,6 +166,22 @@ class NFCGateDefaults:
         if log_file:
             configure(log_file)
 
+        printer = config.get_printer()
+        gcode   = printer.lookup_object('gcode')
+        gcode.register_command(
+            'NFC_GATE_STATUS', self.cmd_NFC_GATE_STATUS,
+            desc="Report spool state for all configured NFC gates")
+
+    def cmd_NFC_GATE_STATUS(self, gcmd):
+        if not _lane_instances:
+            gcmd.respond_info("No [nfc_gate] sections are configured.")
+            return
+        lines = ["NFC gate status  (%d gate%s configured):"
+                 % (len(_lane_instances), 's' if len(_lane_instances) != 1 else '')]
+        for gate in sorted(_lane_instances, key=lambda g: g._gate):
+            lines.append(gate.status_line())
+        gcmd.respond_info('\n'.join(lines))
+
 
 class NFCGate:
     def __init__(self, config, defaults=None):
@@ -233,12 +249,6 @@ class NFCGate:
             target=self._poll_loop,
             name='nfc-gate-%s' % self._name,
             daemon=True)
-
-        if not _lane_instances:
-            gcode = self.printer.lookup_object('gcode')
-            gcode.register_command(
-                'NFC_GATE_STATUS', _cmd_lane_status,
-                desc="Report spool state for all configured NFC gates")
 
         self.printer.register_event_handler('klippy:connect',
                                             self._handle_connect)
@@ -331,17 +341,6 @@ class NFCGate:
             'uid':      self._state.current_uid or '',
             'failed':   self._failed,
         }
-
-
-def _cmd_lane_status(gcmd):
-    if not _lane_instances:
-        gcmd.respond_info("No [nfc_gate] sections are configured.")
-        return
-    lines = ["NFC gate status  (%d gate%s configured):"
-             % (len(_lane_instances), 's' if len(_lane_instances) != 1 else '')]
-    for gate in sorted(_lane_instances, key=lambda g: g._gate):
-        lines.append(gate.status_line())
-    gcmd.respond_info('\n'.join(lines))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
