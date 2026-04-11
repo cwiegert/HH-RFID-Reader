@@ -274,7 +274,7 @@ class NFCGate:
         default_i2c_addr = d.i2c_address if d else 0x24
         i2c = bus_module.MCU_I2C_from_config(config,
                                               default_addr=default_i2c_addr,
-                                              default_speed=400000)
+                                              default_speed=100000)
 
         self._reader     = PN532Driver(i2c, self._gate,
                                        transceive_delay, crc_delay,
