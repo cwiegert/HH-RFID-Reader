@@ -250,10 +250,30 @@ class NFCGate:
             name='nfc-gate-%s' % self._name,
             daemon=True)
 
+        # Register the status command when there is no base [nfc_gate] section
+        # (defaults is None means load_config was never called, so
+        # NFCGateDefaults.__init__ never ran and no one registered it yet).
+        if defaults is None and not _lane_instances:
+            gcode = self.printer.lookup_object('gcode')
+            gcode.register_command(
+                'NFC_GATE_STATUS', self._cmd_NFC_GATE_STATUS_fallback,
+                desc="Report spool state for all configured NFC gates")
+
         self.printer.register_event_handler('klippy:connect',
                                             self._handle_connect)
         self.printer.register_event_handler('klippy:disconnect',
                                             self._handle_disconnect)
+
+    @staticmethod
+    def _cmd_NFC_GATE_STATUS_fallback(gcmd):
+        if not _lane_instances:
+            gcmd.respond_info("No [nfc_gate] sections are configured.")
+            return
+        lines = ["NFC gate status  (%d gate%s configured):"
+                 % (len(_lane_instances), 's' if len(_lane_instances) != 1 else '')]
+        for gate in sorted(_lane_instances, key=lambda g: g._gate):
+            lines.append(gate.status_line())
+        gcmd.respond_info('\n'.join(lines))
 
     def _handle_connect(self):
         logger.info(
