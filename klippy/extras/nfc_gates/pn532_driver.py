@@ -203,7 +203,7 @@ class PN532Driver:
         """Write a command frame to the PN532 and wait for ACK processing."""
         frame = self._build_frame(cmd_and_params)
         if self._debug >= 2:
-            logger.debug("nfc_gates: gate %d (PN532) TX  cmd=0x%02X  frame=%s",
+            logger.debug("_send: gate %d (PN532) TX  cmd=0x%02X  frame=%s",
                           self._gate, cmd_and_params[0],
                           ' '.join('%02X' % b for b in frame))
         self._i2c.i2c_write(frame)
@@ -215,7 +215,7 @@ class PN532Driver:
         Consumes the ACK frame before fetching the data frame.
         """
         if self._debug >= 2:
-            logger.debug("nfc_gates: gate %d (PN532) _recv start: waiting %.3fs", 
+            logger.debug("_recv: gate %d (PN532) waiting %.3fs",
                          self._gate, delay)
         
         time.sleep(delay)
@@ -227,10 +227,10 @@ class PN532Driver:
             ack_raw = bytearray(ack_data['response'])
             
             if self._debug >= 2:
-                logger.debug("nfc_gates: gate %d (PN532) ACK PHASE: raw=%s",
+                logger.debug("_recv: gate %d (PN532) ACK raw=%s",
                              self._gate, ' '.join('%02X' % b for b in ack_raw))
         except Exception as e:
-            logger.error("nfc_gates: gate %d (PN532) ACK read failed: %s", 
+            logger.error("_recv: gate %d (PN532) ACK read failed: %s",
                          self._gate, str(e))
             return None
 
@@ -251,22 +251,22 @@ class PN532Driver:
                 status_byte = raw[0] if raw else 0xFF
                 if payload is not None:
                     logger.debug(
-                        "nfc_gates: gate %d (PN532) DATA PHASE: expect=0x%02X "
+                        "_recv: gate %d (PN532) DATA: expect=0x%02X "
                         "status=0x%02X raw=%s",
                         self._gate, expect_id, status_byte,
                         ' '.join('%02X' % b for b in raw))
-                    logger.debug("nfc_gates: gate %d (PN532) DECODED PAYLOAD: %s",
+                    logger.debug("_recv: gate %d (PN532) payload: %s",
                                  self._gate, ' '.join('%02X' % b for b in payload))
                 else:
                     logger.debug(
-                        "nfc_gates: gate %d (PN532) DATA PHASE ERROR: expect=0x%02X "
+                        "_recv: gate %d (PN532) DATA ERROR: expect=0x%02X "
                         "status=0x%02X raw=%s",
                         self._gate, expect_id, status_byte,
                         ' '.join('%02X' % b for b in raw) if raw else '(empty)')
             return payload
 
         except Exception as e:
-            logger.error("nfc_gates: gate %d (PN532) DATA read failed: %s", 
+            logger.error("_recv: gate %d (PN532) DATA read failed: %s",
                          self._gate, str(e))
             return None
     # ─────────────────────────────────────────────────────────────────────────
@@ -290,14 +290,14 @@ class PN532Driver:
             wait = 0.150 if attempt == 0 else 0.075
             if self._debug >= 2:
                 logger.debug(
-                    "nfc_gates: gate %d (PN532) wake attempt %d/%d — "
+                    "_wake_pn532: gate %d (PN532) attempt %d/%d — "
                     "sending GetFirmwareVersion (post-TX wait=%.0fms)",
                     self._gate, attempt + 1, attempts, wait * 1000)
             try:
                 frame = self._build_frame([_CMD_GETFIRMWAREVERSION])
                 if self._debug >= 2:
                     logger.debug(
-                        "nfc_gates: gate %d (PN532) TX  cmd=0x02  frame=%s",
+                        "_wake_pn532: gate %d (PN532) TX  cmd=0x02  frame=%s",
                         self._gate, ' '.join('%02X' % b for b in frame))
                 self._i2c.i2c_write(frame)
                 time.sleep(wait)
@@ -306,14 +306,14 @@ class PN532Driver:
                 # PN532 sends [Status, 00, 00, FF, 00, FF, 00] to acknowledge.
                 if self._debug >= 2:
                     logger.debug(
-                        "nfc_gates: gate %d (PN532) wake attempt %d — "
+                        "_wake_pn532: gate %d (PN532) attempt %d — "
                         "reading ACK (7 bytes)",
                         self._gate, attempt + 1)
                 ack_result = self._i2c.i2c_read([], 7)
                 ack_raw    = bytearray(ack_result['response'])
                 if self._debug >= 2:
                     logger.debug(
-                        "nfc_gates: gate %d (PN532) wake attempt %d — "
+                        "_wake_pn532: gate %d (PN532) attempt %d — "
                         "ACK raw=%s",
                         self._gate, attempt + 1,
                         ' '.join('%02X' % b for b in ack_raw) if ack_raw else '(empty)')
@@ -324,7 +324,7 @@ class PN532Driver:
                 # --- PHASE 3: READ DATA FRAME ---
                 if self._debug >= 2:
                     logger.debug(
-                        "nfc_gates: gate %d (PN532) wake attempt %d — "
+                        "_wake_pn532: gate %d (PN532) attempt %d — "
                         "reading response (15 bytes)",
                         self._gate, attempt + 1)
                 result = self._i2c.i2c_read([], 15)
@@ -332,7 +332,7 @@ class PN532Driver:
 
                 if self._debug >= 2:
                     logger.debug(
-                        "nfc_gates: gate %d (PN532) wake attempt %d — "
+                        "_wake_pn532: gate %d (PN532) attempt %d — "
                         "DATA raw (%d bytes): %s",
                         self._gate, attempt + 1, len(raw),
                         ' '.join('%02X' % b for b in raw) if raw else '(empty)')
@@ -340,7 +340,7 @@ class PN532Driver:
                 payload = self._check_frame(raw, 0x03)
                 if payload is not None and len(payload) >= 4:
                     logger.info(
-                        "nfc_gates: gate %d (PN532) wake OK on attempt %d — "
+                        "_wake_pn532: gate %d (PN532) OK on attempt %d — "
                         "IC=0x%02X Ver=%d.%d",
                         self._gate, attempt + 1,
                         payload[0], payload[1], payload[2])
@@ -348,16 +348,16 @@ class PN532Driver:
                 if self._debug >= 2:
                     status_byte = raw[0] if raw else 0xFF
                     logger.debug(
-                        "nfc_gates: gate %d (PN532) wake attempt %d — "
+                        "_wake_pn532: gate %d (PN532) attempt %d — "
                         "frame parse failed (status=0x%02X), retrying",
                         self._gate, attempt + 1, status_byte)
             except Exception as e:
                 level = logger.debug if attempt == 0 else logger.info
-                level("nfc_gates: gate %d (PN532) wake attempt %d failed: %s",
+                level("_wake_pn532: gate %d (PN532) attempt %d failed: %s",
                       self._gate, attempt + 1, e)
             time.sleep(0.050)
 
-        logger.warning("nfc_gates: gate %d (PN532) failed to wake after "
+        logger.warning("_wake_pn532: gate %d (PN532) failed after "
                         "%d attempts — check wiring and I2C address 0x%02X",
                         self._gate, attempts, self._i2c.i2c_address
                         if hasattr(self._i2c, 'i2c_address') else 0x24)
@@ -374,7 +374,7 @@ class PN532Driver:
         Raises RuntimeError if the chip does not respond after retries.
         """
         if self._debug >= 2:
-            logger.debug("nfc_gates: gate %d (PN532) init — starting wake sequence",
+            logger.debug("init: gate %d (PN532) starting wake sequence",
                           self._gate)
 
         if not self._wake_pn532():
@@ -383,19 +383,19 @@ class PN532Driver:
                 % self._gate)
 
         if self._debug >= 2:
-            logger.debug("nfc_gates: gate %d (PN532) init — sending SAMConfiguration "
+            logger.debug("init: gate %d (PN532) sending SAMConfiguration "
                           "(Normal mode, timeout=0, no IRQ)", self._gate)
 
         # SAMConfiguration: Normal mode(0x01), timeout=0x00, IRQ=0x00
         self._send([_CMD_SAMCONFIGURATION, 0x01, 0x00, 0x00])
         payload = self._recv(self._release_delay, 0x15, read_len=12)
         if payload is None:
-            logger.warning("nfc_gates: gate %d (PN532) SAMConfiguration "
+            logger.warning("init: gate %d (PN532) SAMConfiguration "
                             "no response — reader may be unstable",
                             self._gate)
         elif self._debug >= 2:
-            logger.debug("nfc_gates: gate %d (PN532) SAMConfiguration OK — "
-                          "init complete", self._gate)
+            logger.debug("init: gate %d (PN532) SAMConfiguration OK",
+                          self._gate)
 
     def is_alive(self):
         """
@@ -411,7 +411,7 @@ class PN532Driver:
             payload = self._recv(self._release_delay, 0x03, read_len=14)
             return payload is not None and len(payload) >= 4
         except Exception as e:
-            logger.debug("nfc_gates: gate %d (PN532) is_alive error: %s",
+            logger.debug("is_alive: gate %d (PN532) error: %s",
                           self._gate, e)
             return False
 
@@ -442,14 +442,14 @@ class PN532Driver:
             self._release_target()
 
             if self._debug >= 2:
-                logger.debug("nfc_gates: gate %d (PN532) read_tag → uid=%s",
+                logger.debug("read_tag: gate %d (PN532) uid=%s",
                               self._gate, uid_hex)
 
             return uid_hex
         except Exception as e:
             # Runtime NACKs (e.g. tag removed mid-scan) are non-fatal.
             if self._debug >= 1:
-                logger.info("nfc_gates: gate %d (PN532) read_tag I2C error "
+                logger.info("read_tag: gate %d (PN532) I2C error "
                              "(tag removed mid-scan?): %s", self._gate, e)
             return None
 
@@ -465,8 +465,8 @@ class PN532Driver:
         tg_num is the PN532's internal target number (always 1 for MaxTg=1).
         """
         if self._debug >= 2:
-            logger.debug("nfc_gates: gate %d (PN532) InListPassiveTarget — "
-                          "scanning (wait=%.3fs)", self._gate, self._scan_delay)
+            logger.debug("_list_passive_target: gate %d (PN532) scanning (wait=%.3fs)",
+                          self._gate, self._scan_delay)
 
         # MaxTg=1 (detect one tag), BrTy=0x00 (ISO14443A 106 kbps)
         self._send([_CMD_INLISTPASSIVETARGET, 0x01, _BRTY_ISO14443A_106KBPS])
@@ -477,15 +477,15 @@ class PN532Driver:
         payload = self._recv(self._scan_delay, 0x4B, read_len=_MAX_RESPONSE_BYTES)
         if payload is None:
             if self._debug >= 2:
-                logger.debug("nfc_gates: gate %d (PN532) InListPassiveTarget — "
-                              "no valid response frame", self._gate)
+                logger.debug("_list_passive_target: gate %d (PN532) no valid response",
+                              self._gate)
             return None, None
 
         # payload[0] = NbTg (number of targets found)
         if not payload or payload[0] == 0:
             if self._debug >= 2:
-                logger.debug("nfc_gates: gate %d (PN532) InListPassiveTarget — "
-                              "no tag in field (NbTg=0)", self._gate)
+                logger.debug("_list_passive_target: gate %d (PN532) no tag (NbTg=0)",
+                              self._gate)
             return None, None
 
         # Parse first target
@@ -508,7 +508,7 @@ class PN532Driver:
             atqa = payload[2:4]
             sak  = payload[4]
             logger.debug(
-                "nfc_gates: gate %d (PN532) InListPassiveTarget — tag found  "
+                "_list_passive_target: gate %d (PN532) tag found  "
                 "tg=%d  ATQA=%s  SAK=0x%02X  NFCIDLen=%d  UID=%s",
                 self._gate, tg,
                 ' '.join('%02X' % b for b in atqa),
@@ -523,17 +523,17 @@ class PN532Driver:
         starts a fresh scan rather than trying to talk to the old target.
         """
         if self._debug >= 2:
-            logger.debug("nfc_gates: gate %d (PN532) InRelease — "
-                          "deselecting all targets", self._gate)
+            logger.debug("_release_target: gate %d (PN532) deselecting all targets",
+                          self._gate)
         # InRelease: Tg=0x00 releases all targets
         self._send([_CMD_INRELEASE, 0x00])
         # Response CMD code for InRelease is 0x53; payload is just [Status]
         payload = self._recv(self._release_delay, 0x53, read_len=12)
         if self._debug >= 2:
             if payload is not None:
-                logger.debug("nfc_gates: gate %d (PN532) InRelease OK  "
+                logger.debug("_release_target: gate %d (PN532) OK  "
                               "status=0x%02X", self._gate, payload[0] if payload else 0xFF)
             else:
-                logger.debug("nfc_gates: gate %d (PN532) InRelease — "
-                              "no response (non-fatal)", self._gate)
+                logger.debug("_release_target: gate %d (PN532) no response (non-fatal)",
+                              self._gate)
         # Ignore errors — even if release fails, the next scan will recover.
