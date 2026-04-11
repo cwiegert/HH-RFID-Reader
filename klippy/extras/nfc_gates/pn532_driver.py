@@ -102,7 +102,7 @@ class PN532Driver:
     """
     Driver for one PN532 NFC reader module connected via I2C.
 
-    Reads only the tag UID (Approach B — UID lookup via Spoolman).
+    Reads only the tag UID 
     No data is read from tag memory; tags never need to be written to.
 
     The public interface is identical to RC522Driver — NFCGateManager can use
@@ -212,31 +212,45 @@ class PN532Driver:
     def _recv(self, delay, expected_cmd_resp, read_len=_MAX_RESPONSE_BYTES):
         """
         Wait *delay* seconds then read a response frame from the PN532.
-
-        Returns the payload bytes (after TFI + CMD_RESP), or None on failure.
+        Handles the mandatory ACK frame consumption before reading data.
         """
         time.sleep(delay)
-        params  = self._i2c.i2c_read([], read_len)
-        raw     = bytearray(params['response'])
-        payload = self._check_frame(raw, expected_cmd_resp)
+
+        # 1. Consume the ACK frame (Status + 00 00 FF 00 FF 00)
+        # We read 7 bytes to clear the status byte and the 6-byte ACK frame.
+        try:
+            ack_params = self._i2c.i2c_read([], 7)
+            ack_raw = bytearray(ack_params['response'])
+        except Exception:
+            return None
+
+        # 2. Small pause to allow the PN532 to prepare the actual response buffer
+        time.sleep(0.005)
+
+        # 3. Read the actual data frame
+        params = self._i2c.i2c_read([], read_len)
+        raw = bytearray(params['response'])
+        
+        # PN532 returns CMD + 1 (e.g., 0x02 becomes 0x03)
+        payload = self._check_frame(raw, expected_cmd_resp + 1)
 
         if self._debug >= 2:
             status_byte = raw[0] if raw else 0xFF
+            ack_hex = ' '.join('%02X' % b for b in ack_raw)
             if payload is not None:
                 logger.debug(
-                    "nfc_gates: gate %d (PN532) RX  expect_resp=0x%02X  "
+                    "nfc_gates: gate %d (PN532) RX  expect=0x%02X  ACK=%s  "
                     "status=0x%02X  raw=%s  payload=%s",
-                    self._gate, expected_cmd_resp, status_byte,
+                    self._gate, expected_cmd_resp + 1, ack_hex, status_byte,
                     ' '.join('%02X' % b for b in raw),
                     ' '.join('%02X' % b for b in payload))
             else:
                 logger.debug(
-                    "nfc_gates: gate %d (PN532) RX  expect_resp=0x%02X  "
+                    "nfc_gates: gate %d (PN532) RX  expect=0x%02X  ACK=%s  "
                     "status=0x%02X  FRAME ERROR  raw=%s",
-                    self._gate, expected_cmd_resp, status_byte,
+                    self._gate, expected_cmd_resp + 1, ack_hex, status_byte,
                     ' '.join('%02X' % b for b in raw) if raw else '(empty)')
         return payload
-
     # ─────────────────────────────────────────────────────────────────────────
     # Initialisation
     # ─────────────────────────────────────────────────────────────────────────
