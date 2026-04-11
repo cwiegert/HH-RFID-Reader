@@ -162,15 +162,20 @@ class NFCGateDefaults:
         self.i2c_address        = config.getint('i2c_address', 0x24,
                                                  minval=0, maxval=127)
 
-        log_file = config.get('log_file', '')
-        if log_file:
-            configure(log_file)
-
         printer = config.get_printer()
         gcode   = printer.lookup_object('gcode')
         gcode.register_command(
             'NFC_GATE_STATUS', self.cmd_NFC_GATE_STATUS,
             desc="Report spool state for all configured NFC gates")
+
+        log_file = config.get('log_file', '')
+        if log_file:
+            try:
+                configure(log_file)
+            except Exception as e:
+                import logging
+                logging.getLogger().warning(
+                    "nfc_gate: could not open log file %r: %s", log_file, e)
 
     def cmd_NFC_GATE_STATUS(self, gcmd):
         if not _lane_instances:
