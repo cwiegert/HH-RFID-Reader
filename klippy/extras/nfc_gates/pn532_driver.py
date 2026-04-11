@@ -64,6 +64,7 @@
 # reactor thread continues normally.
 
 import time
+import traceback
 
 from .log import logger
 
@@ -226,15 +227,18 @@ class PN532Driver:
         while time.time() < deadline:
             try:
                 result = self._i2c.i2c_read([], 1)
-                status = bytearray(result['response'])[0]
+                raw1 = bytearray(result['response'])
+                status = raw1[0]
             except Exception as e:
-                logger.error("_recv: gate %d (PN532) poll failed: %s",
-                             self._gate, e)
+                logger.error("_recv: gate %d (PN532) poll failed: %s\n%s",
+                             self._gate, e, traceback.format_exc())
                 return None
 
             if self._debug >= 2:
-                logger.debug("_recv: gate %d (PN532) poll status=0x%02X",
-                             self._gate, status)
+                logger.debug("_recv: gate %d (PN532) poll result=%s status=0x%02X",
+                             self._gate,
+                             ' '.join('%02X' % b for b in raw1),
+                             status)
 
             if status == 0x01:
                 try:
@@ -260,8 +264,8 @@ class PN532Driver:
                                 ' '.join('%02X' % b for b in raw) if raw else '(empty)')
                     return payload
                 except Exception as e:
-                    logger.error("_recv: gate %d (PN532) DATA read failed: %s",
-                                 self._gate, e)
+                    logger.error("_recv: gate %d (PN532) DATA read failed: %s\n%s",
+                                 self._gate, e, traceback.format_exc())
                     return None
 
             time.sleep(poll_interval)
@@ -310,8 +314,8 @@ class PN532Driver:
                         self._gate, attempt + 1)
             except Exception as e:
                 level = logger.debug if attempt == 0 else logger.info
-                level("_wake_pn532: gate %d (PN532) attempt %d failed: %s",
-                      self._gate, attempt + 1, e)
+                level("_wake_pn532: gate %d (PN532) attempt %d failed: %s\n%s",
+                      self._gate, attempt + 1, e, traceback.format_exc())
             time.sleep(0.050)
 
         logger.warning("_wake_pn532: gate %d (PN532) failed after "
@@ -368,8 +372,8 @@ class PN532Driver:
             payload = self._recv(0x03, read_len=14, timeout=0.200)
             return payload is not None and len(payload) >= 4
         except Exception as e:
-            logger.debug("is_alive: gate %d (PN532) error: %s",
-                          self._gate, e)
+            logger.debug("is_alive: gate %d (PN532) error: %s\n%s",
+                          self._gate, e, traceback.format_exc())
             return False
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -407,7 +411,8 @@ class PN532Driver:
             # Runtime NACKs (e.g. tag removed mid-scan) are non-fatal.
             if self._debug >= 1:
                 logger.info("read_tag: gate %d (PN532) I2C error "
-                             "(tag removed mid-scan?): %s", self._gate, e)
+                             "(tag removed mid-scan?): %s\n%s",
+                             self._gate, e, traceback.format_exc())
             return None
 
     # ─────────────────────────────────────────────────────────────────────────
