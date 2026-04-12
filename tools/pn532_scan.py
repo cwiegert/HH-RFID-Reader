@@ -353,6 +353,43 @@ def pn532_release(bus, address, debug=False):
     # Errors here are non-fatal — next scan will recover
 
 
+def pn532_flush(bus, address, duration=1.0, poll_interval=0.010, debug=False):
+    """
+    Drain any ready bytes from the PN532 for up to duration seconds.
+
+    This keeps the next scan cycle from seeing stale buffered data after a tag
+    read/release sequence. The duration is a maximum window, not a fixed delay.
+    """
+    deadline = time.time() + duration
+
+    while time.time() < deadline:
+        try:
+            status_byte = i2c_read(bus, address, 1)[0]
+        except Exception as e:
+            if debug:
+                print(f"    flush poll error: {e}")
+            time.sleep(poll_interval)
+            continue
+
+        if status_byte != _STATUS_READY:
+            return
+
+        try:
+            full = i2c_read(bus, address, 1 + _MAX_RESPONSE)
+        except Exception as e:
+            if debug:
+                print(f"    flush read error: {e}")
+            time.sleep(poll_interval)
+            continue
+
+        if debug:
+            frame_bytes = full[1:]
+            print(f"    flush status=0x{full[0]:02X}  "
+                  f"data={' '.join('%02X' % b for b in frame_bytes)}")
+
+        time.sleep(poll_interval)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Bus scan
 # ─────────────────────────────────────────────────────────────────────────────
@@ -442,7 +479,7 @@ def main():
         print(f"\nReady — scanning every {POLL_INTERVAL} seconds.\n")
 
         # ── Polling loop ──────────────────────────────────────────────────
-        last_uid = None
+        tag_was_present = False
         try:
             while True:
                 if args.debug:
@@ -452,16 +489,15 @@ def main():
 
                 if tag:
                     pn532_release(bus, address, debug=args.debug)
-                    uid = bytes_to_hex(tag['uid'])
-                    if uid != last_uid:
-                        print_tag_read(tag)
-                        last_uid = uid
+                    print_tag_read(tag)
+                    pn532_flush(bus, address, duration=1.0, debug=args.debug)
+                    tag_was_present = True
                     if args.once:
                         break
                 else:
-                    if last_uid:
+                    if tag_was_present:
                         print("removed")
-                        last_uid = None
+                        tag_was_present = False
 
                 time.sleep(POLL_INTERVAL)
 
