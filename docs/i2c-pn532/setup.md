@@ -44,7 +44,7 @@ Quick reference:
 
 ```bash
 cd ~
-git clone --filter=blob:none --sparse https://github.com/cwiegert/NFC-Reader.git emu-nfc-reader
+git clone --filter=blob:none --sparse git@github.com:<your-github-username>/NFC-Reader.git emu-nfc-reader
 cd ~/emu-nfc-reader
 git sparse-checkout set klippy config docs tools
 bash install.sh

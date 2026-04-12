@@ -41,7 +41,7 @@ Running `bash install.sh` again after an update is safe.
 
 ```bash
 cd ~
-git clone --filter=blob:none --sparse https://github.com/cwiegert/NFC-Reader.git emu-nfc-reader
+git clone --filter=blob:none --sparse git@github.com:<your-github-username>/NFC-Reader.git emu-nfc-reader
 cd ~/emu-nfc-reader
 git sparse-checkout set klippy config docs tools
 ```
@@ -136,7 +136,7 @@ Add to `moonraker.conf` so Fluidd/Mainsail can update NFC Gate Reader alongside 
 [update_manager emu_nfc_reader]
 type:            git_repo
 path:            ~/emu-nfc-reader
-origin:          https://github.com/cwiegert/NFC-Reader.git
+origin:          git@github.com:<your-github-username>/NFC-Reader.git
 primary_branch:  main
 managed_services: klipper
 install_script:  install.sh
