@@ -34,7 +34,7 @@ after a Klipper restart, with no re-install needed.
 cd ~
 git clone --filter=blob:none --sparse YOUR_REPO_URL_HERE emu-nfc-reader
 cd ~/emu-nfc-reader
-git sparse-checkout set klippy config docs
+git sparse-checkout set klippy config docs tools
 cd ~
 bash ~/emu-nfc-reader/install.sh
 ```

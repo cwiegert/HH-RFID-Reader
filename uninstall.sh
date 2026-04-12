@@ -62,6 +62,15 @@ do
     fi
 done
 
+# ── Remove standalone scanner ─────────────────────────────────────────────────
+echo ""
+if [ -f "${HOME}/pn532_scan.py" ]; then
+    rm "${HOME}/pn532_scan.py"
+    echo "Removed: ${HOME}/pn532_scan.py"
+else
+    echo "Standalone scanner not found — already removed."
+fi
+
 # ── Back up and remove NFC config directory ───────────────────────────────────
 echo ""
 if [ -d "${NFC_CONFIG_DIR}" ]; then
@@ -92,9 +101,10 @@ echo ""
 echo "  1. Remove the NFC include lines from printer.cfg:"
 echo "       [include NFC/nfc_vars.cfg]"
 echo "       [include NFC/nfc_macros.cfg]"
-echo "       [include NFC/nfc_gates_spi_rc522.cfg]          (whichever you used)"
-echo "       [include NFC/nfc_gates_i2c_pn532_pico.cfg]"
-echo "       [include NFC/nfc_gate_i2c_pn532.cfg]"
+echo "       [include NFC/rc522_spi.cfg]          (whichever you used)"
+echo "       [include NFC/pn532_spi.cfg]"
+echo "       [include NFC/pn532_pico_i2c.cfg]"
+echo "       [include NFC/pn532_i2C.cfg]"
 echo ""
 echo "  2. Remove the update manager block from moonraker.conf:"
 echo "       [update_manager emu_nfc_reader]"
