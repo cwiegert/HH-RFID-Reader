@@ -27,6 +27,20 @@
 # The stored value may optionally contain colons, hyphens, or spaces —
 # this client normalises both sides before comparing.
 #
+# Configuration
+# ─────────────
+# The client may be given an explicit Spoolman URL:
+#
+#   spoolman_url: http://127.0.0.1:7912
+#
+# Or it may discover the URL from Moonraker's [spoolman] section:
+#
+#   spoolman_url: auto
+#   moonraker_url: http://127.0.0.1:7125
+#
+# NFC-specific mapping settings such as spoolman_rfid_key remain owned by the
+# NFC config, not Moonraker.
+#
 # API endpoint
 # ────────────
 # GET {spoolman_url}/api/v1/spool
@@ -65,8 +79,12 @@ class SpoolmanClient:
     Parameters
     ----------
     base_url : str
-        Root URL of the Spoolman instance, e.g. "http://192.168.1.50:7912".
+        Root URL of the Spoolman instance, e.g. "http://192.168.1.50:7912",
+        or "auto" to discover it from Moonraker's [spoolman] section.
         Trailing slash is stripped automatically.
+    moonraker_url : str
+        Root URL of the Moonraker instance to query when base_url is "auto".
+        Default: "http://127.0.0.1:7125".
     rfid_key : str
         Name of the extra field that holds the tag UID on each spool record.
         Default: "rfid".  Must match the field name you created in the
@@ -81,12 +99,16 @@ class SpoolmanClient:
     """
 
     def __init__(self, base_url, rfid_key='rfid',
-                 timeout=5.0, cache_ttl=300.0, debug=1):
-        self._base_url  = base_url.rstrip('/')
-        self._rfid_key  = rfid_key
-        self._timeout   = timeout
+                 timeout=5.0, cache_ttl=300.0, debug=1,
+                 moonraker_url='http://127.0.0.1:7125'):
+        self._base_url_config = (base_url or '').strip()
+        self._base_url = (None if self._base_url_config.lower() == 'auto'
+                          else self._normalise_url(self._base_url_config))
+        self._moonraker_url = (moonraker_url or 'http://127.0.0.1:7125').rstrip('/')
+        self._rfid_key = rfid_key
+        self._timeout = timeout
         self._cache_ttl = cache_ttl
-        self._debug     = debug
+        self._debug = debug
 
         # UID → (spool_record, expiry_monotonic)
         self._cache = {}
@@ -107,9 +129,64 @@ class SpoolmanClient:
 
     # ─────────────────────────────────────────────────────────────────────────
 
+    @staticmethod
+    def _normalise_url(url):
+        if not url:
+            return ''
+        url = str(url).strip().rstrip('/')
+        if url.startswith('http://') or url.startswith('https://'):
+            return url
+        return 'http://' + url
+
+    def _discover_base_url_from_moonraker(self):
+        """
+        Return Moonraker's configured Spoolman server URL, or None.
+
+        Moonraker exposes its config through /server/config.  In current
+        Moonraker installs, the [spoolman] section normally appears at:
+            result.config.spoolman.server
+        The fallback keys are intentionally conservative to tolerate older or
+        renamed fields without treating arbitrary values as URLs.
+        """
+        url = '{}/server/config'.format(self._moonraker_url)
+        if self._debug >= 1:
+            logger.info("spoolman: discovering URL from Moonraker %s", url)
+        try:
+            with urlopen(url, timeout=self._timeout) as resp:
+                data = json.loads(resp.read().decode('utf-8'))
+        except Exception as e:
+            logger.warning("spoolman: Moonraker discovery failed (%s): %s", url, e)
+            return None
+
+        config = data.get('result', {}).get('config', {})
+        section = config.get('spoolman') or config.get('spoolman_proxy') or {}
+        for key in ('server', 'url', 'spoolman_url'):
+            value = section.get(key)
+            if value:
+                discovered = self._normalise_url(value)
+                logger.info("spoolman: Moonraker discovery found %s=%s",
+                            key, discovered)
+                return discovered
+
+        logger.warning("spoolman: Moonraker config has no [spoolman] server/url")
+        return None
+
+    def _resolve_base_url(self):
+        if self._base_url:
+            return self._base_url
+        if self._base_url_config.lower() == 'auto':
+            self._base_url = self._discover_base_url_from_moonraker()
+            if self._base_url:
+                return self._base_url
+        return None
+
     def _fetch_spools(self, uid_hex):
         """Return the full Spoolman spool list, or None on request failure."""
-        url = '{}/api/v1/spool'.format(self._base_url)
+        base_url = self._resolve_base_url()
+        if not base_url:
+            logger.warning("spoolman: no Spoolman URL configured or discovered")
+            return None
+        url = '{}/api/v1/spool'.format(base_url)
         if self._debug >= 2:
             logger.debug("spoolman: GET %s (looking for uid=%s, key=%s)",
                           url, uid_hex, self._rfid_key)
@@ -143,7 +220,11 @@ class SpoolmanClient:
 
     def _fetch_spool_detail(self, spool_id):
         """Return the full single-spool record, or None on request failure."""
-        url = '{}/api/v1/spool/{}'.format(self._base_url, spool_id)
+        base_url = self._resolve_base_url()
+        if not base_url:
+            logger.warning("spoolman: no Spoolman URL configured or discovered")
+            return None
+        url = '{}/api/v1/spool/{}'.format(base_url, spool_id)
         if self._debug >= 2:
             logger.debug("spoolman: GET %s", url)
         try:

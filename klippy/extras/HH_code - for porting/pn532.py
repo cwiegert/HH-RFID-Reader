@@ -87,10 +87,11 @@ class PN532Handler:
             logging.info(f"PN532: I2C Address: 0x{PN532_I2C_ADDRESS:02X} (decimal: {PN532_I2C_ADDRESS})")
 
             # read pending data (tentative anti crash measure)
-            self.read_passive_target_id(timeout=0.1)
+            #"""CDW 04/12/2026 -- commenting out the read passive target.   testing startup crash"""
+            #self.read_passive_target_id(timeout=0.1)
             
             # Wake up PN532
-            logging.info("PN532: Step 1: Waking up PN532...")
+            logging.info("PN532: Step 1: Waking up PN532... ")
             self.wakeup()
             time.sleep(0.1)
             
@@ -203,7 +204,9 @@ class PN532Handler:
         try:
             # Send dummy write to wake up PN532
             # PN532 requires a dummy byte to wake from low power mode
+            logging.debug("PN532 ==== about to write the 0x00 to the card reader  ====")
             self.i2c.i2c_write([0x00])
+            logging.debug("PN532: === debug:  did a write to teh card reader, now am going to sleep for a bit")
             time.sleep(0.05)
         except Exception as e:
             logging.debug(f"PN532: Wakeup write error (may be normal): {e}")
@@ -1359,5 +1362,5 @@ class PN532_:
 
 
 def load_config_prefix(config):
-    return PN532(config)
+    return PN532_(config)
 

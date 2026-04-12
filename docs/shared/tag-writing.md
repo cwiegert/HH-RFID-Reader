@@ -1,12 +1,9 @@
-# NFC Tags — Writing is No Longer Required
+# NFC Tags
 
-[← Back to Index](../../Readme.md)
+[Back to README](../../Readme.md)
 
----
+Tags are not written for the supported PN532 I2C path.
 
-This project now uses **Approach B — UID lookup via Spoolman**.
+The system reads the factory UID and resolves that UID through Spoolman.
 
-Tags are **never written to**.  You do not need NFC Tools or any writing app.
-Just stick a blank tag on each spool and register its UID in Spoolman.
-
-→ **[Spoolman Integration Guide](spoolman-integration.md)**
+Use [Spoolman integration](spoolman-integration.md) to register a tag UID on a spool record.

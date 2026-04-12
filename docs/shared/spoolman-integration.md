@@ -1,156 +1,180 @@
-# Spoolman Integration — UID Lookup Setup
+# Spoolman Integration
 
-[← Back to Index](../../Readme.md)
+[← Back to README](../../Readme.md)
 
 ---
 
 ## How It Works
 
-Tags are **never written to**.  The reader reads only the tag's factory UID — the
-number burned into the chip at the factory, unique to every tag ever made.
+NFC Gate Reader uses the tag's factory UID as the link between a physical spool and a Spoolman record. Tags are never written to. The lookup chain is:
 
 ```
-blank tag  →  reader scans UID  →  Spoolman API lookup  →  spool_id  →  MMU_GATE_MAP
+PN532 reads tag UID
+        │
+        ▼
+SpoolmanClient searches spool extra fields for matching UID
+        │
+        ▼
+On match: returns spool_id to NFC_Manager
+        │
+        ▼
+NFC_Manager dispatches _NFC_SPOOL_CHANGED  →  MMU_GATE_MAP
 ```
 
-You paste the UID into Spoolman's database once.  After that, just stick the tag
-on the spool — no NFC writing app, no NDEF records, no tag format to worry about.
+The UID is just a string. Spoolman stores it in a custom extra field on the spool record. When a new tag appears at a gate, SpoolmanClient queries the Spoolman API and scans all spool records for a matching extra field value.
 
 ---
 
-## Step 1 — Add the RFID Extra Field in Spoolman
+## Step 1 — Create the Extra Field in Spoolman
 
-Spoolman stores arbitrary metadata on spool records in a JSON dict called **extra**.
-You need to create a custom field (one-time setup, applies to all spools).
-The field name must match `spoolman_rfid_key` in `nfc_vars.cfg` — the default is `rfid_tag`:
+Before any UID can be registered, Spoolman needs to know the extra field exists.
 
 1. Open Spoolman in your browser.
-2. Go to **Settings → Extra Fields → Spool**.
-3. Click **Add field**.
-4. Set:
-   - **Field name:** `rfid_tag`  *(must match `spoolman_rfid_key` in `nfc_vars.cfg`)*
-   - **Field type:** `Text`
-5. Save.
+2. Go to **Settings → Extra Fields**.
+3. Click **Add extra field**.
+4. Set **Entity** to `Spool`.
+5. Set **Name** to `rfid_tag` (or whatever name you prefer — must match `spoolman_rfid_key` in config).
+6. Set **Field type** to `Text`.
+7. Save.
 
-> **Older Spoolman versions (pre-v0.14):** The extra-fields system was added in
-> v0.14.  If you don't see it, upgrade Spoolman with:
-> ```bash
-> docker compose pull && docker compose up -d
-> ```
-> or however you installed it.  The `rfid` field approach works on all versions
-> that have `/api/v1/spool` with an `extra` dict (v0.14+).
+The field name must match your config exactly:
+
+```ini
+[nfc_gate]
+spoolman_rfid_key: rfid_tag
+```
 
 ---
 
-## Step 2 — Read Each Tag's UID
+## Step 2 — Get the Tag UID
 
-You need the UID **before** you put the tag on the spool — or you can put it on
-the spool first and read it via Klipper (see Step 4).
+You need the UID of each NFC tag before you can register it. Options:
 
-### Option A — Phone app (recommended)
+**From the Klipper console (recommended):**
 
-**NFC Tools** (free, iOS and Android):
-
-1. Open NFC Tools.
-2. Tap **Read**.
-3. Hold the tag to the back of your phone.
-4. Look at the **NFC** section — copy the **Serial number** (e.g. `04:A2:3B:C1:D4:5E:80`).
-
-The UID may be shown with colons or without.  Spoolman accepts both —
-`04:A2:3B:C1:D4:5E:80` and `04A23BC1D45E80` are treated as the same value.
-
-### Option B — Read from Klipper
-
-If the tag is already on a gate:
-
-1. Place the tag on a gate.
-2. Wait up to one poll cycle (30 s default).
-3. Run `NFC_GATE_STATUS` from the Mainsail/Fluidd terminal.
-
-**Output when UID is not yet registered:**
-```
-Gate 0: tag 04A23BC1D45E80 (UID not in Spoolman — set the 'rfid' field on the spool record)
+```gcode
+NFC_GATE NAME=lane0 SCAN=1
 ```
 
-Copy the UID from that line.
+Hold the tag near the lane 0 reader. The UID is printed in the console.
+
+**From the status command (if already registered and polling):**
+
+```gcode
+NFC_GATE_STATUS
+```
+
+**From a phone app:**
+
+Any NFC reader app on Android or iOS can read the UID of an NTAG/Mifare tag. The UID is the same value regardless of which reader reads it — it is the factory-programmed tag identifier.
+
+**From the standalone scanner (Pi GPIO):**
+
+```bash
+python3 ~/pn532_scan.py
+```
 
 ---
 
-## Step 3 — Register the UID in Spoolman
-
-For each spool:
+## Step 3 — Register the Tag in Spoolman
 
 1. Open the spool record in Spoolman.
-2. Scroll to the **Extra** section (added in Step 1).
-3. Set **rfid_tag** to the tag UID — e.g. `04A23BC1D45E80`.
+2. Find the `rfid_tag` extra field.
+3. Paste the UID into the field.
 4. Save.
 
-> Separators are optional.  `04A23BC1D45E80`, `04:A2:3B:C1:D4:5E:80`, and
-> `04-A2-3B-C1-D4-5E-80` all match the same tag.
+**UID formatting is normalized.** Any of these are equivalent and will match correctly:
+
+```
+04AABBCCDD
+04:AA:BB:CC:DD
+04-AA-BB-CC-DD
+04 AA BB CC DD
+```
+
+SpoolmanClient normalizes the stored UID and the read UID to the same uppercase hex string before comparing.
 
 ---
 
-## Step 4 — Verify
+## Step 4 — Test the Lookup
 
-1. Make sure `spoolman_url` is set in `nfc_vars.cfg` to point at your Spoolman instance.
-2. Restart Klipper.
-3. Place the tag on a gate.
-4. Wait one poll cycle (or set `poll_interval: 5` temporarily to speed up testing).
-5. Run `NFC_GATE_STATUS`:
+With the spool loaded on a gate, run one full poll:
 
-**Success:**
-```
-Gate 0: spool 42      UID 04A23BC1D45E80
+```gcode
+NFC_GATE NAME=lane0 POLL=1
 ```
 
-**UID still not found:**
+Expected console output:
+
 ```
-Gate 0: tag 04A23BC1D45E80 (UID not in Spoolman — set the 'rfid' field on the spool record)
+NFC gate 0: spool 1042 detected (UID 04AABBCCDD)
 ```
-→ Double-check the `rfid` field value on that spool record, and that `spoolman_url` is correct.
+
+If the tag is detected but the UID is not found in Spoolman:
+
+```
+NFC gate 0: tag UID 04AABBCCDD is not registered in Spoolman.
+Open the spool record in Spoolman, set the 'rfid_tag' extra field to: 04AABBCCDD
+```
 
 ---
 
-## Config Reference
+## Lookup Behaviour
 
-All Spoolman settings go in the `[nfc_gate]` base section in **`nfc_vars.cfg`**.
-Individual `[nfc_gate laneN]` or `[nfc_gates]` sections inherit these values and can
-override them locally if needed.
+When NFC_Manager receives a UID from PN532Driver:
 
-| Key | Default | Description |
-|---|---|---|
-| `spoolman_url` | *(required)* | Root URL of your Spoolman instance, e.g. `http://192.168.1.50:7912` |
-| `spoolman_rfid_key` | `rfid_tag` | Extra field name in Spoolman — must match what you created in Step 1 |
-| `spoolman_timeout` | `5.0` | HTTP request timeout in seconds |
-| `spoolman_cache_ttl` | `300` | Seconds to cache a successful UID→spool mapping (0 = no cache). Cached entries skip the Spoolman API call when the same tag is re-detected within the TTL. |
+1. SpoolmanClient checks its in-memory cache for the UID.
+2. **Cache hit:** Returns the cached spool record immediately. No HTTP request.
+3. **Cache miss:** Queries `GET /api/v1/spool` with the Spoolman URL, searches all records for a matching `extra[spoolman_rfid_key]` value.
+4. **Match found:** Returns the `spool_id`. NFC_Manager updates gate state and dispatches `_NFC_SPOOL_CHANGED`.
+5. **No match:** Returns nothing. NFC_Manager dispatches `_NFC_TAG_NO_SPOOL`.
 
----
+The cache TTL is controlled by `spoolman_cache_ttl` (default: 300 seconds). To disable caching:
 
-## Changing a Spool
-
-When you load a new spool onto a gate:
-
-- If you're **reusing the same tag**: update the `rfid` field on the new spool record,
-  and clear it from the old spool record.
-- If you're **using a new tag**: peel the old tag off, stick the new one on, then
-  register the new UID in Spoolman.
-
-There is no need to touch the tag itself — it stays blank.
+```ini
+spoolman_cache_ttl: 0
+```
 
 ---
 
-## Supported Tag Types
+## Spoolman URL Configuration
 
-Any 13.56 MHz ISO14443A tag works.  UID length varies by tag family:
+### Automatic (preferred)
 
-| Tag family | UID length | Example products |
-|---|---|---|
-| NTAG213 / 215 / 216 | 7 bytes (14 hex chars) | 25 mm stickers, 50 mm discs |
-| Mifare Classic 1K/4K | 4 bytes (8 hex chars) | White card blanks |
-| Mifare Ultralight | 7 bytes (14 hex chars) | Thin sticker tags |
+```ini
+spoolman_url: auto
+```
 
-All of the above work.  The reader reports whichever UID length the chip provides.
+SpoolmanClient asks Moonraker for its configured Spoolman URL. This works when `moonraker.conf` has a `[spoolman]` section:
 
-> **Tip:** 50 mm disc tags are reliably detected at 1–3 cm.  Small 25 mm sticker tags
-> may require sub-centimetre positioning.  For reliable gate detection without precise
-> alignment, use 50 mm disc tags.
+```ini
+# in moonraker.conf
+[spoolman]
+server: http://192.168.1.50:7912
+```
+
+### Direct URL
+
+```ini
+spoolman_url: http://192.168.1.50:7912
+```
+
+Use this when:
+- Moonraker is not configured with Spoolman.
+- You are testing against a different Spoolman instance.
+- `auto` is failing and you want to bypass Moonraker URL discovery.
+
+---
+
+## Ownership Boundary
+
+SpoolmanClient is a **lookup and cache client only**.
+
+- It resolves UID → spool record.
+- It does not know which MMU gate the spool is physically on.
+- It does not call `MMU_GATE_MAP` or any Happy Hare command.
+- It does not write to Spoolman.
+
+Gate assignment belongs to NFC_Manager, which receives the spool_id from SpoolmanClient and decides whether the gate state changed. Happy Hare calls happen in `nfc_macros.cfg`.
+
+This boundary is intentional. See [Architecture Decisions](architecture-decisions.md).
