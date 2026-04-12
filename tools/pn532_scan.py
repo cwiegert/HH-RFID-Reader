@@ -278,6 +278,27 @@ def pn532_read_passive_target(bus, address, debug=False):
     return ''.join('{:02X}'.format(b) for b in uid)
 
 
+def hex_to_ascii(hex_string):
+    """
+    Convert a hex byte string to printable ASCII for terminal output.
+
+    RFID/NFC UIDs are binary identifiers, so many bytes are not printable text.
+    Printable ASCII bytes are emitted as characters; all others are escaped.
+    """
+    try:
+        data = bytes.fromhex(hex_string)
+    except ValueError:
+        return ''
+
+    chars = []
+    for byte in data:
+        if 0x20 <= byte <= 0x7E:
+            chars.append(chr(byte))
+        else:
+            chars.append('\\x{:02X}'.format(byte))
+    return ''.join(chars)
+
+
 def pn532_release(bus, address, debug=False):
     """
     Send InRelease to deselect all targets.
@@ -389,7 +410,7 @@ def main():
                 if uid:
                     pn532_release(bus, address, debug=args.debug)
                     if uid != last_uid:
-                        print(f"TAG  {uid}")
+                        print(f"TAG  hex={uid}  ascii={hex_to_ascii(uid)}", flush=True)
                         last_uid = uid
                     if args.once:
                         break
