@@ -84,7 +84,7 @@ class SpoolmanClient:
         self._cache_ttl = cache_ttl
         self._debug     = debug
 
-        # UID → (spool_id, expiry_monotonic)
+        # UID → (spool_record, expiry_monotonic)
         self._cache = {}
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -103,34 +103,8 @@ class SpoolmanClient:
 
     # ─────────────────────────────────────────────────────────────────────────
 
-    def lookup_spool_by_uid(self, uid_hex):
-        """
-        Return the Spoolman spool ID whose extra[rfid_key] matches uid_hex,
-        or None if not found or if the API request fails.
-
-        Parameters
-        ----------
-        uid_hex : str
-            Tag UID as returned by read_tag() — uppercase hex, no separators.
-
-        Returns
-        -------
-        int or None
-        """
-        uid_norm = self._normalise_uid(uid_hex)
-
-        # ── Cache hit ─────────────────────────────────────────────────────────
-        if self._cache_ttl > 0 and uid_norm in self._cache:
-            spool_id, expiry = self._cache[uid_norm]
-            if time.monotonic() < expiry:
-                if self._debug >= 2:
-                    logger.debug(
-                        "spoolman: cache hit uid=%s → spool_id=%s", uid_hex, spool_id)
-                return spool_id
-            # Expired — remove stale entry
-            del self._cache[uid_norm]
-
-        # ── API request ───────────────────────────────────────────────────────
+    def _fetch_spools(self, uid_hex):
+        """Return the full Spoolman spool list, or None on request failure."""
         url = '{}/api/v1/spool'.format(self._base_url)
         if self._debug >= 2:
             logger.debug("spoolman: GET %s (looking for uid=%s, key=%s)",
@@ -146,9 +120,12 @@ class SpoolmanClient:
             logger.warning("spoolman: unexpected response type %s from %s",
                             type(spools).__name__, url)
             return None
+        return spools
 
-        # ── Search ────────────────────────────────────────────────────────────
-        spool_id = None
+    def _find_spool_record_by_uid(self, spools, uid_hex):
+        """Return the spool record whose configured RFID field matches uid_hex."""
+        uid_norm = self._normalise_uid(uid_hex)
+
         for spool in spools:
             extra = spool.get('extra') or {}
             stored_raw = extra.get(self._rfid_key)
@@ -157,10 +134,44 @@ class SpoolmanClient:
             stored_cleaned = str(stored_raw).strip('"\'')
             stored_norm = self._normalise_uid(stored_cleaned)
             if stored_norm == uid_norm:
-                raw_id = spool.get('id')
-                if raw_id is not None:
-                    spool_id = int(raw_id)
-                break
+                return spool
+        return None
+
+    def lookup_spool_record_by_uid(self, uid_hex):
+        """
+        Return the Spoolman spool record whose extra[rfid_key] matches uid_hex,
+        or None if not found or if the API request fails.
+
+        Parameters
+        ----------
+        uid_hex : str
+            Tag UID as returned by read_tag() — uppercase hex, no separators.
+
+        Returns
+        -------
+        dict or None
+        """
+        uid_norm = self._normalise_uid(uid_hex)
+
+        # ── Cache hit ─────────────────────────────────────────────────────────
+        if self._cache_ttl > 0 and uid_norm in self._cache:
+            spool, expiry = self._cache[uid_norm]
+            if time.monotonic() < expiry:
+                if self._debug >= 2:
+                    spool_id = spool.get('id')
+                    logger.debug(
+                        "spoolman: cache hit uid=%s → spool_id=%s", uid_hex, spool_id)
+                return spool
+            # Expired — remove stale entry
+            del self._cache[uid_norm]
+
+        # ── API request ───────────────────────────────────────────────────────
+        spools = self._fetch_spools(uid_hex)
+        if spools is None:
+            return None
+
+        spool = self._find_spool_record_by_uid(spools, uid_hex)
+        spool_id = spool.get('id') if spool else None
 
         if self._debug >= 1:
             if spool_id is not None:
@@ -172,9 +183,21 @@ class SpoolmanClient:
                     uid_hex, len(spools), self._rfid_key)
 
         # ── Cache store ───────────────────────────────────────────────────────
-        if self._cache_ttl > 0 and spool_id is not None:
-            self._cache[uid_norm] = (spool_id, time.monotonic() + self._cache_ttl)
+        if self._cache_ttl > 0 and spool is not None:
+            self._cache[uid_norm] = (spool, time.monotonic() + self._cache_ttl)
 
+        return spool
+
+    def lookup_spool_by_uid(self, uid_hex):
+        """
+        Return the Spoolman spool ID whose extra[rfid_key] matches uid_hex,
+        or None if not found or if the API request fails.
+        """
+        spool = self.lookup_spool_record_by_uid(uid_hex)
+        if not spool:
+            return None
+        raw_id = spool.get('id')
+        spool_id = int(raw_id) if raw_id is not None else None
         return spool_id
 
     def clear_cache(self):
