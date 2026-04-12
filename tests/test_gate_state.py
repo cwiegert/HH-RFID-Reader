@@ -33,13 +33,27 @@ class _NullLogger:
 
 _stub('extras')
 _stub('extras.bus')
+_stub('bus',
+      MCU_I2C_from_config=lambda *a, **k: None,
+      MCU_SPI_from_config=lambda *a, **k: None,
+      MCU_I2C=object,
+      MCU_SPI=object)
 
 _nfc_pkg = _stub('nfc_gates')
 _nfc_pkg.__path__    = [os.path.join(_EXTRAS, 'nfc_gates')]
 _nfc_pkg.__package__ = 'nfc_gates'
 
-_stub('nfc_gates.log',           logger=_NullLogger(), configure=lambda p: None)
-_stub('nfc_gates.pn532_driver',  PN532Driver=object)
+_null = _NullLogger()
+_stub('nfc_gates.log',
+      logger=_null, configure=lambda *a, **k: None,
+      info=lambda *a, **k: None,
+      warning=lambda *a, **k: None,
+      error=lambda *a, **k: None)
+_stub('nfc_gates.pn532_driver',
+      PN532Driver=object,
+      PN532_COMMAND_GETFIRMWAREVERSION=0x02,
+      PN532_COMMAND_SAMCONFIGURATION=0x14,
+      PN532_COMMAND_INLISTPASSIVETARGET=0x4A)
 _stub('nfc_gates.rc522_driver',  RC522Driver=object)
 _stub('nfc_gates.spoolman_client', SpoolmanClient=object)
 

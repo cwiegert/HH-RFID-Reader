@@ -37,13 +37,27 @@ class _NullLogger:
 
 _stub('extras')
 _stub('extras.bus')
+_stub('bus',
+      MCU_I2C_from_config=lambda *a, **k: None,
+      MCU_SPI_from_config=lambda *a, **k: None,
+      MCU_I2C=object,
+      MCU_SPI=object)
 
 _nfc_pkg = _stub('nfc_gates')
 _nfc_pkg.__path__    = [os.path.join(_EXTRAS, 'nfc_gates')]
 _nfc_pkg.__package__ = 'nfc_gates'
 
-_stub('nfc_gates.log',            logger=_NullLogger(), configure=lambda p: None)
-_stub('nfc_gates.pn532_driver',   PN532Driver=object)
+_null = _NullLogger()
+_stub('nfc_gates.log',
+      logger=_null, configure=lambda *a, **k: None,
+      info=lambda *a, **k: None,
+      warning=lambda *a, **k: None,
+      error=lambda *a, **k: None)
+_stub('nfc_gates.pn532_driver',
+      PN532Driver=object,
+      PN532_COMMAND_GETFIRMWAREVERSION=0x02,
+      PN532_COMMAND_SAMCONFIGURATION=0x14,
+      PN532_COMMAND_INLISTPASSIVETARGET=0x4A)
 _stub('nfc_gates.rc522_driver',   RC522Driver=object)
 _stub('nfc_gates.spoolman_client', SpoolmanClient=object)
 
@@ -54,26 +68,51 @@ from nfc_gates.NFC_manager import NFCGateDefaults
 # Minimal mock Klipper config object
 # ─────────────────────────────────────────────────────────────────────────────
 
+class _MockGCode:
+    """Minimal stand-in for Klipper's GCode object."""
+    def register_command(self, *a, **k): pass
+
+
+class _MockPrinter:
+    """Minimal stand-in for Klipper's PrinterObjects."""
+    def lookup_object(self, name, default=None):
+        return _MockGCode()
+    def get_reactor(self):
+        return None
+
+
 class MockConfig:
     """
     Lightweight stand-in for Klipper's ConfigWrapper.
 
-    Supports the same get / getfloat / getint signatures used by
+    Supports the same get / getfloat / getint / get_printer signatures used by
     NFCGateDefaults, including minval / maxval validation.
     """
 
     def __init__(self, values=None, name='nfc_gate'):
-        self._values = dict(values or {})
-        self._name   = name
+        self._values  = dict(values or {})
+        self._name    = name
+        self._printer = _MockPrinter()
 
     def get_name(self):
         return self._name
+
+    def get_printer(self):
+        return self._printer
 
     def error(self, msg):
         return ValueError(msg)
 
     def get(self, key, default=None):
         return self._values.get(key, default)
+
+    def getboolean(self, key, default=None):
+        raw = self._values.get(key, default)
+        if isinstance(raw, bool):
+            return raw
+        if raw is None:
+            return default
+        return str(raw).strip().lower() in ('true', '1', 'yes')
 
     def getfloat(self, key, default=None, minval=None, maxval=None):
         raw = self._values.get(key, default)

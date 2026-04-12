@@ -42,7 +42,11 @@ class _NullLogger:
 _nfc_pkg = _stub('nfc_gates')
 _nfc_pkg.__path__    = [os.path.join(_EXTRAS, 'nfc_gates')]
 _nfc_pkg.__package__ = 'nfc_gates'
-_stub('nfc_gates.log', logger=_NullLogger(), configure=lambda p: None)
+_stub('nfc_gates.log',
+      logger=_NullLogger(), configure=lambda *a, **k: None,
+      info=lambda *a, **k: None,
+      warning=lambda *a, **k: None,
+      error=lambda *a, **k: None)
 
 # Suppress time.sleep so _ACK_DELAY_S and configurable delays don't slow tests
 time.sleep = lambda _: None
@@ -122,36 +126,65 @@ def _inlist_no_tag():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# _transceive() response helpers
+#
+# Each PN532 command now goes through _transceive(), which makes 4 i2c_read()
+# calls per command:
+#   1. _read_ack() ready poll  — 1 byte,  expects [0x01]
+#   2. _read_ack() ACK frame   — 7 bytes, expects [0x01, 0x00, 0x00, 0xFF, 0x00, 0xFF, 0x00]
+#   3. _recv()    ready poll   — 1 byte,  expects [0x01]
+#   4. _recv()    response     — N bytes, the actual PN532 response frame
+#
+# Use _cmd(response_frame) to build the 4-entry list for one command.
+# Chain multiple calls with + to build sequences for init(), read_tag(), etc.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_ACK_FRAME = [0x01, 0x00, 0x00, 0xFF, 0x00, 0xFF, 0x00]
+
+def _cmd(response_frame):
+    """4 mock i2c_read() returns needed for one successful _transceive() call."""
+    return [
+        [0x01],         # _read_ack: ready poll
+        _ACK_FRAME,     # _read_ack: ACK frame
+        [0x01],         # _recv: ready poll
+        response_frame, # _recv: full response frame
+    ]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Tests
 # ─────────────────────────────────────────────────────────────────────────────
 
 def test_init_sends_samconfiguration():
-    i2c = MockI2C(read_responses=[_sam_ok()])
+    # init() wakes the PN532 with GetFirmwareVersion, then sends SAMConfiguration.
+    # Each _transceive() call needs 4 mock reads: ready, ACK, ready, response.
+    i2c = MockI2C(read_responses=_cmd(_firmware_ok()) + _cmd(_sam_ok()))
     driver = PN532Driver(i2c, gate=0, crc_delay=0.0)
     driver.init()
     assert i2c.wrote_cmd(_CMD_SAMCONFIGURATION), \
         "init() did not send SAMConfiguration"
 
 def test_is_alive_returns_true_on_firmware_response():
-    i2c = MockI2C(read_responses=[_firmware_ok()])
+    i2c = MockI2C(read_responses=_cmd(_firmware_ok()))
     driver = PN532Driver(i2c, gate=0, crc_delay=0.0)
     assert driver.is_alive() is True
 
 def test_is_alive_returns_false_on_bad_response():
-    i2c = MockI2C(read_responses=[_busy()])
+    # Provide all-busy bytes so every read returns 0x00 (not ready); driver gives up.
+    i2c = MockI2C(read_responses=[_busy()] * 8)
     driver = PN532Driver(i2c, gate=0, crc_delay=0.0)
     assert driver.is_alive() is False
 
 def test_no_tag_returns_none():
     """InListPassiveTarget NbTg=0 → read_tag() returns None."""
-    i2c = MockI2C(read_responses=[_inlist_no_tag()])
+    i2c = MockI2C(read_responses=_cmd(_inlist_no_tag()))
     driver = PN532Driver(i2c, gate=0, transceive_delay=0.0, crc_delay=0.0)
     assert driver.read_tag() is None
 
 def test_tag_present_returns_uid():
     """Happy path: 4-byte UID → correct uppercase hex string returned."""
-    i2c = MockI2C(read_responses=[_inlist_tag((0xA3, 0xF2, 0x00, 0xCC)),
-                                   _release_ok()])
+    i2c = MockI2C(read_responses=_cmd(_inlist_tag((0xA3, 0xF2, 0x00, 0xCC)))
+                                 + _cmd(_release_ok()))
     driver = PN532Driver(i2c, gate=0, transceive_delay=0.0, crc_delay=0.0)
     result = driver.read_tag()
     assert result == 'A3F200CC', f"Expected 'A3F200CC', got {result!r}"
@@ -159,14 +192,14 @@ def test_tag_present_returns_uid():
 def test_tag_7byte_uid():
     """7-byte UID (NTAG216) is returned as 14-char hex string."""
     uid = (0x04, 0xA2, 0x3B, 0xC1, 0xD4, 0x5E, 0x80)
-    i2c = MockI2C(read_responses=[_inlist_tag(uid), _release_ok()])
+    i2c = MockI2C(read_responses=_cmd(_inlist_tag(uid)) + _cmd(_release_ok()))
     driver = PN532Driver(i2c, gate=0, transceive_delay=0.0, crc_delay=0.0)
     result = driver.read_tag()
     assert result == '04A23BC1D45E80', f"Expected '04A23BC1D45E80', got {result!r}"
 
 def test_inlist_command_sent():
     """read_tag() must send InListPassiveTarget."""
-    i2c = MockI2C(read_responses=[_inlist_tag(), _release_ok()])
+    i2c = MockI2C(read_responses=_cmd(_inlist_tag()) + _cmd(_release_ok()))
     driver = PN532Driver(i2c, gate=0, transceive_delay=0.0, crc_delay=0.0)
     driver.read_tag()
     assert i2c.wrote_cmd(_CMD_INLISTPASSIVETARGET), \
@@ -174,7 +207,7 @@ def test_inlist_command_sent():
 
 def test_inrelease_sent_after_tag_found():
     """read_tag() must send InRelease after successfully detecting a tag."""
-    i2c = MockI2C(read_responses=[_inlist_tag(), _release_ok()])
+    i2c = MockI2C(read_responses=_cmd(_inlist_tag()) + _cmd(_release_ok()))
     driver = PN532Driver(i2c, gate=0, transceive_delay=0.0, crc_delay=0.0)
     driver.read_tag()
     assert i2c.wrote_cmd(_CMD_INRELEASE), \
