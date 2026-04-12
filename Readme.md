@@ -20,7 +20,7 @@ Tags are **never written to**. Any blank NFC sticker works — register its UID 
 
 ## Choose Your Hardware Path
 
-Three configurations are supported. **Pick one.**
+Four configurations are supported. **Pick one.**
 
 ---
 
@@ -37,15 +37,34 @@ RC522 (SPI) → Pico (CAN) → [nfc_gates] → Happy Hare
 | Extra hardware | Raspberry Pi Pico + SN65HVD230 CAN transceiver |
 | Readers | RC522 — one per gate, shared SPI bus, individual CS pins |
 | Klipper config | `[nfc_gates]` section |
-| Config files | `nfc_vars.cfg` + `nfc_macros.cfg` + `nfc_gates_spi_rc522.cfg` |
+| Config files | `nfc_vars.cfg` + `nfc_macros.cfg` + `rc522_spi.cfg` |
 
 → **[Path A Setup Guide](docs/spi-rc522/setup.md)**
 
 ---
 
-### Path B — I2C / PN532 on Pico
+### Path B — SPI / PN532 on Pico
 
-Use this if you have a dedicated **Raspberry Pi Pico** on the CAN bus and prefer **PN532 modules**. Requires PN532 modules with addressable ADDR pins for unique I2C addresses.
+Use this if you have a dedicated **Raspberry Pi Pico** on the CAN bus with **PN532 readers** on its SPI bus. The PN532 handles the full ISO14443A stack in hardware — simpler protocol than the RC522 and lower CAN bus traffic.
+
+```
+PN532 (SPI) → Pico (CAN) → [nfc_gates] → Happy Hare
+```
+
+| | |
+|---|---|
+| Extra hardware | Raspberry Pi Pico + SN65HVD230 CAN transceiver |
+| Readers | PN532 — one per gate, shared SPI bus, individual CS pins |
+| Klipper config | `[nfc_gates]` section |
+| Config files | `nfc_vars.cfg` + `nfc_macros.cfg` + `pn532_spi.cfg` |
+
+→ **[Path B Setup Guide](docs/spi-pn532/setup.md)**
+
+---
+
+### Path C — I2C / PN532 on Pico
+
+Use this if you have a dedicated **Raspberry Pi Pico** on the CAN bus and want **PN532 readers over I2C**. Requires PN532 modules with addressable ADDR pins for unique I2C addresses per gate.
 
 ```
 PN532 (I2C) → Pico (CAN) → [nfc_gates] → Happy Hare
@@ -56,13 +75,13 @@ PN532 (I2C) → Pico (CAN) → [nfc_gates] → Happy Hare
 | Extra hardware | Raspberry Pi Pico + SN65HVD230 CAN transceiver |
 | Readers | PN532 — one per gate, shared I2C bus, unique addresses via ADDR pins |
 | Klipper config | `[nfc_gates]` section with `gate_i2c_addresses` |
-| Config files | `nfc_vars.cfg` + `nfc_macros.cfg` + `nfc_gates_i2c_pn532_pico.cfg` |
+| Config files | `nfc_vars.cfg` + `nfc_macros.cfg` + `pn532_pico_i2c.cfg` |
 
-→ **[Path B Setup Guide](docs/spi-rc522/setup.md)** (same Pico firmware as Path A)
+→ **[Path C Setup Guide](docs/i2c-pn532/setup.md)**
 
 ---
 
-### Path C — I2C / PN532 on EBB42
+### Path D — I2C / PN532 on EBB42
 
 Use this if you have **EBB42 lane boards** already on the CAN bus. A PN532 module wires directly to each lane board's I2C pins — no separate Pico needed.
 
@@ -75,15 +94,15 @@ PN532 (I2C on EBB42) → lane MCU (CAN) → [nfc_gate laneN] → Happy Hare
 | Extra hardware | One PN532 module per gate, wired to EBB42 PB3/PB4 |
 | Readers | PN532 — one per lane board, dedicated I2C bus per gate |
 | Klipper config | One `[nfc_gate laneN]` section per gate |
-| Config files | `nfc_vars.cfg` + `nfc_macros.cfg` + `nfc_gate_i2c_pn532.cfg` |
+| Config files | `nfc_vars.cfg` + `nfc_macros.cfg` + `pn532_i2C.cfg` |
 
-→ **[Path C Setup Guide](docs/i2c-pn532/setup.md)**
+→ **[Path D Setup Guide](docs/i2c-pn532/setup.md)**
 
 ---
 
 ## Install
 
-All three paths use the same install process.
+All paths use the same install process.
 
 ### 1 — Clone the repository
 
@@ -105,7 +124,8 @@ nfc_gate.py  →  ~/emu-nfc-reader/klippy/extras/nfc_gate.py
 nfc_gates/   →  ~/emu-nfc-reader/klippy/extras/nfc_gates/
 ```
 
-It also creates `~/printer_data/config/NFC/` and copies all config files into it. On subsequent runs it backs up the existing `NFC/` directory to `NFC_<timestamp>/` and restores your `nfc_vars.cfg` — your settings are never overwritten.
+It also creates `~/printer_data/config/NFC/` and copies all config files into it.
+On subsequent runs it merges any new sections into your existing config files — your settings are never overwritten.
 
 ### 2 — Set your Spoolman URL
 
@@ -126,21 +146,28 @@ Pick **one** hardware config and add these three lines to `printer.cfg` in this 
 ```ini
 [include NFC/nfc_vars.cfg]
 [include NFC/nfc_macros.cfg]
-[include NFC/nfc_gates_spi_rc522.cfg]
+[include NFC/rc522_spi.cfg]
 ```
 
-**Path B — I2C / PN532 on Pico:**
+**Path B — SPI / PN532 on Pico:**
 ```ini
 [include NFC/nfc_vars.cfg]
 [include NFC/nfc_macros.cfg]
-[include NFC/nfc_gates_i2c_pn532_pico.cfg]
+[include NFC/pn532_spi.cfg]
 ```
 
-**Path C — I2C / PN532 on EBB42:**
+**Path C — I2C / PN532 on Pico:**
 ```ini
 [include NFC/nfc_vars.cfg]
 [include NFC/nfc_macros.cfg]
-[include NFC/nfc_gate_i2c_pn532.cfg]
+[include NFC/pn532_pico_i2c.cfg]
+```
+
+**Path D — I2C / PN532 on EBB42:**
+```ini
+[include NFC/nfc_vars.cfg]
+[include NFC/nfc_macros.cfg]
+[include NFC/pn532_i2C.cfg]
 ```
 
 ### 4 — Restart Klipper
@@ -181,7 +208,7 @@ install_script: install.sh
 sudo systemctl restart moonraker
 ```
 
-When an update is available, Moonraker pulls the latest code, runs `install.sh` to refresh the symlinks and copy updated config files, then restarts Klipper. Your `nfc_vars.cfg` is always preserved.
+When an update is available, Moonraker pulls the latest code, runs `install.sh` to refresh the symlinks and merge updated config files, then restarts Klipper. Your settings are always preserved.
 
 ---
 
@@ -247,24 +274,25 @@ emu-nfc-reader/
 ├── klippy/
 │   └── extras/
 │       ├── nfc_gate.py               ← Klipper entry point for [nfc_gate] / [nfc_gate laneN]
-│       │                                (Path C — I2C/PN532 on EBB42)
+│       │                                (Path D — I2C/PN532 on EBB42)
 │       │                                Thin shim — all logic is in nfc_gates/
 │       └── nfc_gates/                ← Klipper package for [nfc_gates]
-│           │                            (Paths A & B — SPI/RC522 or I2C/PN532 on Pico)
+│           │                            (Paths A, B, C — SPI or I2C on Pico)
 │           ├── __init__.py           ← load_config → NFCGateManager
 │           ├── NFC_manager.py        ← NFCGateDefaults, NFCGate, NFCGateManager,
 │           │                            GateState, KlipperInterface
 │           ├── rc522_driver.py       ← RC522 ISO14443A driver (SPI)
-│           ├── pn532_driver.py       ← PN532 ISO14443A driver (I2C)
+│           ├── pn532_driver.py       ← PN532 ISO14443A driver (I2C + SPI)
 │           ├── spoolman_client.py    ← Spoolman REST API client (UID lookup)
 │           └── log.py               ← dedicated logger → nfc_reader.log
 │
 ├── config/                           ← install.sh copies these to printer_data/config/NFC/
 │   ├── nfc_vars.cfg                  ← your settings (Spoolman URL, poll interval, debug)
 │   ├── nfc_macros.cfg                ← Happy Hare GCode macros — same for all paths
-│   ├── nfc_gates_spi_rc522.cfg       ← Path A hardware config
-│   ├── nfc_gates_i2c_pn532_pico.cfg  ← Path B hardware config
-│   └── nfc_gate_i2c_pn532.cfg        ← Path C hardware config
+│   ├── rc522_spi.cfg                 ← Path A hardware config
+│   ├── pn532_spi.cfg                 ← Path B hardware config
+│   ├── pn532_pico_i2c.cfg            ← Path C hardware config
+│   └── pn532_i2C.cfg                 ← Path D hardware config
 │
 ├── tests/                            ← development only — not deployed to printer
 │   ├── simulate.py                   ← interactive full-pipeline simulator
@@ -279,8 +307,11 @@ emu-nfc-reader/
     │   ├── setup.md                  ← Path A install walkthrough
     │   ├── wiring.md                 ← RC522 + Pico + CAN transceiver wiring
     │   └── troubleshooting.md
+    ├── spi-pn532/
+    │   ├── setup.md                  ← Path B install walkthrough
+    │   └── wiring.md                 ← PN532 SPI + Pico + CAN transceiver wiring
     ├── i2c-pn532/
-    │   ├── setup.md                  ← Path C install walkthrough
+    │   ├── setup.md                  ← Paths C & D install walkthrough
     │   ├── wiring.md                 ← PN532 + EBB42 I2C wiring
     │   └── troubleshooting.md
     └── shared/
@@ -295,11 +326,14 @@ emu-nfc-reader/
 
 | Document | Contents |
 |---|---|
-| [Path A Setup — SPI / RC522](docs/spi-rc522/setup.md) | Flash Pico, configure UUID, Moonraker updater |
+| [Path A Setup — SPI / RC522 on Pico](docs/spi-rc522/setup.md) | Flash Pico, configure UUID, Moonraker updater |
 | [Path A Wiring](docs/spi-rc522/wiring.md) | RC522 pinout, Pico GPIO, CAN transceiver |
 | [Path A Troubleshooting](docs/spi-rc522/troubleshooting.md) | Reader init failures, SPI errors |
-| [Path C Setup — I2C / PN532](docs/i2c-pn532/setup.md) | Configure gate sections, Moonraker updater |
-| [Path C Wiring](docs/i2c-pn532/wiring.md) | PN532 pinout, EBB42 I2C pins, pull-up resistors |
-| [Path C Troubleshooting](docs/i2c-pn532/troubleshooting.md) | PN532 init failures, I2C address conflicts |
+| [Path B Setup — SPI / PN532 on Pico](docs/spi-pn532/setup.md) | Flash Pico, configure UUID, Moonraker updater |
+| [Path B Wiring](docs/spi-pn532/wiring.md) | PN532 SPI pinout, Pico GPIO, CAN transceiver |
+| [Path C Setup — I2C / PN532 on Pico](docs/i2c-pn532/setup.md) | Flash Pico, I2C addresses, Moonraker updater |
+| [Path D Setup — I2C / PN532 on EBB42](docs/i2c-pn532/setup.md) | Configure gate sections, Moonraker updater |
+| [Path D Wiring](docs/i2c-pn532/wiring.md) | PN532 pinout, EBB42 I2C pins, pull-up resistors |
+| [Path D Troubleshooting](docs/i2c-pn532/troubleshooting.md) | PN532 init failures, I2C address conflicts |
 | [Spoolman Integration](docs/shared/spoolman-integration.md) | Add rfid extra field, read UIDs, register spools |
 | [Debugging & Logs](docs/shared/debugging.md) | nfc_reader.log, debug levels, NFC_GATE_STATUS |
