@@ -800,13 +800,22 @@ class NFCGate:
     def _handle_connect(self):
         logger.info(
             "nfc_gate: [%s] connected — gate=%d, poll=%.0fs, "
-            "absent_threshold=%d, debug=%d",
+            "absent_threshold=%d, debug=%d — init in 2s",
             self._name, self._gate, self._poll_interval,
             self._absent_threshold, self._debug)
+        self.reactor.register_timer(
+            self._delayed_init, self.reactor.monotonic() + 2.0)
+
+    def _delayed_init(self, eventtime):
+        """Initialise the PN532 after other I2C devices have had time to settle.
+
+        Runs in the reactor thread 2 seconds after klippy:connect fires.
+        Returns reactor.NEVER so the timer does not repeat.
+        """
         if self._debug >= 2:
             logger.debug(
-                "nfc_gate: [%s] calling reader.init() — "
-                "wake + SAMConfiguration sequence starting", self._name)
+                "nfc_gate: [%s] delayed init — wake + SAMConfiguration",
+                self._name)
         try:
             self._reader.init()
             if self._reader.is_alive():
@@ -831,6 +840,8 @@ class NFCGate:
                 "NFC[%s]: reader ready. "
                 "Run NFC_GATE NAME=%s READ=1 to start polling."
                 % (self._name, self._name))
+
+        return self.reactor.NEVER
 
     def _handle_disconnect(self):
         if self._debug >= 2:
