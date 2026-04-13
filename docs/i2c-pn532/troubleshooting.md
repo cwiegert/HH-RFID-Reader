@@ -187,7 +187,7 @@ The NFC reader is detecting tags and looking up spools, but Happy Hare is not be
 Check `nfc_macros.cfg`. The default `_NFC_SPOOL_CHANGED` calls:
 
 ```gcode
-MMU_SPOOLMAN UPDATE=1 GATE=<gate> SPOOLID=<spool_id>
+MMU_GATE_MAP GATE=<gate> SPOOLID=<spool_id> SYNC=1 QUIET=1
 ```
 
 Possible causes:
@@ -195,7 +195,9 @@ Possible causes:
 - The macro was accidentally deleted or commented out.
 - Your installed `~/printer_data/config/NFC/nfc_macros.cfg` still has an older body such as `MMU_GATE_MAP NEXT_SPOOLID=...` or `MMU_GATE_MAP GATE=...`.
 - Moonraker does not have Spoolman configured, so Happy Hare cannot write the gate mapping to the Spoolman DB.
-- Happy Hare is in a state where it rejects `MMU_SPOOLMAN UPDATE=1` (e.g. a print is active with gate locks on).
+- Happy Hare rejects the runtime `MMU_GATE_MAP` form or expects different parameter names for your version.
+- Happy Hare is not configured with `spoolman_support: push`, so `MMU_GATE_MAP ... SYNC=1` is not pushing local gate map changes to Spoolman.
+- Happy Hare is in a state where it rejects `MMU_GATE_MAP ... SYNC=1` (e.g. a print is active with gate locks on).
 
 Test the macro boundary directly, without hardware:
 

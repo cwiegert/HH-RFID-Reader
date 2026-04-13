@@ -18,10 +18,28 @@ SpoolmanClient searches spool extra fields for matching UID
 On match: returns spool_id to NFC_Manager
         │
         ▼
-NFC_Manager dispatches _NFC_SPOOL_CHANGED  →  MMU_SPOOLMAN UPDATE=1
+NFC_Manager dispatches _NFC_SPOOL_CHANGED
+        │
+        ▼
+nfc_macros.cfg calls MMU_GATE_MAP ... SYNC=1
 ```
 
 The UID is just a string. Spoolman stores it in a custom extra field on the spool record. When a new tag appears at a gate, SpoolmanClient queries the Spoolman API and scans all spool records for a matching extra field value.
+
+After a UID resolves, NFC_Manager also asks SpoolmanClient to update the spool record's `location` field:
+
+```http
+PATCH /api/v1/spool/<spool_id>
+{"location": "MMU_GATE_<gate>"}
+```
+
+For example, a spool detected on gate 4 is written as:
+
+```json
+{"location": "MMU_GATE_4"}
+```
+
+This is non-fatal. If the location update fails, NFC_Manager still dispatches the Happy Hare macros so the runtime gate map can update.
 
 ---
 
@@ -173,8 +191,16 @@ SpoolmanClient is a **lookup and cache client only**.
 - It resolves UID → spool record.
 - It does not know which MMU gate the spool is physically on.
 - It does not call `MMU_SPOOLMAN` or any Happy Hare command.
-- It does not write to Spoolman.
+- It writes the spool `location` field only when NFC_Manager asks it to after a resolved gate read.
 
 Gate assignment belongs to NFC_Manager, which receives the spool_id from SpoolmanClient and decides whether the gate state changed. Happy Hare calls happen in `nfc_macros.cfg`.
 
 This boundary is intentional. See [Architecture Decisions](architecture-decisions.md).
+
+## Moonraker Active Spool
+
+Moonraker's `[spoolman]` integration also exposes a Klipper remote method named `spoolman_set_active_spool`.
+
+NFC Gate Reader does not use that method for gate reads. It is printer-wide active-spool state, not a per-MMU-gate assignment. Updating it on every reader event would make the UI show the last scanned gate as the active printing spool.
+
+For per-gate UI state, NFC Gate Reader writes the Spoolman spool `location` field to `MMU_GATE_<gate>` and then lets Happy Hare update its runtime and Spoolman-backed gate maps.

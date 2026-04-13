@@ -189,7 +189,7 @@ gcode:
     {% set spool_id = params.SPOOL_ID | int %}
     {% set uid      = params.UID %}
     { action_respond_info("😊 NFC gate %d: spool %d detected (UID %s). Sending to Happy Hare." % (gate, spool_id, uid)) }
-    MMU_SPOOLMAN UPDATE=1 GATE={gate} SPOOLID={spool_id}
+    MMU_GATE_MAP GATE={gate} SPOOLID={spool_id} SYNC=1 QUIET=1
 ```
 
 ### `_NFC_SPOOL_REMOVED`
@@ -209,7 +209,7 @@ Default body:
 gcode:
     {% set gate = params.GATE | int %}
     { action_respond_info("🧹 NFC gate %d: spool removed. Clearing Happy Hare Spoolman gate." % gate) }
-    MMU_SPOOLMAN UPDATE=1 GATE={gate} SPOOLID=-1
+    MMU_GATE_MAP GATE={gate} SPOOLID=-1 SYNC=1 QUIET=1
 ```
 
 ### `_NFC_TAG_NO_SPOOL`
@@ -239,30 +239,47 @@ gcode:
 If you want unknown tags to clear the Happy Hare gate, add:
 
 ```gcode
-MMU_SPOOLMAN UPDATE=1 GATE={gate} SPOOLID=-1
+MMU_GATE_MAP GATE={gate} SPOOLID=-1 SYNC=1 QUIET=1
 ```
 
 ## Happy Hare Commands Used By The Default Macros
 
 | Command | Parameters | Meaning |
 |---|---|---|
-| `MMU_SPOOLMAN UPDATE=1 GATE=<gate> SPOOLID=<id>` | `UPDATE`, `GATE`, `SPOOLID` | Writes the resolved spool ID to Happy Hare's Spoolman-backed gate map |
-| `MMU_SPOOLMAN UPDATE=1 GATE=<gate> SPOOLID=-1` | `UPDATE`, `GATE`, `SPOOLID=-1` | Clears the Spoolman-backed gate assignment |
+| `MMU_GATE_MAP GATE=<gate> SPOOLID=<id> SYNC=1 QUIET=1` | `GATE`, `SPOOLID`, `SYNC`, `QUIET` | Updates Happy Hare's runtime gate map for one explicit gate and lets Happy Hare synchronize it to Spoolman |
+| `MMU_GATE_MAP GATE=<gate> SPOOLID=-1 SYNC=1 QUIET=1` | `GATE`, `SPOOLID=-1`, `SYNC`, `QUIET` | Clears Happy Hare's runtime gate map for one explicit gate and lets Happy Hare synchronize it to Spoolman |
 
-The default command uses `MMU_SPOOLMAN UPDATE=1` because Happy Hare owns the Spoolman-backed gate mapping and cache:
+The default macro is designed for Happy Hare `spoolman_support: push`. `MMU_GATE_MAP` updates Happy Hare's local runtime gate map; `SYNC=1` lets Happy Hare synchronize that local assignment to Spoolman when Spoolman support is enabled.
 
 ```gcode
-MMU_SPOOLMAN UPDATE=1 GATE=<gate> SPOOLID=<spool_id>
+MMU_GATE_MAP GATE=<gate> SPOOLID=<spool_id> SYNC=1 QUIET=1
 ```
+
+Moonraker also exposes a printer-wide active-spool remote method:
+`spoolman_set_active_spool`. NFC Gate Reader does not use that for gate reads because it updates Moonraker's printer-wide active spool, not a per-MMU-gate map. The per-gate UI update path is the Spoolman `location` PATCH performed by `SpoolmanClient` after NFC_Manager resolves a UID.
 
 Older or different Happy Hare flows may show commands such as:
 
 ```gcode
 MMU_GATE_MAP NEXT_SPOOLID=<ID>
-MMU_GATE_MAP GATE=<gate> SPOOLMAN_ID=<spool_id>
+MMU_GATE_MAP GATE=<gate> SPOOLID=<spool_id>
 ```
 
-Those are not the default here. `NEXT_SPOOLID` does not identify which physical gate was read, and `MMU_GATE_MAP` alone does not write the Spoolman DB gate mapping. Keep Happy Hare command differences inside `nfc_macros.cfg`. Do not put Happy Hare commands in `PN532Driver` or `SpoolmanClient`.
+Use `GATE=<gate> SPOOLID=<spool_id>` when the NFC reader is physically tied
+to one lane. NFC_Manager already knows which gate produced the read, so it can
+set that gate directly.
+
+Use `NEXT_SPOOLID=<spool_id>` for a preload/shared-reader workflow where a tag
+is read before Happy Hare knows which gate will receive the spool. In that mode
+Happy Hare holds the spool id as a pending assignment for
+`pending_spool_id_timeout` seconds and applies it to the next gate identified by
+its preload or pre-gate sensor logic.
+
+`MMU_SPOOLMAN UPDATE=1 GATE=... SPOOLID=...` writes a specific Spoolman DB
+update, but in Happy Hare `push` mode the local MMU map should be changed first
+and then synchronized outward. Keep Happy Hare command differences inside
+`nfc_macros.cfg`. Do not put Happy Hare commands in `PN532Driver` or
+`SpoolmanClient`.
 
 ## Test Macro Boundary Without Hardware
 

@@ -69,7 +69,8 @@ try:
 except ImportError:
     logger = logging.getLogger('spoolman_client')
 
-from urllib.request import urlopen
+from urllib.error import HTTPError
+from urllib.request import Request, urlopen
 
 
 class SpoolmanClient:
@@ -239,6 +240,75 @@ class SpoolmanClient:
                             type(spool).__name__, url)
             return None
         return spool
+
+    def _patch_spool(self, spool_id, payload, plural=False):
+        """PATCH a Spoolman spool record, returning True on success."""
+        base_url = self._resolve_base_url()
+        if not base_url:
+            logger.warning("spoolman: no Spoolman URL configured or discovered")
+            return False
+        endpoint = 'spools' if plural else 'spool'
+        url = '{}/api/v1/{}/{}'.format(base_url, endpoint, spool_id)
+        body = json.dumps(payload).encode('utf-8')
+        req = Request(
+            url,
+            data=body,
+            headers={'Content-Type': 'application/json'},
+            method='PATCH')
+        if self._debug >= 2:
+            logger.debug("spoolman: PATCH %s payload=%s", url, payload)
+        with urlopen(req, timeout=self._timeout) as resp:
+            resp.read()
+        return True
+
+    def update_spool_location(self, spool_id, gate):
+        """
+        Write the physical MMU gate location to the Spoolman spool record.
+
+        This updates the spool's top-level "location" field to:
+            MMU_GATE_<gate>
+
+        The primary Spoolman API path is /api/v1/spool/<id>.  A plural
+        /api/v1/spools/<id> fallback is attempted for compatibility with
+        integrations or documentation that spell the path that way.
+        """
+        if spool_id is None:
+            return False
+        location = "MMU_GATE_%s" % gate
+        payload = {"location": location}
+        try:
+            ok = self._patch_spool(spool_id, payload, plural=False)
+        except HTTPError as e:
+            if e.code not in (404, 405):
+                logger.warning(
+                    "spoolman: location update failed for spool_id=%s "
+                    "gate=%s (%s): %s", spool_id, gate, location, e)
+                return False
+            try:
+                ok = self._patch_spool(spool_id, payload, plural=True)
+            except Exception as fallback_error:
+                logger.warning(
+                    "spoolman: location update failed for spool_id=%s "
+                    "gate=%s (%s): %s", spool_id, gate, location,
+                    fallback_error)
+                return False
+        except Exception as e:
+            logger.warning(
+                "spoolman: location update failed for spool_id=%s "
+                "gate=%s (%s): %s", spool_id, gate, location, e)
+            return False
+
+        if ok:
+            for spool, _expiry in self._cache.values():
+                try:
+                    if int(spool.get('id')) == int(spool_id):
+                        spool['location'] = location
+                except Exception:
+                    continue
+            if self._debug >= 1:
+                logger.info("spoolman: spool_id=%s location=%s",
+                            spool_id, location)
+        return ok
 
     def lookup_spool_record_by_uid(self, uid_hex):
         """

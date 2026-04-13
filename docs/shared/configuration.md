@@ -358,7 +358,7 @@ Called when a new UID is resolved to a Spoolman spool.
 
 Default body:
 ```gcode
-MMU_SPOOLMAN UPDATE=1 GATE={gate} SPOOLID={spool_id}
+MMU_GATE_MAP GATE={gate} SPOOLID={spool_id} SYNC=1 QUIET=1
 ```
 
 ### `_NFC_SPOOL_REMOVED`
@@ -369,7 +369,7 @@ Called after `absent_threshold` consecutive missed polls.
 
 Default body:
 ```gcode
-MMU_SPOOLMAN UPDATE=1 GATE={gate} SPOOLID=-1
+MMU_GATE_MAP GATE={gate} SPOOLID=-1 SYNC=1 QUIET=1
 ```
 
 ### `_NFC_TAG_NO_SPOOL`

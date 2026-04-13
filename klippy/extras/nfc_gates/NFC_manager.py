@@ -1009,6 +1009,9 @@ class NFCGate:
             if self._debug >= 1:
                 logger.info("nfc_gate: [%s] gate %d — %s uid=%s spool=%s",
                             self._name, gate, event_type, uid, spool)
+            if (event_type == EVENT_CHANGED and spool is not None
+                    and self._spoolman is not None):
+                self._spoolman.update_spool_location(spool, gate)
             if (self._suppress_next_dispatch_uid is not None
                     and uid == self._suppress_next_dispatch_uid):
                 logger.info(
@@ -1293,6 +1296,9 @@ class NFCGateManager:
             if self._debug >= 1:
                 logger.info("nfc_gates: gate %d — state change: %s "
                             "(uid=%s spool=%s)", i, event_type, uid, spool)
+            if (event_type == EVENT_CHANGED and spool is not None
+                    and self._spoolman is not None):
+                self._spoolman.update_spool_location(spool, gate)
             if (self._suppress_next_dispatch_uid[i] is not None
                     and uid == self._suppress_next_dispatch_uid[i]):
                 logger.info(
