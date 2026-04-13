@@ -33,11 +33,9 @@
 # the source of truth for gate maps and Spoolman synchronization.
 #
 # Intended command flow:
-#   New spool:  MMU_GATE_MAP GATE=<gate> SPOOLID=<spool_id>
-#               MMU_SPOOLMAN UPDATE=1 GATE=<gate> SPOOLID=<spool_id>
+#   New spool:  _NFC_SPOOL_CHANGED GATE=<gate> SPOOL_ID=<spool_id> UID=<uid>
 #   UID only:   _NFC_TAG_NO_SPOOL GATE=<gate> UID=<uid>
-#   Removed:    MMU_GATE_MAP GATE=<gate> SPOOLID=-1
-#               MMU_SPOOLMAN UPDATE=1 GATE=<gate>
+#   Removed:    _NFC_SPOOL_REMOVED GATE=<gate>
 #   Same tag:   no command
 
 import re
@@ -668,6 +666,8 @@ class NFCGate:
                                        self._debug,
                                        low_level_debug=self._low_level_debug)
         self._state      = GateState(self._gate, self._absent_threshold)
+        self._force_spool_lookup = False
+        self._suppress_next_dispatch_uid = None
         self._failed     = False
         self._klipper    = KlipperInterface(self.printer, self.reactor)
         self._polling    = False
@@ -693,6 +693,7 @@ class NFCGate:
             "  NFC_GATE NAME=%s INIT=1    - re-run reader init" % self._name,
             "  NFC_GATE NAME=%s SCAN=1    - scan hardware once, no Spoolman/HH dispatch" % self._name,
             "  NFC_GATE NAME=%s POLL=1    - run one full NFC_Manager poll for this gate" % self._name,
+            "  NFC_GATE NAME=%s CLEAR_CACHE=1 - clear cached spool lookup, no HH dispatch" % self._name,
             "  NFC_GATE NAME=%s READ=1    - start timer polling" % self._name,
             "  NFC_GATE NAME=%s READ=0    - stop timer polling" % self._name,
         ]
@@ -743,6 +744,26 @@ class NFCGate:
             self.reactor.update_timer(self._poll_timer, self.reactor.NEVER)
             gcmd.respond_info("NFC_GATE[%s]: polling stop requested" % self._name)
 
+    def _clear_spool_cache(self, gcmd):
+        """Clear cached spool resolution without dispatching a state change."""
+        old_spool = self._state.current_spool
+        self._state.current_spool = None
+        self._force_spool_lookup = True
+        self._suppress_next_dispatch_uid = self._state.current_uid
+        if self._spoolman is not None:
+            self._spoolman.clear_cache()
+        if hasattr(self._reader, '_clear_current_card'):
+            self._reader._clear_current_card()
+        logger.info(
+            "nfc_gate: [%s] gate %d — spool cache cleared "
+            "(uid=%s old_spool=%s); next read will resolve Spoolman again",
+            self._name, self._gate, self._state.current_uid, old_spool)
+        gcmd.respond_info(
+            "NFC_GATE[%s]: cleared cached spool_id for gate %d; "
+            "no NFC_Manager event was dispatched. Next tag read will resolve "
+            "Spoolman again."
+            % (self._name, self._gate))
+
     def _cmd_low_level_debug(self, gcmd):
         if _low_level_requested(gcmd) and self._polling:
             self._polling = False
@@ -775,6 +796,12 @@ class NFCGate:
             return
         if gcmd.get_int("SCAN", 0):
             self._manual_scan(gcmd)
+            return
+        if gcmd.get_int("CLEAR_CACHE", 0):
+            self._clear_spool_cache(gcmd)
+            return
+        if gcmd.get_int("CLEAR", 0):
+            self._clear_spool_cache(gcmd)
             return
         if gcmd.get_int("POLL", 0):
             self._poll()
@@ -901,7 +928,7 @@ class NFCGate:
                              self._name, self._gate, uid_hex)
 
         if uid_hex is not None:
-            if uid_hex == self._state.current_uid:
+            if uid_hex == self._state.current_uid and not self._force_spool_lookup:
                 spool_id = self._state.current_spool
                 if self._debug >= 2:
                     logger.debug(
@@ -911,15 +938,17 @@ class NFCGate:
             elif self._spoolman is not None:
                 if self._debug >= 2:
                     logger.debug(
-                        "nfc_gate: [%s] gate %d — new uid=%s, "
+                        "nfc_gate: [%s] gate %d — uid=%s requires lookup, "
                         "querying Spoolman", self._name, self._gate, uid_hex)
                 spool_id = self._spoolman.lookup_spool_by_uid(uid_hex)
+                self._force_spool_lookup = False
                 if self._debug >= 2:
                     logger.debug(
                         "nfc_gate: [%s] gate %d — Spoolman returned spool_id=%s",
                         self._name, self._gate, spool_id)
             else:
                 spool_id = None
+                self._force_spool_lookup = False
                 if self._debug >= 2:
                     logger.debug(
                         "nfc_gate: [%s] gate %d — uid=%s, no Spoolman configured",
@@ -933,13 +962,23 @@ class NFCGate:
             if self._debug >= 1:
                 logger.info("nfc_gate: [%s] gate %d — %s uid=%s spool=%s",
                             self._name, gate, event_type, uid, spool)
-            if self._debug >= 2:
-                logger.debug("nfc_gate: [%s] gate %d — dispatching GCode "
-                             "for event %s", self._name, gate, event_type)
-            self._klipper.dispatch(event_type, gate, uid, spool)
+            if (self._suppress_next_dispatch_uid is not None
+                    and uid == self._suppress_next_dispatch_uid):
+                logger.info(
+                    "nfc_gate: [%s] gate %d — cache refresh for uid=%s "
+                    "suppressed; no GCode dispatch", self._name, gate, uid)
+                self._suppress_next_dispatch_uid = None
+            else:
+                if self._debug >= 2:
+                    logger.debug("nfc_gate: [%s] gate %d — dispatching GCode "
+                                 "for event %s", self._name, gate, event_type)
+                self._klipper.dispatch(event_type, gate, uid, spool)
         elif self._debug >= 2:
             logger.debug("nfc_gate: [%s] gate %d — no state change  "
                          "state=%r", self._name, self._gate, self._state)
+        if (uid_hex is not None and self._suppress_next_dispatch_uid is not None
+                and uid_hex == self._suppress_next_dispatch_uid):
+            self._suppress_next_dispatch_uid = None
 
     def status_line(self):
         if self._failed:
@@ -1040,6 +1079,8 @@ class NFCGateManager:
         self._states        = [GateState(i, self._absent_threshold)
                                for i in range(self._gate_count)]
         self._reader_failed = [False] * self._gate_count
+        self._force_spool_lookup = [False] * self._gate_count
+        self._suppress_next_dispatch_uid = [None] * self._gate_count
         self._klipper       = KlipperInterface(self.printer, self.reactor)
         self._polling       = False
         self._poll_timer    = self.reactor.register_timer(
@@ -1175,12 +1216,14 @@ class NFCGateManager:
                          i, self._states[i].miss_count + 1)
 
         if uid_hex is not None:
-            if uid_hex == self._states[i].current_uid:
+            if uid_hex == self._states[i].current_uid and not self._force_spool_lookup[i]:
                 spool_id = self._states[i].current_spool
             elif self._spoolman is not None:
                 spool_id = self._spoolman.lookup_spool_by_uid(uid_hex)
+                self._force_spool_lookup[i] = False
             else:
                 spool_id = None
+                self._force_spool_lookup[i] = False
         else:
             spool_id = None
 
@@ -1190,10 +1233,20 @@ class NFCGateManager:
             if self._debug >= 1:
                 logger.info("nfc_gates: gate %d — state change: %s "
                             "(uid=%s spool=%s)", i, event_type, uid, spool)
-            self._klipper.dispatch(event_type, gate, uid, spool)
+            if (self._suppress_next_dispatch_uid[i] is not None
+                    and uid == self._suppress_next_dispatch_uid[i]):
+                logger.info(
+                    "nfc_gates: gate %d — cache refresh for uid=%s "
+                    "suppressed; no GCode dispatch", i, uid)
+                self._suppress_next_dispatch_uid[i] = None
+            else:
+                self._klipper.dispatch(event_type, gate, uid, spool)
         elif self._debug >= 2:
             logger.debug("nfc_gates: gate %d — no state change (%r)",
                          i, self._states[i])
+        if (uid_hex is not None and self._suppress_next_dispatch_uid[i] is not None
+                and uid_hex == self._suppress_next_dispatch_uid[i]):
+            self._suppress_next_dispatch_uid[i] = None
 
     def _gate_status_line(self, i):
         state = self._states[i]
@@ -1230,6 +1283,27 @@ class NFCGateManager:
             reader = self._readers[i]
             if hasattr(reader, '_release_current_target'):
                 reader._release_current_target(reason="manual_scan")
+
+    def _clear_spool_cache_gate(self, gcmd, i):
+        """Clear cached spool resolution for one gate without dispatching."""
+        state = self._states[i]
+        old_spool = state.current_spool
+        state.current_spool = None
+        self._force_spool_lookup[i] = True
+        self._suppress_next_dispatch_uid[i] = state.current_uid
+        if self._spoolman is not None:
+            self._spoolman.clear_cache()
+        reader = self._readers[i]
+        if hasattr(reader, '_clear_current_card'):
+            reader._clear_current_card()
+        logger.info(
+            "nfc_gates: gate %d — spool cache cleared "
+            "(uid=%s old_spool=%s); next read will resolve Spoolman again",
+            i, state.current_uid, old_spool)
+        gcmd.respond_info(
+            "NFC_GATE[gate%d]: cleared cached spool_id; no NFC_Manager "
+            "event was dispatched. Next tag read will resolve Spoolman again."
+            % i)
 
     def _manual_init_gate(self, gcmd, i):
         self._reader_failed[i] = False
@@ -1290,6 +1364,12 @@ class NFCGateManager:
         if gcmd.get_int("SCAN", 0):
             self._manual_scan_gate(gcmd, gate)
             return
+        if gcmd.get_int("CLEAR_CACHE", 0):
+            self._clear_spool_cache_gate(gcmd, gate)
+            return
+        if gcmd.get_int("CLEAR", 0):
+            self._clear_spool_cache_gate(gcmd, gate)
+            return
         if gcmd.get_int("POLL", 0):
             self._poll_gate(gate)
             gcmd.respond_info("NFC_GATE[gate%d]: one poll complete; %s" %
@@ -1302,6 +1382,7 @@ class NFCGateManager:
             "  NFC_GATE NAME=gate%d INIT=1" % gate,
             "  NFC_GATE NAME=gate%d SCAN=1" % gate,
             "  NFC_GATE NAME=gate%d POLL=1" % gate,
+            "  NFC_GATE NAME=gate%d CLEAR_CACHE=1" % gate,
             "  NFC_GATE NAME=gate%d READ=1" % gate,
             "  NFC_GATE NAME=gate%d READ=0" % gate,
         ]
