@@ -12,11 +12,9 @@
 #
 # Threading model
 # ───────────────
-# NFC polling runs in a background thread.  GCode execution must happen in
-# the Klipper reactor thread.  reactor.register_callback() is thread-safe and
-# is used as the inter-thread dispatch mechanism.  SPI/I2C transactions block
-# the background thread while awaiting MCU responses; the reactor continues
-# processing other events normally.
+# NFC polling runs on Klipper reactor timers.  Klipper MCU I2C/SPI helpers use
+# reactor greenlets internally, so hardware transactions must stay on the
+# reactor thread.  Do not move reader polling into a normal Python thread.
 #
 # Ownership boundaries
 # ────────────────────
@@ -43,7 +41,6 @@
 #   Same tag:   no command
 
 import re
-import threading
 import time
 
 import bus as bus_module
@@ -452,8 +449,8 @@ class GateState:
 # KlipperInterface — reactor-thread GCode macro dispatcher
 # ─────────────────────────────────────────────────────────────────────────────
 #
-# Receives gate change events from the background polling thread and
-# dispatches them as GCode macro calls in the Klipper reactor thread.
+# Receives gate change events and dispatches them as GCode macro calls in the
+# Klipper reactor thread.
 #
 # Macros called (define these in printer.cfg / nfc_macros.cfg):
 #
@@ -467,7 +464,7 @@ class KlipperInterface:
         self._reactor = reactor
 
     def dispatch(self, event_type, gate, uid_hex, spool_id):
-        """Schedule a GCode macro call for the given gate event.  Thread-safe."""
+        """Schedule a GCode macro call for the given gate event."""
         self._reactor.register_callback(
             lambda e, et=event_type, g=gate, u=uid_hex, s=spool_id:
                 self._run_gcode(et, g, u, s))
@@ -673,11 +670,8 @@ class NFCGate:
         self._state      = GateState(self._gate, self._absent_threshold)
         self._failed     = False
         self._klipper    = KlipperInterface(self.printer, self.reactor)
-        self._stop_event = threading.Event()
-        self._thread     = threading.Thread(
-            target=self._poll_loop,
-            name='nfc-gate-%s' % self._name,
-            daemon=True)
+        self._polling    = False
+        self._poll_timer = self.reactor.register_timer(self._poll_timer_event)
 
         # delayed-init state
         self._gcode = None
@@ -699,8 +693,8 @@ class NFCGate:
             "  NFC_GATE NAME=%s INIT=1    - re-run reader init" % self._name,
             "  NFC_GATE NAME=%s SCAN=1    - scan hardware once, no Spoolman/HH dispatch" % self._name,
             "  NFC_GATE NAME=%s POLL=1    - run one full NFC_Manager poll for this gate" % self._name,
-            "  NFC_GATE NAME=%s READ=1    - start background polling" % self._name,
-            "  NFC_GATE NAME=%s READ=0    - stop background polling" % self._name,
+            "  NFC_GATE NAME=%s READ=1    - start timer polling" % self._name,
+            "  NFC_GATE NAME=%s READ=0    - stop timer polling" % self._name,
         ]
         if self._low_level_debug:
             lines.extend(_low_level_help_lines(
@@ -741,19 +735,21 @@ class NFCGate:
                 gcmd.respond_info("NFC_GATE[%s]: reader failed; run INIT=1 first"
                                   % self._name)
                 return
-            self._stop_event.clear()
-            if not self._thread.is_alive():
-                self._thread = threading.Thread(
-                    target=self._poll_loop,
-                    name='nfc-gate-%s' % self._name,
-                    daemon=True)
-                self._thread.start()
+            self._polling = True
+            self.reactor.update_timer(self._poll_timer, self.reactor.NOW)
             gcmd.respond_info("NFC_GATE[%s]: polling started" % self._name)
         else:
-            self._stop_event.set()
+            self._polling = False
+            self.reactor.update_timer(self._poll_timer, self.reactor.NEVER)
             gcmd.respond_info("NFC_GATE[%s]: polling stop requested" % self._name)
 
     def _cmd_low_level_debug(self, gcmd):
+        if _low_level_requested(gcmd) and self._polling:
+            self._polling = False
+            self.reactor.update_timer(self._poll_timer, self.reactor.NEVER)
+            gcmd.respond_info(
+                "NFC_GATE[%s]: polling paused for low-level PN532 debug" %
+                self._name)
         try:
             return _run_low_level_debug(
                 gcmd, self._reader, self._name,
@@ -788,33 +784,30 @@ class NFCGate:
         self._cmd_help(gcmd)
 
     def _handle_connect(self):
-        if self._commands_registered:
-            return
-
         self._gcode = self.printer.lookup_object('gcode')
 
-        # Register the status command when there is no base [nfc_gate] section
-        # (defaults is None means load_config was never called, so
-        # NFCGateDefaults.__init__ never ran and no one registered it yet).
-        if self._defaults is None and not _lane_instances and not self._status_registered:
-            self._gcode.register_command(
-                'NFC_GATE_STATUS',
-                self._cmd_NFC_GATE_STATUS_fallback,
-                desc="Report spool state for all configured NFC gates"
+        if not self._commands_registered:
+            # Register the status command when there is no base [nfc_gate]
+            # section (defaults is None means load_config was never called, so
+            # NFCGateDefaults.__init__ never ran and no one registered it yet).
+            if self._defaults is None and not _lane_instances and not self._status_registered:
+                self._gcode.register_command(
+                    'NFC_GATE_STATUS',
+                    self._cmd_NFC_GATE_STATUS_fallback,
+                    desc="Report spool state for all configured NFC gates"
+                )
+                self._status_registered = True
+
+            self._gcode.register_mux_command(
+                cmd='NFC_GATE',
+                key='NAME',
+                value=self._name,
+                func=self.cmd_NFC_GATE,
+                desc="Control or test one configured NFC gate"
             )
-            self._status_registered = True
 
-        self._gcode.register_mux_command(
-            cmd='NFC_GATE',
-            key='NAME',
-            value=self._name,
-            func=self.cmd_NFC_GATE,
-            desc="Control or test one configured NFC gate"
-        )
+            self._commands_registered = True
 
-        self._commands_registered = True
-
-        # HH-style console message with emoji
         self._gcode.respond_info(f"📡 NFC Gate [{self._name}] connected")
 
         # Schedule PN532 init after the rest of Klippy/I2C has settled
@@ -864,29 +857,36 @@ class NFCGate:
 
     def _handle_disconnect(self):
         if self._debug >= 2:
-            logger.debug("nfc_gate: [%s] disconnect — stopping polling thread",
+            logger.debug("nfc_gate: [%s] disconnect — stopping polling timer",
                          self._name)
-        self._stop_event.set()
+        self._polling = False
+        self.reactor.update_timer(self._poll_timer, self.reactor.NEVER)
 
-    def _poll_loop(self):
-        logger.info("nfc_gate: [%s] polling thread started", self._name)
-        while not self._stop_event.is_set():
-            if self._debug >= 2:
-                logger.debug("nfc_gate: [%s] poll cycle start — "
-                             "current state: uid=%s spool=%s misses=%d",
-                             self._name,
-                             self._state.current_uid or 'none',
-                             self._state.current_spool if self._state.current_spool is not None else 'none',
-                             self._state.miss_count)
-            try:
-                self._poll()
-            except Exception:
-                logger.exception("nfc_gate: [%s] poll error", self._name)
-            if self._debug >= 2:
-                logger.debug("nfc_gate: [%s] poll cycle done — "
-                             "sleeping %.0fs", self._name, self._poll_interval)
-            self._stop_event.wait(timeout=self._poll_interval)
-        logger.info("nfc_gate: [%s] polling thread stopped", self._name)
+    def _poll_timer_event(self, eventtime):
+        if not self._polling:
+            return self.reactor.NEVER
+        if self._failed:
+            logger.warning("nfc_gate: [%s] polling stopped — reader failed; "
+                           "run NFC_GATE NAME=%s INIT=1 first",
+                           self._name, self._name)
+            self._polling = False
+            return self.reactor.NEVER
+        if self._debug >= 2:
+            logger.debug("nfc_gate: [%s] poll cycle start — "
+                         "current state: uid=%s spool=%s misses=%d",
+                         self._name,
+                         self._state.current_uid or 'none',
+                         self._state.current_spool
+                         if self._state.current_spool is not None else 'none',
+                         self._state.miss_count)
+        try:
+            self._poll()
+        except Exception:
+            logger.exception("nfc_gate: [%s] poll error", self._name)
+        if self._debug >= 2:
+            logger.debug("nfc_gate: [%s] poll cycle done — "
+                         "next poll in %.0fs", self._name, self._poll_interval)
+        return self.reactor.monotonic() + self._poll_interval
 
     def _poll(self):
         uid_hex = self._reader.read_tag()
@@ -1041,9 +1041,9 @@ class NFCGateManager:
                                for i in range(self._gate_count)]
         self._reader_failed = [False] * self._gate_count
         self._klipper       = KlipperInterface(self.printer, self.reactor)
-        self._stop_event    = threading.Event()
-        self._thread        = threading.Thread(
-            target=self._poll_loop, name='nfc-gates', daemon=True)
+        self._polling       = False
+        self._poll_timer    = self.reactor.register_timer(
+            self._poll_timer_event)
 
         gcode = self.printer.lookup_object('gcode')
         gcode.register_command(
@@ -1134,24 +1134,21 @@ class NFCGateManager:
         logger.info("nfc_gates: %d/%d readers initialised",
                      ok_count, self._gate_count)
 
-        self._stop_event.clear()
-        if not self._thread.is_alive():
-            self._thread = threading.Thread(
-                target=self._poll_loop, name='nfc-gates', daemon=True)
-            self._thread.start()
+        # Shared [nfc_gates] is not part of the documented path yet.  Keep it
+        # manual-start only, matching the per-lane manager.
 
     def _handle_disconnect(self):
-        self._stop_event.set()
+        self._polling = False
+        self.reactor.update_timer(self._poll_timer, self.reactor.NEVER)
 
-    def _poll_loop(self):
-        logger.info("nfc_gates: polling thread started")
-        while not self._stop_event.is_set():
-            try:
-                self._poll_all_gates()
-            except Exception:
-                logger.exception("nfc_gates: unexpected error in poll cycle")
-            self._stop_event.wait(timeout=self._poll_interval)
-        logger.info("nfc_gates: polling thread stopped")
+    def _poll_timer_event(self, eventtime):
+        if not self._polling:
+            return self.reactor.NEVER
+        try:
+            self._poll_all_gates()
+        except Exception:
+            logger.exception("nfc_gates: unexpected error in poll cycle")
+        return self.reactor.monotonic() + self._poll_interval
 
     def _poll_all_gates(self):
         if self._debug >= 1:
@@ -1247,6 +1244,12 @@ class NFCGateManager:
             gcmd.respond_info("NFC_GATE[gate%d]: init failed: %s" % (i, e))
 
     def _cmd_low_level_debug_gate(self, gcmd, i):
+        if _low_level_requested(gcmd) and self._polling:
+            self._polling = False
+            self.reactor.update_timer(self._poll_timer, self.reactor.NEVER)
+            gcmd.respond_info(
+                "NFC_GATE[gate%d]: polling paused for low-level PN532 debug"
+                % i)
         try:
             return _run_low_level_debug(
                 gcmd, self._readers[i], "gate%d" % i,
@@ -1269,14 +1272,12 @@ class NFCGateManager:
         if read_value is not None:
             enabled = gcmd.get_int("READ", minval=0, maxval=1) == 1
             if enabled:
-                self._stop_event.clear()
-                if not self._thread.is_alive():
-                    self._thread = threading.Thread(
-                        target=self._poll_loop, name='nfc-gates', daemon=True)
-                    self._thread.start()
+                self._polling = True
+                self.reactor.update_timer(self._poll_timer, self.reactor.NOW)
                 gcmd.respond_info("NFC_GATE[gate%d]: polling started" % gate)
             else:
-                self._stop_event.set()
+                self._polling = False
+                self.reactor.update_timer(self._poll_timer, self.reactor.NEVER)
                 gcmd.respond_info("NFC_GATE[gate%d]: polling stop requested" % gate)
             return
         if gcmd.get_int("STATUS", 0):

@@ -121,7 +121,7 @@ absent_threshold: 3
 
 #### `poll_interval`
 
-How often (in seconds) each gate is scanned while background polling is active.
+How often (in seconds) each gate is scanned while reactor timer polling is active.
 
 | Value | Behaviour |
 |---|---|

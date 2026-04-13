@@ -114,7 +114,7 @@ NFC_GATE NAME=lane0 POLL=1
 
 ### `NFC_GATE NAME=<lane> READ=1`
 
-Starts continuous background polling for the named lane at `poll_interval` seconds.
+Starts continuous reactor-timer polling for the named lane at `poll_interval` seconds.
 
 ```gcode
 NFC_GATE NAME=lane0 READ=1
@@ -122,7 +122,7 @@ NFC_GATE NAME=lane0 READ=1
 
 ### `NFC_GATE NAME=<lane> READ=0`
 
-Stops background polling for the named lane.
+Stops reactor-timer polling for the named lane.
 
 ```gcode
 NFC_GATE NAME=lane0 READ=0
