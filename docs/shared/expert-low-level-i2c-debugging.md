@@ -28,7 +28,13 @@ console_output:    True
 console_log_level: info
 ```
 
-Restart Klipper. Then ask for the command list:
+Restart Klipper. When `low_level_debug` is enabled, Klipper starts cleanly but **the PN532 is not initialized**. The driver skips the wake sequence and SAMConfiguration entirely so no driver-initiated bus traffic interferes with your manual commands. The log will confirm this:
+
+```
+init: gate 0 (PN532) low_level_debug enabled — skipping wake and SAMConfiguration
+```
+
+You must run the manual init sequence (Phase 1 + Phase 2 below) before any tag read commands will work. Then ask for the command list:
 
 ```gcode
 NFC_GATE NAME=lane0 HELP=1
@@ -116,6 +122,9 @@ The leading `01` is the STATUS byte (ready). The ACK itself is the remaining 6 b
 
 ## Manual Init Sequence
 
+> [!IMPORTANT]
+> **Phase 1 and Phase 2 are mandatory.** The PN532 is not initialized when Klipper starts in expert mode. You must complete both phases before tag detection (Phase 3) or any other read commands will work.
+
 Run one command at a time. Wait for the response before running the next. If any step fails, do not proceed — diagnose the failure at that step.
 
 ### Phase 1: Wake and firmware check
@@ -153,7 +162,7 @@ NFC_GATE NAME=lane0 STEP=SAM_RESPONSE
 
 `SAMConfiguration` sets the PN532 to normal mode (no SAM involvement). It must succeed before `InListPassiveTarget` will work.
 
-### Phase 3: Optional — tag detect
+### Phase 3: Tag detect (optional — requires Phase 1 + 2 complete)
 
 With the PN532 initialized, you can test tag detection:
 

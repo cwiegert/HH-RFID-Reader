@@ -1,6 +1,6 @@
 # klippy/extras/nfc_gates/pn532_driver.py
 #
-# PN532 NFC reader driver — I2C variant, using Klipper's MCU_I2C.
+# PN532 NFC reader driver — I2C and SPI variants.
 #
 # Drop-in replacement for rc522_driver.py.  The public interface is identical:
 # init(), is_alive(), and read_tag() return the same types so NFCGateManager
@@ -121,7 +121,7 @@ _CMD_INRELEASE = PN532_COMMAND_INRELEASE
 # InListPassiveTarget baud-rate/type codes
 _BRTY_ISO14443A_106KBPS  = 0x00   # Standard NFC Type A — covers NTAG and Mifare
 
-# Byte offsets inside a parsed read buffer
+# Byte offsets inside a parsed I2C read buffer
 # [STATUS, 0x00, 0x00, 0xFF, LEN, LCS, TFI, CMD, payload...]
 _OFF_STATUS  = 0
 _OFF_LEN     = 4
@@ -171,11 +171,494 @@ def _parse_inlist_payload(payload):
     }
 
 
-class PN532Driver:
+# =============================================================================
+# _PN532Base — shared PN532 protocol logic
+# =============================================================================
+#
+# All PN532 command logic lives here.  Subclasses provide only the transport
+# layer (_send, _read_ack, _recv, _check_frame) and transport-specific
+# low-level debug helpers.
+#
+# Subclass contract
+# ─────────────────
+# Before calling super().__init__(), each subclass must set:
+#   self._transport_name  — short label used in log messages ('PN532' / 'PN532 SPI')
+#
+# After super().__init__(), the subclass transport handle is already stored
+# (self._i2c or self._spi) so any transport method can use it immediately.
+
+class _PN532Base:
+
+    def __init__(self, gate, transceive_delay, crc_delay, debug, low_level_debug):
+        self._gate           = gate
+        self._scan_delay     = transceive_delay   # InListPassiveTarget wait
+        self._release_delay  = crc_delay          # InRelease wait
+        self._debug          = debug
+        self._low_level_debug = low_level_debug
+        self._clear_current_card()
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Frame construction (transport-agnostic)
+    # ─────────────────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _build_frame(cmd_and_params):
+        """
+        Build a complete PN532 host-to-chip command frame.
+
+        Parameters
+        ----------
+        cmd_and_params : list of int
+            The command byte followed by any parameters.
+            TFI (0xD4) is prepended automatically.
+
+        Returns
+        -------
+        list of int
+            The full frame: preamble + start + LEN + LCS + TFI + data + DCS + postamble.
+        """
+        data = [_TFI_HOST_TO_PN532] + list(cmd_and_params)
+        length = len(data)
+        lcs    = (-length) & 0xFF
+        dcs    = (-sum(data)) & 0xFF
+        return [0x00, 0x00, 0xFF, length, lcs] + data + [dcs, 0x00]
+
+    def _transceive(self, cmd_and_params, expected_cmd_resp,
+                    read_len=_MAX_RESPONSE_BYTES, timeout=1.0):
+        """Send a command frame and return the parsed response payload."""
+        self._send(cmd_and_params)
+        if not self._read_ack(timeout=min(max(timeout, 0.050), 1.000)):
+            if self._debug >= 1:
+                log_warning("_transceive: gate %d (%s) no valid ACK for "
+                            "cmd=0x%02X", self._gate, self._transport_name,
+                            cmd_and_params[0])
+            return None
+        return self._recv(expected_cmd_resp, read_len=read_len, timeout=timeout)
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Low-level debug helpers (transport-agnostic portion)
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def _require_low_level_debug(self):
+        if not self._low_level_debug:
+            raise RuntimeError("PN532 low_level_debug is disabled")
+
+    def low_level_command_frame(self, cmd_and_params):
+        """Build a PN532 command frame for manual RAW_WRITE use."""
+        self._require_low_level_debug()
+        if not isinstance(cmd_and_params, list):
+            cmd_and_params = [cmd_and_params]
+        return self._build_frame(cmd_and_params)
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Target state helpers
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def _clear_current_card(self):
+        """Clear cached target/card information."""
+        self.current_target = None
+        self.current_uid = None
+        self.current_uid_hex = ''
+        self.current_target_info = None
+
+    def _set_current_card(self, target_info):
+        """Cache the currently selected target information."""
+        self.current_target_info = dict(target_info)
+        self.current_target = target_info.get('target')
+        self.current_uid = list(target_info.get('uid_bytes') or [])
+        self.current_uid_hex = target_info.get('uid', _hex(self.current_uid))
+        if self._debug >= 2:
+            logger.debug(
+                "_set_current_card: gate %d (%s) Tg=%s UID=%s "
+                "SENS_RES=0x%04X SAK=0x%02X",
+                self._gate, self._transport_name,
+                self.current_target, self.current_uid_hex,
+                target_info.get('sens_res', 0),
+                target_info.get('sak', 0))
+
+    def _release_current_target(self, reason="manual"):
+        """
+        Send InRelease to deselect the active target, then clear cached state.
+
+        If no target is cached, release all targets (Tg=0x00).  That preserves
+        the old driver behavior and gives the next scan a clean RF state.
+        """
+        target = self.current_target
+        release_tg = target if target is not None else 0x00
+        try:
+            if self._debug >= 2:
+                logger.debug(
+                    "_release_current_target: gate %d (%s) Tg=0x%02X "
+                    "reason=%s", self._gate, self._transport_name,
+                    release_tg, reason)
+            payload = self._transceive([_CMD_INRELEASE, release_tg], 0x53,
+                                       read_len=12,
+                                       timeout=max(self._release_delay, 0.200))
+            if self._debug >= 2:
+                if payload is None:
+                    logger.debug("_release_current_target: gate %d (%s) "
+                                 "no response (non-fatal)",
+                                 self._gate, self._transport_name)
+                else:
+                    status = payload[0] if payload else 0xFF
+                    logger.debug("_release_current_target: gate %d (%s) "
+                                 "status=0x%02X",
+                                 self._gate, self._transport_name, status)
+            return payload is not None
+        except Exception as e:
+            if self._debug >= 2:
+                logger.debug("_release_current_target: gate %d (%s) "
+                             "error: %s\n%s", self._gate, self._transport_name,
+                             e, traceback.format_exc())
+            return False
+        finally:
+            self._clear_current_card()
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # PN532 command helpers ported from HH_code/pn532.py
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def get_firmware_version(self):
+        """
+        Return PN532 firmware metadata, or None if the chip does not respond.
+
+        The returned dictionary is intentionally protocol-only; callers can
+        format it however they want.
+        """
+        payload = self._transceive([_CMD_GETFIRMWAREVERSION], 0x03,
+                                   read_len=15, timeout=0.500)
+        if payload is None or len(payload) < 4:
+            return None
+        return {
+            'ic': payload[0],
+            'version': payload[1],
+            'revision': payload[2],
+            'support': payload[3],
+            'text': 'v%d.%d (IC: 0x%02X, Support: 0x%02X)' %
+                    (payload[1], payload[2], payload[0], payload[3]),
+        }
+
+    def sam_config(self, timeout=0x00, irq=0x00):
+        """
+        Configure the PN532 SAM in normal mode.
+
+        HH_code uses timeout=0x14 and irq=0x01.  This driver defaults to the
+        previous nfc_gates values because Klipper is polling readiness instead
+        of consuming the IRQ pin directly.
+        """
+        payload = self._transceive([_CMD_SAMCONFIGURATION, 0x01,
+                                    timeout & 0xFF, irq & 0xFF],
+                                   0x15, read_len=12, timeout=0.200)
+        return payload is not None
+
+    def rf_config(self, enable=True):
+        """Enable or disable the RF field using PN532 RFConfiguration."""
+        payload = self._transceive([_CMD_RFCONFIGURATION, 0x01,
+                                    0x01 if enable else 0x00],
+                                   0x33, read_len=12, timeout=0.200)
+        return payload is not None
+
+    def read_target(self, timeout=None):
+        """
+        Scan for one ISO14443A target and return structured hardware details.
+
+        Returns a dictionary with UID, target number, SENS_RES/ATQA, SAK, and
+        UID bytes.  Returns None on no tag or communication error.
+        """
+        if timeout is None:
+            timeout = self._scan_delay + 0.100
+        if self._debug >= 2:
+            logger.debug("read_target: gate %d (%s) scanning (timeout=%.3fs)",
+                         self._gate, self._transport_name, timeout)
+
+        payload = self._transceive([_CMD_INLISTPASSIVETARGET, 0x01,
+                                    _BRTY_ISO14443A_106KBPS],
+                                   0x4B, read_len=_MAX_RESPONSE_BYTES,
+                                   timeout=timeout)
+        target_info = _parse_inlist_payload(payload)
+        if target_info is None:
+            self._clear_current_card()
+            if self._debug >= 2:
+                logger.debug("read_target: gate %d (%s) no tag",
+                             self._gate, self._transport_name)
+            return None
+
+        self._set_current_card(target_info)
+        if self._debug >= 2:
+            logger.debug(
+                "read_target: gate %d (%s) Tg=%d SENS_RES=0x%04X "
+                "SAK=0x%02X UIDLen=%d UID=%s",
+                self._gate, self._transport_name,
+                target_info['target'], target_info['sens_res'],
+                target_info['sak'], target_info['uid_length'],
+                target_info['uid'])
+        return target_info
+
+    def read_passive_target_id(self, timeout=1.0):
+        """
+        HH-compatible target read helper.
+
+        Returns (True, uid_bytes) on success or (False, None) otherwise.
+        """
+        target_info = self.read_target(timeout=timeout)
+        if target_info is None:
+            return False, None
+        return True, list(target_info['uid_bytes'])
+
+    def ntag_read_page(self, page):
+        """
+        Read four NTAG pages (16 bytes) starting at *page*.
+
+        This is a raw hardware primitive only.  It does not parse NDEF,
+        Spoolman IDs, JSON, or any other application payload.
+        """
+        if page < 0 or page > 255:
+            raise ValueError("PN532 NTAG page out of range: %s" % page)
+        if self.current_target is None:
+            target_info = self.read_target(timeout=0.500)
+            if target_info is None:
+                return None
+
+        cmd = [_CMD_INDATAEXCHANGE, self.current_target, MIFARE_CMD_READ,
+               page & 0xFF]
+        payload = self._transceive(cmd, 0x41, read_len=_MAX_RESPONSE_BYTES,
+                                   timeout=1.000)
+        if not payload or payload[0] != 0x00:
+            if self._debug >= 2 and payload:
+                logger.debug("ntag_read_page: gate %d (%s) page=%d "
+                             "status=0x%02X",
+                             self._gate, self._transport_name,
+                             page, payload[0])
+            return None
+        data = list(payload[1:17])
+        if len(data) != 16:
+            return None
+        return data
+
+    def robust_page_read(self, page, attempts=3):
+        """
+        Read an NTAG page block with target re-verification between attempts.
+
+        Ported from HH_code/pn532.py, but kept as raw bytes only.
+        """
+        if self.current_target is None:
+            if self.read_target(timeout=0.500) is None:
+                return None
+        expected_uid = list(self.current_uid or [])
+
+        for attempt in range(attempts):
+            page_data = self.ntag_read_page(page)
+            if page_data:
+                return page_data
+            if attempt >= attempts - 1:
+                break
+
+            self._release_current_target(
+                reason="page_%d_retry_%d" % (page, attempt + 1))
+            time.sleep(0.025)
+            target_info = self.read_target(timeout=0.500)
+            if target_info is None:
+                time.sleep(0.050)
+                target_info = self.read_target(timeout=0.500)
+                if target_info is None:
+                    return None
+            if expected_uid and target_info['uid_bytes'] != expected_uid:
+                log_warning("robust_page_read: gate %d (%s) different "
+                            "tag detected during page %d retry",
+                            self._gate, self._transport_name, page)
+                self._release_current_target(reason="uid_changed")
+                return None
+
+        self._release_current_target(reason="page_%d_max_retries" % page)
+        return None
+
+    def ntag_read_user_memory(self, start_page=4, end_page=67):
+        """
+        Read raw NTAG user memory in 16-byte page blocks.
+
+        Unlike HH_code/pn532.py, this method intentionally avoids NDEF or
+        spool payload parsing.  It returns a bytearray of raw tag memory.
+        """
+        user_data = bytearray()
+        try:
+            current_page = start_page
+            while current_page <= end_page:
+                page_data = self.robust_page_read(current_page)
+                if not page_data:
+                    break
+                remaining_pages = end_page - current_page + 1
+                if remaining_pages >= 4:
+                    user_data.extend(page_data)
+                else:
+                    user_data.extend(page_data[:remaining_pages * 4])
+                current_page += 4
+                time.sleep(0.005)
+            return user_data
+        finally:
+            self._release_current_target(reason="user_memory_complete")
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Initialisation and lifecycle
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def _wake_pn532(self, attempts=3):
+        """
+        Wake the PN532 from power-save mode using GetFirmwareVersion.
+
+        Uses a single i2c_write + i2c_read per attempt to avoid Klipper MCU
+        command re-entrancy (two sequential i2c_read calls in one attempt
+        caused recursive send → _do_send loops in mcu.py).
+
+        First attempt waits 150 ms after TX (cold-start settling).
+        Subsequent attempts wait 75 ms.  A 50 ms gap separates each attempt.
+
+        Returns True if the chip responded, False if all attempts failed.
+        """
+        for attempt in range(attempts):
+            if self._debug >= 2:
+                logger.debug(
+                    "_wake_pn532: gate %d (%s) attempt %d/%d — "
+                    "sending GetFirmwareVersion",
+                    self._gate, self._transport_name, attempt + 1, attempts)
+            try:
+                version = self.get_firmware_version()
+                if version is not None:
+                    log_info(
+                        "_wake_pn532: gate %d (%s) OK on attempt %d — "
+                        "IC=0x%02X Ver=%d.%d",
+                        self._gate, self._transport_name, attempt + 1,
+                        version['ic'], version['version'], version['revision'])
+                    return True
+                if self._debug >= 2:
+                    logger.debug(
+                        "_wake_pn532: gate %d (%s) attempt %d — "
+                        "no valid response",
+                        self._gate, self._transport_name, attempt + 1)
+            except Exception as e:
+                if attempt == 0:
+                    logger.debug(
+                        "_wake_pn532: gate %d (%s) attempt %d failed: %s\n%s",
+                        self._gate, self._transport_name, attempt + 1,
+                        e, traceback.format_exc())
+                else:
+                    log_info(
+                        "_wake_pn532: gate %d (%s) attempt %d failed: %s\n%s",
+                        self._gate, self._transport_name, attempt + 1,
+                        e, traceback.format_exc())
+            time.sleep(0.050)
+
+        log_warning("_wake_pn532: gate %d (%s) failed after %d attempts — "
+                    "check wiring",
+                    self._gate, self._transport_name, attempts)
+        return False
+
+    def init(self):
+        """
+        Wake the PN532 then configure it for ISO14443A normal operation.
+
+        Sends GetFirmwareVersion (with retries) to bring the chip out of
+        power-save, then SAMConfiguration (Normal mode, no SAM timeout,
+        no IRQ output).  Must be called once after klippy:connect.
+
+        Raises RuntimeError if the chip does not respond after retries.
+
+        When low_level_debug is enabled the init sequence is skipped entirely.
+        The reader is left in its power-on state so all I2C/SPI transactions
+        can be driven manually from the Klipper console (RAW_WRITE, RAW_CMD,
+        etc.) without any driver-initiated traffic interfering.
+        """
+        if self._low_level_debug:
+            log_info("init: gate %d (%s) low_level_debug enabled — "
+                     "skipping wake and SAMConfiguration",
+                     self._gate, self._transport_name)
+            return
+
+        if self._debug >= 2:
+            logger.debug("init: gate %d (%s) starting wake sequence",
+                         self._gate, self._transport_name)
+
+        if not self._wake_pn532():
+            raise RuntimeError(
+                "PN532 gate %d (%s) did not respond — check wiring"
+                % (self._gate, self._transport_name))
+
+        if self._debug >= 2:
+            logger.debug("init: gate %d (%s) sending SAMConfiguration "
+                         "(Normal mode, timeout=0, no IRQ)",
+                         self._gate, self._transport_name)
+
+        # SAMConfiguration: Normal mode(0x01), timeout=0x00, IRQ=0x00.
+        # See sam_config() for why the defaults differ from HH_code.
+        if not self.sam_config():
+            log_warning("init: gate %d (%s) SAMConfiguration "
+                        "no response — reader may be unstable",
+                        self._gate, self._transport_name)
+        elif self._debug >= 2:
+            logger.debug("init: gate %d (%s) SAMConfiguration OK",
+                         self._gate, self._transport_name)
+
+    def is_alive(self):
+        """
+        Return True if the PN532 responds to GetFirmwareVersion.
+
+        Kept for API compatibility with RC522Driver — callers should call
+        init() first and check for RuntimeError rather than calling is_alive()
+        standalone.
+        """
+        try:
+            return self.get_firmware_version() is not None
+        except Exception as e:
+            logger.debug("is_alive: gate %d (%s) error: %s\n%s",
+                         self._gate, self._transport_name,
+                         e, traceback.format_exc())
+            return False
+
+    def read_tag(self):
+        """
+        Attempt to read the UID of any tag in the RF field.
+
+        Uses InListPassiveTarget to let the PN532 handle REQA / ANTICOLL /
+        SELECT internally, then InRelease to deselect so the next scan starts
+        clean.  No data is read from tag memory.
+
+        Returns
+        -------
+        str
+            Tag UID as uppercase hex (8, 10, or 14 chars for 4-, 5-, 7-byte UIDs).
+        None
+            No tag in the RF field, or a communication error occurred.
+        """
+        try:
+            target_info = self.read_target()
+            if target_info is None:
+                return None
+
+            uid_hex = target_info['uid']
+            self._release_current_target(reason="read_tag_complete")
+
+            if self._debug >= 2:
+                logger.debug("read_tag: gate %d (%s) uid=%s",
+                             self._gate, self._transport_name, uid_hex)
+
+            return uid_hex
+        except Exception as e:
+            if self._debug >= 1:
+                log_info("read_tag: gate %d (%s) error "
+                         "(tag removed mid-scan?): %s\n%s",
+                         self._gate, self._transport_name,
+                         e, traceback.format_exc())
+            return None
+
+
+# =============================================================================
+# PN532Driver — I2C transport
+# =============================================================================
+
+class PN532Driver(_PN532Base):
     """
     Driver for one PN532 NFC reader module connected via I2C.
 
-    Reads only the tag UID 
+    Reads only the tag UID.
     No data is read from tag memory; tags never need to be written to.
 
     The public interface is identical to RC522Driver — NFCGateManager can use
@@ -205,44 +688,18 @@ class PN532Driver:
                  crc_delay=0.050,
                  debug=1,
                  low_level_debug=False):
-        self._i2c            = i2c
-        self._gate           = gate
-        self._scan_delay     = transceive_delay   # InListPassiveTarget wait
-        self._release_delay  = crc_delay          # InRelease wait
-        self._debug          = debug
-        self._low_level_debug = low_level_debug
-        self._clear_current_card()
+        self._i2c = i2c
+        self._transport_name = 'PN532'
+        super().__init__(gate, transceive_delay, crc_delay, debug, low_level_debug)
 
     # ─────────────────────────────────────────────────────────────────────────
-    # Frame construction and parsing
+    # Frame parsing — I2C frames include a leading STATUS byte
     # ─────────────────────────────────────────────────────────────────────────
-
-    @staticmethod
-    def _build_frame(cmd_and_params):
-        """
-        Build a complete PN532 host-to-chip command frame.
-
-        Parameters
-        ----------
-        cmd_and_params : list of int
-            The command byte followed by any parameters.
-            TFI (0xD4) is prepended automatically.
-
-        Returns
-        -------
-        list of int
-            The full frame: preamble + start + LEN + LCS + TFI + data + DCS + postamble.
-        """
-        data = [_TFI_HOST_TO_PN532] + list(cmd_and_params)
-        length = len(data)
-        lcs    = (-length) & 0xFF
-        dcs    = (-sum(data)) & 0xFF
-        return [0x00, 0x00, 0xFF, length, lcs] + data + [dcs, 0x00]
 
     @staticmethod
     def _check_frame(raw, expected_cmd_resp):
         """
-        Validate a raw read buffer and return the payload bytes.
+        Validate a raw I2C read buffer and return the payload bytes.
 
         Parameters
         ----------
@@ -272,7 +729,7 @@ class PN532Driver:
         return payload                             # Bytes after TFI and CMD_RESP
 
     # ─────────────────────────────────────────────────────────────────────────
-    # Low-level I2C helpers
+    # I2C transport
     # ─────────────────────────────────────────────────────────────────────────
 
     def _send(self, cmd_and_params):
@@ -401,24 +858,9 @@ class PN532Driver:
                          self._gate, timeout)
         return None
 
-    def _transceive(self, cmd_and_params, expected_cmd_resp,
-                    read_len=_MAX_RESPONSE_BYTES, timeout=1.0):
-        """Send a command frame and return the parsed response payload."""
-        self._send(cmd_and_params)
-        if not self._read_ack(timeout=min(max(timeout, 0.050), 1.000)):
-            if self._debug >= 1:
-                log_warning("_transceive: gate %d (PN532) no valid ACK for "
-                            "cmd=0x%02X", self._gate, cmd_and_params[0])
-            return None
-        return self._recv(expected_cmd_resp, read_len=read_len, timeout=timeout)
-
     # ─────────────────────────────────────────────────────────────────────────
-    # Low-level debug tools
+    # Low-level I2C debug tools
     # ─────────────────────────────────────────────────────────────────────────
-
-    def _require_low_level_debug(self):
-        if not self._low_level_debug:
-            raise RuntimeError("PN532 low_level_debug is disabled")
 
     def low_level_raw_write(self, data):
         """
@@ -441,13 +883,6 @@ class PN532Driver:
         self._require_low_level_debug()
         result = self._i2c.i2c_read([], length)
         return list(bytearray(result.get('response', [])))
-
-    def low_level_command_frame(self, cmd_and_params):
-        """Build a PN532 command frame for manual RAW_WRITE use."""
-        self._require_low_level_debug()
-        if not isinstance(cmd_and_params, list):
-            cmd_and_params = [cmd_and_params]
-        return self._build_frame(cmd_and_params)
 
     def low_level_command_write(self, cmd_and_params):
         """Build and write a PN532 command frame without reading ACK/response."""
@@ -473,416 +908,9 @@ class PN532Driver:
             return ready, []
         return ready, self.low_level_raw_read(length)
 
-    # ─────────────────────────────────────────────────────────────────────────
-    # Target state helpers
-    # ─────────────────────────────────────────────────────────────────────────
-
-    def _clear_current_card(self):
-        """Clear cached target/card information."""
-        self.current_target = None
-        self.current_uid = None
-        self.current_uid_hex = ''
-        self.current_target_info = None
-
-    def _set_current_card(self, target_info):
-        """Cache the currently selected target information."""
-        self.current_target_info = dict(target_info)
-        self.current_target = target_info.get('target')
-        self.current_uid = list(target_info.get('uid_bytes') or [])
-        self.current_uid_hex = target_info.get('uid', _hex(self.current_uid))
-        if self._debug >= 2:
-            logger.debug(
-                "_set_current_card: gate %d (PN532) Tg=%s UID=%s "
-                "SENS_RES=0x%04X SAK=0x%02X",
-                self._gate, self.current_target, self.current_uid_hex,
-                target_info.get('sens_res', 0),
-                target_info.get('sak', 0))
-
-    def _release_current_target(self, reason="manual"):
-        """
-        Send InRelease to deselect the active target, then clear cached state.
-
-        If no target is cached, release all targets (Tg=0x00).  That preserves
-        the old driver behavior and gives the next scan a clean RF state.
-        """
-        target = self.current_target
-        release_tg = target if target is not None else 0x00
-        try:
-            if self._debug >= 2:
-                logger.debug(
-                    "_release_current_target: gate %d (PN532) Tg=0x%02X "
-                    "reason=%s", self._gate, release_tg, reason)
-            payload = self._transceive([_CMD_INRELEASE, release_tg], 0x53,
-                                       read_len=12,
-                                       timeout=max(self._release_delay, 0.200))
-            if self._debug >= 2:
-                if payload is None:
-                    logger.debug("_release_current_target: gate %d (PN532) "
-                                 "no response (non-fatal)", self._gate)
-                else:
-                    status = payload[0] if payload else 0xFF
-                    logger.debug("_release_current_target: gate %d (PN532) "
-                                 "status=0x%02X", self._gate, status)
-            return payload is not None
-        except Exception as e:
-            if self._debug >= 2:
-                logger.debug("_release_current_target: gate %d (PN532) "
-                             "error: %s\n%s", self._gate, e,
-                             traceback.format_exc())
-            return False
-        finally:
-            self._clear_current_card()
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # PN532 command helpers ported from HH_code/pn532.py
-    # ─────────────────────────────────────────────────────────────────────────
-
-    def get_firmware_version(self):
-        """
-        Return PN532 firmware metadata, or None if the chip does not respond.
-
-        The returned dictionary is intentionally protocol-only; callers can
-        format it however they want.
-        """
-        payload = self._transceive([_CMD_GETFIRMWAREVERSION], 0x03,
-                                   read_len=15, timeout=0.500)
-        if payload is None or len(payload) < 4:
-            return None
-        return {
-            'ic': payload[0],
-            'version': payload[1],
-            'revision': payload[2],
-            'support': payload[3],
-            'text': 'v%d.%d (IC: 0x%02X, Support: 0x%02X)' %
-                    (payload[1], payload[2], payload[0], payload[3]),
-        }
-
-    def sam_config(self, timeout=0x00, irq=0x00):
-        """
-        Configure the PN532 SAM in normal mode.
-
-        HH_code uses timeout=0x14 and irq=0x01.  This driver defaults to the
-        previous nfc_gates values because Klipper is polling readiness instead
-        of consuming the IRQ pin directly.
-        """
-        payload = self._transceive([_CMD_SAMCONFIGURATION, 0x01,
-                                    timeout & 0xFF, irq & 0xFF],
-                                   0x15, read_len=12, timeout=0.200)
-        return payload is not None
-
-    def rf_config(self, enable=True):
-        """Enable or disable the RF field using PN532 RFConfiguration."""
-        payload = self._transceive([_CMD_RFCONFIGURATION, 0x01,
-                                    0x01 if enable else 0x00],
-                                   0x33, read_len=12, timeout=0.200)
-        return payload is not None
-
-    def read_target(self, timeout=None):
-        """
-        Scan for one ISO14443A target and return structured hardware details.
-
-        Returns a dictionary with UID, target number, SENS_RES/ATQA, SAK, and
-        UID bytes.  Returns None on no tag or communication error.
-        """
-        if timeout is None:
-            timeout = self._scan_delay + 0.100
-        if self._debug >= 2:
-            logger.debug("read_target: gate %d (PN532) scanning (timeout=%.3fs)",
-                         self._gate, timeout)
-
-        payload = self._transceive([_CMD_INLISTPASSIVETARGET, 0x01,
-                                    _BRTY_ISO14443A_106KBPS],
-                                   0x4B, read_len=_MAX_RESPONSE_BYTES,
-                                   timeout=timeout)
-        target_info = _parse_inlist_payload(payload)
-        if target_info is None:
-            self._clear_current_card()
-            if self._debug >= 2:
-                logger.debug("read_target: gate %d (PN532) no tag", self._gate)
-            return None
-
-        self._set_current_card(target_info)
-        if self._debug >= 2:
-            logger.debug(
-                "read_target: gate %d (PN532) Tg=%d SENS_RES=0x%04X "
-                "SAK=0x%02X UIDLen=%d UID=%s",
-                self._gate, target_info['target'], target_info['sens_res'],
-                target_info['sak'], target_info['uid_length'],
-                target_info['uid'])
-        return target_info
-
-    def read_passive_target_id(self, timeout=1.0):
-        """
-        HH-compatible target read helper.
-
-        Returns (True, uid_bytes) on success or (False, None) otherwise.
-        """
-        target_info = self.read_target(timeout=timeout)
-        if target_info is None:
-            return False, None
-        return True, list(target_info['uid_bytes'])
-
-    def ntag_read_page(self, page):
-        """
-        Read four NTAG pages (16 bytes) starting at *page*.
-
-        This is a raw hardware primitive only.  It does not parse NDEF,
-        Spoolman IDs, JSON, or any other application payload.
-        """
-        if page < 0 or page > 255:
-            raise ValueError("PN532 NTAG page out of range: %s" % page)
-        if self.current_target is None:
-            target_info = self.read_target(timeout=0.500)
-            if target_info is None:
-                return None
-
-        cmd = [_CMD_INDATAEXCHANGE, self.current_target, MIFARE_CMD_READ,
-               page & 0xFF]
-        payload = self._transceive(cmd, 0x41, read_len=_MAX_RESPONSE_BYTES,
-                                   timeout=1.000)
-        if not payload:
-            return None
-        status = payload[0]
-        if status != 0x00:
-            if self._debug >= 2:
-                logger.debug("ntag_read_page: gate %d (PN532) page=%d "
-                             "status=0x%02X", self._gate, page, status)
-            return None
-        data = list(payload[1:17])
-        if len(data) != 16:
-            return None
-        return data
-
-    def robust_page_read(self, page, attempts=3):
-        """
-        Read an NTAG page block with target re-verification between attempts.
-
-        Ported from HH_code/pn532.py, but kept as raw bytes only.
-        """
-        if self.current_target is None:
-            if self.read_target(timeout=0.500) is None:
-                return None
-        expected_uid = list(self.current_uid or [])
-
-        for attempt in range(attempts):
-            page_data = self.ntag_read_page(page)
-            if page_data:
-                return page_data
-            if attempt >= attempts - 1:
-                break
-
-            self._release_current_target(
-                reason="page_%d_retry_%d" % (page, attempt + 1))
-            time.sleep(0.025)
-            target_info = self.read_target(timeout=0.500)
-            if target_info is None:
-                time.sleep(0.050)
-                target_info = self.read_target(timeout=0.500)
-                if target_info is None:
-                    return None
-            if expected_uid and target_info['uid_bytes'] != expected_uid:
-                log_warning("robust_page_read: gate %d (PN532) different "
-                            "tag detected during page %d retry",
-                            self._gate, page)
-                self._release_current_target(reason="uid_changed")
-                return None
-
-        self._release_current_target(reason="page_%d_max_retries" % page)
-        return None
-
-    def ntag_read_user_memory(self, start_page=4, end_page=67):
-        """
-        Read raw NTAG user memory in 16-byte page blocks.
-
-        Unlike HH_code/pn532.py, this method intentionally avoids NDEF or
-        spool payload parsing.  It returns a bytearray of raw tag memory.
-        """
-        user_data = bytearray()
-        try:
-            current_page = start_page
-            while current_page <= end_page:
-                page_data = self.robust_page_read(current_page)
-                if not page_data:
-                    break
-                remaining_pages = end_page - current_page + 1
-                if remaining_pages >= 4:
-                    user_data.extend(page_data)
-                else:
-                    user_data.extend(page_data[:remaining_pages * 4])
-                current_page += 4
-                time.sleep(0.005)
-            return user_data
-        finally:
-            self._release_current_target(reason="user_memory_complete")
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # Initialisation
-    # ─────────────────────────────────────────────────────────────────────────
-
-    def _wake_pn532(self, attempts=3):
-        """
-        Wake the PN532 from power-save mode using GetFirmwareVersion.
-
-        Uses a single i2c_write + i2c_read per attempt to avoid Klipper MCU
-        command re-entrancy (two sequential i2c_read calls in one attempt
-        caused recursive send → _do_send loops in mcu.py).
-
-        First attempt waits 150 ms after TX (cold-start settling).
-        Subsequent attempts wait 75 ms.  A 50 ms gap separates each attempt.
-
-        Returns True if the chip responded, False if all attempts failed.
-        """
-        for attempt in range(attempts):
-            if self._debug >= 2:
-                logger.debug(
-                    "_wake_pn532: gate %d (PN532) attempt %d/%d — "
-                    "sending GetFirmwareVersion",
-                    self._gate, attempt + 1, attempts)
-            try:
-                version = self.get_firmware_version()
-                if version is not None:
-                    log_info(
-                        "_wake_pn532: gate %d (PN532) OK on attempt %d — "
-                        "IC=0x%02X Ver=%d.%d",
-                        self._gate, attempt + 1,
-                        version['ic'], version['version'], version['revision'])
-                    return True
-                if self._debug >= 2:
-                    logger.debug(
-                        "_wake_pn532: gate %d (PN532) attempt %d — "
-                        "no valid response",
-                        self._gate, attempt + 1)
-            except Exception as e:
-                if attempt == 0:
-                    logger.debug("_wake_pn532: gate %d (PN532) attempt %d failed: %s\n%s",
-                                  self._gate, attempt + 1, e, traceback.format_exc())
-                else:
-                    log_info("_wake_pn532: gate %d (PN532) attempt %d failed: %s\n%s",
-                             self._gate, attempt + 1, e, traceback.format_exc())
-            time.sleep(0.050)
-
-        log_warning("_wake_pn532: gate %d (PN532) failed after "
-                    "%d attempts — check wiring and I2C address 0x%02X",
-                    self._gate, attempts, self._i2c.i2c_address
-                    if hasattr(self._i2c, 'i2c_address') else 0x24)
-        return False
-
-    def init(self):
-        """
-        Wake the PN532 then configure it for ISO14443A normal operation.
-
-        Sends GetFirmwareVersion (with retries) to bring the chip out of
-        power-save, then SAMConfiguration (Normal mode, no SAM timeout,
-        no IRQ output).  Must be called once after klippy:connect.
-
-        Raises RuntimeError if the chip does not respond after retries.
-        """
-        if self._debug >= 2:
-            logger.debug("init: gate %d (PN532) starting wake sequence",
-                          self._gate)
-
-        if not self._wake_pn532():
-            raise RuntimeError(
-                "PN532 gate %d did not respond — check wiring and I2C address"
-                % self._gate)
-
-        if self._debug >= 2:
-            logger.debug("init: gate %d (PN532) sending SAMConfiguration "
-                          "(Normal mode, timeout=0, no IRQ)", self._gate)
-
-        # SAMConfiguration: Normal mode(0x01), timeout=0x00, IRQ=0x00.
-        # See sam_config() for why the defaults differ from HH_code.
-        if not self.sam_config():
-            log_warning("init: gate %d (PN532) SAMConfiguration "
-                        "no response — reader may be unstable",
-                        self._gate)
-        elif self._debug >= 2:
-            logger.debug("init: gate %d (PN532) SAMConfiguration OK",
-                          self._gate)
-
-    def is_alive(self):
-        """
-        Return True if the PN532 has already responded during init().
-
-        After init() succeeds the chip is confirmed alive.  This method is
-        kept for API compatibility with RC522Driver — callers should call
-        init() first and check for RuntimeError rather than calling is_alive()
-        standalone.
-        """
-        try:
-            return self.get_firmware_version() is not None
-        except Exception as e:
-            logger.debug("is_alive: gate %d (PN532) error: %s\n%s",
-                          self._gate, e, traceback.format_exc())
-            return False
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # Tag read — UID only 
-    # ─────────────────────────────────────────────────────────────────────────
-
-    def read_tag(self):
-        """
-        Attempt to read the UID of any tag in the RF field.
-
-        Uses InListPassiveTarget to let the PN532 handle REQA / ANTICOLL /
-        SELECT internally, then InRelease to deselect so the next scan starts
-        clean.  No data is read from tag memory.
-
-        Returns
-        -------
-        str
-            Tag UID as uppercase hex (8, 10, or 14 chars for 4-, 5-, 7-byte UIDs).
-        None
-            No tag in the RF field, or a communication error occurred.
-        """
-        try:
-            target_info = self.read_target()
-            if target_info is None:
-                return None
-
-            uid_hex = target_info['uid']
-            self._release_current_target(reason="read_tag_complete")
-
-            if self._debug >= 2:
-                logger.debug("read_tag: gate %d (PN532) uid=%s",
-                              self._gate, uid_hex)
-
-            return uid_hex
-        except Exception as e:
-            # Runtime NACKs (e.g. tag removed mid-scan) are non-fatal.
-            if self._debug >= 1:
-                log_info("read_tag: gate %d (PN532) I2C error "
-                         "(tag removed mid-scan?): %s\n%s",
-                         self._gate, e, traceback.format_exc())
-            return None
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # Internal helpers
-    # ─────────────────────────────────────────────────────────────────────────
-
-    def _list_passive_target(self):
-        """
-        Send InListPassiveTarget and parse the response.
-
-        Returns (uid_hex, tg_num) when a tag is found, (None, None) otherwise.
-        tg_num is the PN532's internal target number (always 1 for MaxTg=1).
-        """
-        target_info = self.read_target()
-        if target_info is None:
-            return None, None
-        return target_info['uid'], target_info['target']
-
-    def _release_target(self):
-        """
-        Send InRelease to deselect all activated targets.
-        Must be called after each tag detection so the next InListPassiveTarget
-        starts a fresh scan rather than trying to talk to the old target.
-        """
-        self._release_current_target(reason="release_target")
-
 
 # =============================================================================
-# PN532SPIDriver — SPI variant
+# PN532SPIDriver — SPI transport
 # =============================================================================
 #
 # PN532 SPI protocol overview
@@ -931,7 +959,7 @@ def _rev_list(data):
     return [_rev8(b) for b in data]
 
 
-class PN532SPIDriver:
+class PN532SPIDriver(_PN532Base):
     """
     Driver for one PN532 NFC reader module connected via SPI.
 
@@ -959,26 +987,13 @@ class PN532SPIDriver:
                  crc_delay=0.050,
                  debug=1,
                  low_level_debug=False):
-        self._spi           = spi
-        self._gate          = gate
-        self._scan_delay    = transceive_delay
-        self._release_delay = crc_delay
-        self._debug         = debug
-        self._low_level_debug = low_level_debug
-        self._clear_current_card()
+        self._spi = spi
+        self._transport_name = 'PN532 SPI'
+        super().__init__(gate, transceive_delay, crc_delay, debug, low_level_debug)
 
     # ─────────────────────────────────────────────────────────────────────────
-    # Frame construction and parsing
+    # Frame parsing — SPI frames have no STATUS prefix
     # ─────────────────────────────────────────────────────────────────────────
-
-    @staticmethod
-    def _build_frame(cmd_and_params):
-        """Build a PN532 host-to-chip command frame (same structure as I2C)."""
-        data   = [_TFI_HOST_TO_PN532] + list(cmd_and_params)
-        length = len(data)
-        lcs    = (-length) & 0xFF
-        dcs    = (-sum(data)) & 0xFF
-        return [0x00, 0x00, 0xFF, length, lcs] + data + [dcs, 0x00]
 
     @staticmethod
     def _check_frame(raw, expected_cmd_resp):
@@ -1001,7 +1016,7 @@ class PN532SPIDriver:
         return payload
 
     # ─────────────────────────────────────────────────────────────────────────
-    # Low-level SPI helpers
+    # SPI transport
     # ─────────────────────────────────────────────────────────────────────────
 
     def _send(self, cmd_and_params):
@@ -1121,24 +1136,9 @@ class PN532SPIDriver:
                          self._gate, timeout)
         return None
 
-    def _transceive(self, cmd_and_params, expected_cmd_resp,
-                    read_len=_MAX_RESPONSE_BYTES, timeout=1.0):
-        """Send a command frame and return the parsed response payload."""
-        self._send(cmd_and_params)
-        if not self._read_ack(timeout=min(max(timeout, 0.050), 1.000)):
-            if self._debug >= 1:
-                log_warning("_transceive: gate %d (PN532 SPI) no valid ACK "
-                            "for cmd=0x%02X", self._gate, cmd_and_params[0])
-            return None
-        return self._recv(expected_cmd_resp, read_len=read_len, timeout=timeout)
-
     # ─────────────────────────────────────────────────────────────────────────
-    # Low-level debug tools
+    # Low-level SPI debug tools
     # ─────────────────────────────────────────────────────────────────────────
-
-    def _require_low_level_debug(self):
-        if not self._low_level_debug:
-            raise RuntimeError("PN532 low_level_debug is disabled")
 
     def low_level_raw_write(self, data):
         """Send raw bytes over SPI without adding PN532 framing."""
@@ -1157,13 +1157,6 @@ class PN532SPIDriver:
         out = _rev_list([_SPI_DIR_READ_DATA] + [0x00] * length)
         result = self._spi.spi_transfer(out)
         return list(_rev8(b) for b in bytearray(result.get('response', []))[1:])
-
-    def low_level_command_frame(self, cmd_and_params):
-        """Build a PN532 command frame for manual RAW_WRITE use."""
-        self._require_low_level_debug()
-        if not isinstance(cmd_and_params, list):
-            cmd_and_params = [cmd_and_params]
-        return self._build_frame(cmd_and_params)
 
     def low_level_command_write(self, cmd_and_params):
         """Build and write a PN532 command frame using SPI write direction."""
@@ -1185,311 +1178,3 @@ class PN532SPIDriver:
         if not ready or ready[0] != 0x01:
             return ready, []
         return ready, self.low_level_raw_read(length)
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # Target state helpers
-    # ─────────────────────────────────────────────────────────────────────────
-
-    def _clear_current_card(self):
-        """Clear cached target/card information."""
-        self.current_target = None
-        self.current_uid = None
-        self.current_uid_hex = ''
-        self.current_target_info = None
-
-    def _set_current_card(self, target_info):
-        """Cache the currently selected target information."""
-        self.current_target_info = dict(target_info)
-        self.current_target = target_info.get('target')
-        self.current_uid = list(target_info.get('uid_bytes') or [])
-        self.current_uid_hex = target_info.get('uid', _hex(self.current_uid))
-        if self._debug >= 2:
-            logger.debug(
-                "_set_current_card: gate %d (PN532 SPI) Tg=%s UID=%s "
-                "SENS_RES=0x%04X SAK=0x%02X",
-                self._gate, self.current_target, self.current_uid_hex,
-                target_info.get('sens_res', 0),
-                target_info.get('sak', 0))
-
-    def _release_current_target(self, reason="manual"):
-        """Send InRelease to deselect the active target, then clear state."""
-        target = self.current_target
-        release_tg = target if target is not None else 0x00
-        try:
-            if self._debug >= 2:
-                logger.debug(
-                    "_release_current_target: gate %d (PN532 SPI) Tg=0x%02X "
-                    "reason=%s", self._gate, release_tg, reason)
-            payload = self._transceive([_CMD_INRELEASE, release_tg], 0x53,
-                                       read_len=12,
-                                       timeout=max(self._release_delay, 0.200))
-            if self._debug >= 2:
-                if payload is None:
-                    logger.debug("_release_current_target: gate %d (PN532 SPI) "
-                                 "no response (non-fatal)", self._gate)
-                else:
-                    status = payload[0] if payload else 0xFF
-                    logger.debug("_release_current_target: gate %d (PN532 SPI) "
-                                 "status=0x%02X", self._gate, status)
-            return payload is not None
-        except Exception as e:
-            if self._debug >= 2:
-                logger.debug("_release_current_target: gate %d (PN532 SPI) "
-                             "error: %s\n%s", self._gate, e,
-                             traceback.format_exc())
-            return False
-        finally:
-            self._clear_current_card()
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # PN532 command helpers ported from HH_code/pn532.py
-    # ─────────────────────────────────────────────────────────────────────────
-
-    def get_firmware_version(self):
-        """Return PN532 firmware metadata, or None if the chip does not respond."""
-        payload = self._transceive([_CMD_GETFIRMWAREVERSION], 0x03,
-                                   read_len=15, timeout=0.500)
-        if payload is None or len(payload) < 4:
-            return None
-        return {
-            'ic': payload[0],
-            'version': payload[1],
-            'revision': payload[2],
-            'support': payload[3],
-            'text': 'v%d.%d (IC: 0x%02X, Support: 0x%02X)' %
-                    (payload[1], payload[2], payload[0], payload[3]),
-        }
-
-    def sam_config(self, timeout=0x00, irq=0x00):
-        """Configure the PN532 SAM in normal mode."""
-        payload = self._transceive([_CMD_SAMCONFIGURATION, 0x01,
-                                    timeout & 0xFF, irq & 0xFF],
-                                   0x15, read_len=12, timeout=0.200)
-        return payload is not None
-
-    def rf_config(self, enable=True):
-        """Enable or disable the RF field using PN532 RFConfiguration."""
-        payload = self._transceive([_CMD_RFCONFIGURATION, 0x01,
-                                    0x01 if enable else 0x00],
-                                   0x33, read_len=12, timeout=0.200)
-        return payload is not None
-
-    def read_target(self, timeout=None):
-        """Scan for one ISO14443A target and return structured hardware facts."""
-        if timeout is None:
-            timeout = self._scan_delay + 0.100
-        if self._debug >= 2:
-            logger.debug("read_target: gate %d (PN532 SPI) scanning (timeout=%.3fs)",
-                         self._gate, timeout)
-
-        payload = self._transceive([_CMD_INLISTPASSIVETARGET, 0x01,
-                                    _BRTY_ISO14443A_106KBPS],
-                                   0x4B, read_len=_MAX_RESPONSE_BYTES,
-                                   timeout=timeout)
-        target_info = _parse_inlist_payload(payload)
-        if target_info is None:
-            self._clear_current_card()
-            if self._debug >= 2:
-                logger.debug("read_target: gate %d (PN532 SPI) no tag",
-                             self._gate)
-            return None
-
-        self._set_current_card(target_info)
-        if self._debug >= 2:
-            logger.debug(
-                "read_target: gate %d (PN532 SPI) Tg=%d SENS_RES=0x%04X "
-                "SAK=0x%02X UIDLen=%d UID=%s",
-                self._gate, target_info['target'], target_info['sens_res'],
-                target_info['sak'], target_info['uid_length'],
-                target_info['uid'])
-        return target_info
-
-    def read_passive_target_id(self, timeout=1.0):
-        """HH-compatible helper returning (success, uid_bytes)."""
-        target_info = self.read_target(timeout=timeout)
-        if target_info is None:
-            return False, None
-        return True, list(target_info['uid_bytes'])
-
-    def ntag_read_page(self, page):
-        """Read four NTAG pages (16 bytes) starting at *page*."""
-        if page < 0 or page > 255:
-            raise ValueError("PN532 NTAG page out of range: %s" % page)
-        if self.current_target is None:
-            target_info = self.read_target(timeout=0.500)
-            if target_info is None:
-                return None
-
-        payload = self._transceive(
-            [_CMD_INDATAEXCHANGE, self.current_target, MIFARE_CMD_READ,
-             page & 0xFF],
-            0x41, read_len=_MAX_RESPONSE_BYTES, timeout=1.000)
-        if not payload or payload[0] != 0x00:
-            if self._debug >= 2 and payload:
-                logger.debug("ntag_read_page: gate %d (PN532 SPI) page=%d "
-                             "status=0x%02X", self._gate, page, payload[0])
-            return None
-        data = list(payload[1:17])
-        if len(data) != 16:
-            return None
-        return data
-
-    def robust_page_read(self, page, attempts=3):
-        """Read an NTAG page block with target re-verification between attempts."""
-        if self.current_target is None:
-            if self.read_target(timeout=0.500) is None:
-                return None
-        expected_uid = list(self.current_uid or [])
-
-        for attempt in range(attempts):
-            page_data = self.ntag_read_page(page)
-            if page_data:
-                return page_data
-            if attempt >= attempts - 1:
-                break
-
-            self._release_current_target(
-                reason="page_%d_retry_%d" % (page, attempt + 1))
-            time.sleep(0.025)
-            target_info = self.read_target(timeout=0.500)
-            if target_info is None:
-                time.sleep(0.050)
-                target_info = self.read_target(timeout=0.500)
-                if target_info is None:
-                    return None
-            if expected_uid and target_info['uid_bytes'] != expected_uid:
-                log_warning("robust_page_read: gate %d (PN532 SPI) different "
-                            "tag detected during page %d retry",
-                            self._gate, page)
-                self._release_current_target(reason="uid_changed")
-                return None
-
-        self._release_current_target(reason="page_%d_max_retries" % page)
-        return None
-
-    def ntag_read_user_memory(self, start_page=4, end_page=67):
-        """Read raw NTAG user memory in 16-byte page blocks."""
-        user_data = bytearray()
-        try:
-            current_page = start_page
-            while current_page <= end_page:
-                page_data = self.robust_page_read(current_page)
-                if not page_data:
-                    break
-                remaining_pages = end_page - current_page + 1
-                if remaining_pages >= 4:
-                    user_data.extend(page_data)
-                else:
-                    user_data.extend(page_data[:remaining_pages * 4])
-                current_page += 4
-                time.sleep(0.005)
-            return user_data
-        finally:
-            self._release_current_target(reason="user_memory_complete")
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # Initialisation
-    # ─────────────────────────────────────────────────────────────────────────
-
-    def _wake_pn532(self, attempts=3):
-        """Send GetFirmwareVersion to wake the PN532 and confirm it responds."""
-        for attempt in range(attempts):
-            if self._debug >= 2:
-                logger.debug(
-                    "_wake_pn532: gate %d (PN532 SPI) attempt %d/%d",
-                    self._gate, attempt + 1, attempts)
-            try:
-                version = self.get_firmware_version()
-                if version is not None:
-                    log_info(
-                        "_wake_pn532: gate %d (PN532 SPI) OK on attempt %d — "
-                        "IC=0x%02X Ver=%d.%d",
-                        self._gate, attempt + 1,
-                        version['ic'], version['version'], version['revision'])
-                    return True
-                if self._debug >= 2:
-                    logger.debug(
-                        "_wake_pn532: gate %d (PN532 SPI) attempt %d — no valid response",
-                        self._gate, attempt + 1)
-            except Exception as e:
-                if attempt == 0:
-                    logger.debug("_wake_pn532: gate %d (PN532 SPI) attempt %d failed: %s\n%s",
-                                  self._gate, attempt + 1, e, traceback.format_exc())
-                else:
-                    log_info("_wake_pn532: gate %d (PN532 SPI) attempt %d failed: %s\n%s",
-                             self._gate, attempt + 1, e, traceback.format_exc())
-            time.sleep(0.050)
-
-        log_warning("_wake_pn532: gate %d (PN532 SPI) failed after %d attempts",
-                    self._gate, attempts)
-        return False
-
-    def init(self):
-        """Wake the PN532 and configure it for ISO14443A normal operation."""
-        if self._debug >= 2:
-            logger.debug("init: gate %d (PN532 SPI) starting wake sequence", self._gate)
-
-        if not self._wake_pn532():
-            raise RuntimeError(
-                "PN532 gate %d did not respond — check wiring and SPI CS pin"
-                % self._gate)
-
-        if self._debug >= 2:
-            logger.debug("init: gate %d (PN532 SPI) sending SAMConfiguration", self._gate)
-
-        if not self.sam_config():
-            log_warning("init: gate %d (PN532 SPI) SAMConfiguration no response — "
-                        "reader may be unstable", self._gate)
-        elif self._debug >= 2:
-            logger.debug("init: gate %d (PN532 SPI) SAMConfiguration OK", self._gate)
-
-    def is_alive(self):
-        """Return True if the PN532 responds to GetFirmwareVersion."""
-        try:
-            return self.get_firmware_version() is not None
-        except Exception as e:
-            logger.debug("is_alive: gate %d (PN532 SPI) error: %s\n%s",
-                          self._gate, e, traceback.format_exc())
-            return False
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # Tag read — UID only
-    # ─────────────────────────────────────────────────────────────────────────
-
-    def read_tag(self):
-        """
-        Attempt to read the UID of any tag in the RF field.
-
-        Returns str (UID hex) or None.
-        """
-        try:
-            target_info = self.read_target()
-            if target_info is None:
-                return None
-            uid_hex = target_info['uid']
-            self._release_current_target(reason="read_tag_complete")
-            if self._debug >= 2:
-                logger.debug("read_tag: gate %d (PN532 SPI) uid=%s",
-                              self._gate, uid_hex)
-            return uid_hex
-        except Exception as e:
-            if self._debug >= 1:
-                log_info("read_tag: gate %d (PN532 SPI) I2C error "
-                         "(tag removed mid-scan?): %s\n%s",
-                         self._gate, e, traceback.format_exc())
-            return None
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # Internal helpers
-    # ─────────────────────────────────────────────────────────────────────────
-
-    def _list_passive_target(self):
-        """Send InListPassiveTarget and parse the response."""
-        target_info = self.read_target()
-        if target_info is None:
-            return None, None
-        return target_info['uid'], target_info['target']
-
-    def _release_target(self):
-        """Send InRelease to deselect all activated targets."""
-        self._release_current_target(reason="release_target")
