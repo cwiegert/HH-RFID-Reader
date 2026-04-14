@@ -20,6 +20,56 @@ This is the day-to-day reference for operating the NFC gate reader from the Flui
 | `NFC_GATE NAME=<lane> READ=1` | Start background polling |
 | `NFC_GATE NAME=<lane> READ=0` | Stop background polling |
 | `NFC_GATE NAME=<lane> HELP=1` | Show available commands |
+| `NFC_HH_SYNC_CACHE` | Re-seed all lane caches from the current Happy Hare gate map |
+| `NFC_GATE NAME=<lane> HH_SYNC=1 SPOOL_ID=<n>` | Seed one lane's cache directly (called by `NFC_HH_SYNC_CACHE`) |
+
+---
+
+## Startup — Happy Hare Cache Seed
+
+When Klipper connects, NFC_Manager runs this sequence for each lane automatically:
+
+```
+klippy:connect  →  _handle_connect()  →  schedule _delayed_init() (2 s)
+
+_delayed_init()
+  1. Initialise PN532 reader
+  2. Read Happy Hare gate map  →  seed this lane's local cache
+  3. Start background polling  (if startup_polling: 1)
+```
+
+**Step 2 is the key one.** NFC_Manager calls `mmu.get_status()` directly to read `gate_spool_id` for this gate. The result is stored as a one-shot seed. On the very first poll:
+
+- Tag resolves to the **same spool** as the HH seed → cache updated silently, **no dispatch** (HH already knows)
+- Tag resolves to a **different spool** → `_NFC_SPOOL_CHANGED` dispatched normally (spool was swapped while Klipper was down)
+- No tag present → seed kept until the first successful tag read
+
+The seed is always cleared after the first `CHANGED` event — it fires at most once per startup per lane.
+
+**Console output at startup:**
+```
+✅ NFC[lane0]: reader ready.  HH seed: spool_id=42  Startup polling is enabled; first poll in 0.0s.
+✅ NFC[lane1]: reader ready.  HH reports gate empty  Run NFC_GATE NAME=lane1 READ=1 to start polling.
+```
+
+**If Happy Hare wasn't ready** when the NFC init ran (rare — both init at `klippy:connect`), the seed step is skipped and all first-poll reads dispatch normally. Run `NFC_HH_SYNC_CACHE` to manually re-seed.
+
+---
+
+## `NFC_HH_SYNC_CACHE`
+
+Re-seeds all NFC lane caches from the current Happy Hare gate map. Use this any time you want to re-align NFC state with HH without restarting Klipper.
+
+```gcode
+NFC_HH_SYNC_CACHE
+```
+
+The macro reads `printer.mmu.gate_spool_id` for each gate and calls `NFC_GATE NAME=laneN HH_SYNC=1 SPOOL_ID=<n>` per lane. The Python side receives the spool_id and sets the seed. On the next poll for each lane, if the physical tag matches the seed, the dispatch is suppressed.
+
+**When to use:**
+- Happy Hare wasn't fully initialised when the PN532 init ran and the startup seed was skipped
+- You manually changed the HH gate map and want NFC to treat the current state as baseline
+- After loading filament manually (without NFC) and you don't want a spurious CHANGED on the next poll
 
 ---
 
@@ -145,9 +195,26 @@ Clears:
 2. The SpoolmanClient UID cache
 3. The PN532 driver's in-memory current-card cache
 
-**When to use:** When you've physically put a different spool in a gate and want the next poll to pick up the new one without waiting for the cache to expire. Also useful if Spoolman data was edited and you want the reader to re-fetch.
+On the next poll, the full `(uid, spool_id)` combination is re-evaluated:
+
+- **Same UID, same spool in Spoolman** → cache refreshed silently, no dispatch
+- **Same UID, different spool in Spoolman** → `_NFC_SPOOL_CHANGED` dispatched with the new spool
+
+This is the correct way to force a re-read after editing a spool's UID registration in Spoolman.
 
 `CLEAR=1` is accepted as a shorthand.
+
+---
+
+### `NFC_GATE NAME=<lane> HH_SYNC=1 SPOOL_ID=<n>`
+
+Seeds this lane's cache with a spool_id from Happy Hare's gate map. On the next poll, if the physical tag resolves to that spool_id, the dispatch is suppressed (HH already knows).
+
+```gcode
+NFC_GATE NAME=lane0 HH_SYNC=1 SPOOL_ID=42
+```
+
+This command is normally called automatically by the `NFC_HH_SYNC_CACHE` macro — you won't need it directly in normal operation. Use `NFC_HH_SYNC_CACHE` to sync all lanes at once.
 
 ---
 

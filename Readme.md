@@ -31,6 +31,7 @@ Spool with NFC tag → PN532 on EBB42 → Klipper I2C → Spoolman lookup → Ha
 | 5 | [Commands & Macros](docs/shared/klipper-functions.md) | Every GCode command with examples |
 | | [Configuration Reference](docs/shared/configuration.md) | All settings with defaults |
 | | [Troubleshooting](docs/i2c-pn532/troubleshooting.md) | Failure patterns and fixes |
+| | [How It Works](docs/shared/how-it-works.md) | Boot sequence, poll flow, system layers, macro events |
 | | [Expert: Low-Level I2C Debug](docs/shared/expert-low-level-i2c-debugging.md) | Manual PN532 bus commands |
 
 ---
@@ -117,20 +118,7 @@ See [Commands & Macros](docs/shared/klipper-functions.md) for everything, includ
 
 ---
 
-## How It Works
-
-Tags are never written to. The NFC tag's factory UID is stored in a Spoolman extra field (`rfid_tag` by default). When a reader sees a tag:
-
-1. PN532 reads the UID and passes it up to NFC_Manager
-2. NFC_Manager checks if this is a new spool, the same spool, or an absence
-3. On a new spool: SpoolmanClient finds the matching spool record
-4. NFC_Manager fires one of three Klipper macros:
-   - `_NFC_SPOOL_CHANGED GATE=<n> SPOOL_ID=<id> UID=<uid>` — new spool detected
-   - `_NFC_SPOOL_REMOVED GATE=<n>` — spool removed (after threshold missed polls)
-   - `_NFC_TAG_NO_SPOOL GATE=<n> UID=<uid>` — tag read but not registered in Spoolman
-5. `nfc_macros.cfg` translates those events into `MMU_GATE_MAP` calls to Happy Hare
-
-The macros in `nfc_macros.cfg` are the only place Happy Hare commands live. You can edit them for your Happy Hare version without touching any Python.
+See [How It Works](docs/shared/how-it-works.md) for the boot sequence, per-poll flow, system layers, and macro dispatch events.
 
 ---
 
