@@ -1,5 +1,24 @@
 # klippy/extras/nfc_gates/rc522_driver.py
 #
+# EMU NFC Gate Reader — RC522 SPI driver (work in progress, not yet supported)
+# Version 1.0.0  |  2026-04-14
+# Copyright (C) 2026  WoodWorker
+# SPDX-License-Identifier: GPL-2.0-or-later
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+#
+# ─────────────────────────────────────────────────────────────────────────────
 # RC522 NFC reader driver — communicates with the RC522 chip over SPI using
 # Klipper's MCU_SPI interface.
 #

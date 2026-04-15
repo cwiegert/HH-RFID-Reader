@@ -1,5 +1,24 @@
 # klippy/extras/nfc_gates/spoolman_client.py
 #
+# EMU NFC Gate Reader — Spoolman API client
+# Version 1.0.0  |  2026-04-14
+# Copyright (C) 2026  WoodWorker
+# SPDX-License-Identifier: GPL-2.0-or-later
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+#
+# ─────────────────────────────────────────────────────────────────────────────
 # Spoolman API client — looks up a spool record by NFC tag UID.
 #
 # Integration model (UID lookup)
@@ -114,6 +133,17 @@ class SpoolmanClient:
         # UID → (spool_record, expiry_monotonic)
         self._cache = {}
 
+        # Circuit breaker — prevents blocking the Klipper reactor thread on
+        # repeated Spoolman failures.  After _CB_THRESHOLD consecutive request
+        # failures the client backs off for _CB_BACKOFF seconds before trying
+        # again.  A single success resets the counter.
+        self._cb_failures   = 0
+        self._cb_backoff_until = 0.0
+        _CB_THRESHOLD       = 3
+        _CB_BACKOFF         = 60.0
+        self._CB_THRESHOLD  = _CB_THRESHOLD
+        self._CB_BACKOFF    = _CB_BACKOFF
+
     # ─────────────────────────────────────────────────────────────────────────
 
     @staticmethod
@@ -182,7 +212,24 @@ class SpoolmanClient:
         return None
 
     def _fetch_spools(self, uid_hex):
-        """Return the full Spoolman spool list, or None on request failure."""
+        """Return the full Spoolman spool list, or None on request failure.
+
+        Implements a circuit breaker: after _CB_THRESHOLD consecutive failures
+        the client stops attempting requests for _CB_BACKOFF seconds.  This
+        prevents a dead or slow Spoolman from blocking the Klipper reactor
+        thread on every poll cycle.
+        """
+        now = time.monotonic()
+        if self._cb_failures >= self._CB_THRESHOLD:
+            if now < self._cb_backoff_until:
+                if self._debug >= 2:
+                    logger.debug(
+                        "spoolman: circuit open — skipping request "
+                        "(retry in %.0fs)", self._cb_backoff_until - now)
+                return None
+            # Backoff period elapsed — allow one probe through
+            logger.info("spoolman: circuit probing after backoff")
+
         base_url = self._resolve_base_url()
         if not base_url:
             logger.warning("spoolman: no Spoolman URL configured or discovered")
@@ -195,13 +242,28 @@ class SpoolmanClient:
             with urlopen(url, timeout=self._timeout) as resp:
                 spools = json.loads(resp.read().decode('utf-8'))
         except Exception as e:
-            logger.warning("spoolman: request failed (%s): %s", url, e)
+            self._cb_failures += 1
+            self._cb_backoff_until = time.monotonic() + self._CB_BACKOFF
+            if self._cb_failures >= self._CB_THRESHOLD:
+                logger.warning(
+                    "spoolman: %d consecutive failures — circuit open, "
+                    "backing off for %.0fs (%s)",
+                    self._cb_failures, self._CB_BACKOFF, e)
+            else:
+                logger.warning("spoolman: request failed (%s): %s", url, e)
             return None
 
         if not isinstance(spools, list):
             logger.warning("spoolman: unexpected response type %s from %s",
                             type(spools).__name__, url)
             return None
+
+        # Success — reset circuit breaker
+        if self._cb_failures > 0:
+            logger.info("spoolman: connection restored after %d failure(s)",
+                        self._cb_failures)
+            self._cb_failures      = 0
+            self._cb_backoff_until = 0.0
         return spools
 
     def _find_spool_record_by_uid(self, spools, uid_hex):
@@ -308,6 +370,48 @@ class SpoolmanClient:
             if self._debug >= 1:
                 logger.info("spoolman: spool_id=%s location=%s",
                             spool_id, location)
+        return ok
+
+    def clear_spool_location(self, spool_id):
+        """
+        Clear the physical gate location on a Spoolman spool record.
+
+        Called when a spool is removed from a gate so Spoolman no longer shows
+        it as residing in that gate position.  Sets location to an empty string.
+        """
+        if spool_id is None:
+            return False
+        payload = {"location": ""}
+        try:
+            ok = self._patch_spool(spool_id, payload, plural=False)
+        except HTTPError as e:
+            if e.code not in (404, 405):
+                logger.warning(
+                    "spoolman: location clear failed for spool_id=%s: %s",
+                    spool_id, e)
+                return False
+            try:
+                ok = self._patch_spool(spool_id, payload, plural=True)
+            except Exception as fallback_error:
+                logger.warning(
+                    "spoolman: location clear failed for spool_id=%s: %s",
+                    spool_id, fallback_error)
+                return False
+        except Exception as e:
+            logger.warning(
+                "spoolman: location clear failed for spool_id=%s: %s",
+                spool_id, e)
+            return False
+
+        if ok:
+            for spool, _expiry in self._cache.values():
+                try:
+                    if int(spool.get('id')) == int(spool_id):
+                        spool['location'] = ""
+                except Exception:
+                    continue
+            if self._debug >= 1:
+                logger.info("spoolman: spool_id=%s location cleared", spool_id)
         return ok
 
     def lookup_spool_record_by_uid(self, uid_hex):

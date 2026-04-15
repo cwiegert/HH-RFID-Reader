@@ -1,5 +1,24 @@
-# klippy/extras/nfc_gates/manager.py
+# klippy/extras/nfc_gates/NFC_manager.py
 #
+# EMU NFC Gate Reader — gate manager
+# Version 1.0.0  |  2026-04-14
+# Copyright (C) 2026  WoodWorker
+# SPDX-License-Identifier: GPL-2.0-or-later
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+#
+# ─────────────────────────────────────────────────────────────────────────────
 # All gate coordination logic for both hardware paths:
 #
 #   NFCGateDefaults  — shared config defaults from the base [nfc_gate] section
@@ -1058,7 +1077,48 @@ class NFCGate:
                          "next poll in %.0fs", self._name, self._poll_interval)
         return self.reactor.monotonic() + self._poll_interval
 
+    def _check_hh_cleared(self):
+        """Reset lane cache if HH cleared this gate from outside the NFC system.
+
+        If Happy Hare's gate_spool_id for this gate is -1 (empty) but the NFC
+        lane cache still holds a spool assignment, it means HH was updated by
+        something other than an NFC poll — a manual MMU_GATE_MAP command, an
+        automated unload, a filament swap, etc.
+
+        Resetting the lane state forces the next tag read to be treated as a
+        fresh detection, which dispatches _NFC_SPOOL_CHANGED and re-populates
+        HH on that same poll cycle.  If the tag has actually been removed, the
+        normal absent-threshold path fires _NFC_SPOOL_REMOVED as usual.
+        """
+        if self._state.current_spool is None:
+            return  # Lane cache already empty — nothing to cross-check
+        mmu = self.printer.lookup_object('mmu', None)
+        if mmu is None:
+            return
+        try:
+            status        = mmu.get_status(self.reactor.monotonic())
+            gate_spool_ids = status.get('gate_spool_id', [])
+            hh_spool      = int(gate_spool_ids[self._gate] or -1)
+        except (IndexError, TypeError, ValueError):
+            return
+        nfc_spool = self._state.current_spool
+        hh_differs = (hh_spool < 0) or (hh_spool != nfc_spool)
+        if hh_differs:
+            if hh_spool < 0:
+                reason = "HH cleared gate externally (NFC cache had spool=%d)" % nfc_spool
+            else:
+                reason = ("HH has spool=%d but NFC cache has spool=%d "
+                          "(manual gate map change?)" % (hh_spool, nfc_spool))
+            logger.info(
+                "nfc_gate: [%s] gate %d — %s; resetting lane cache so "
+                "next tag read re-dispatches _NFC_SPOOL_CHANGED",
+                self._name, self._gate, reason)
+            self._state.current_uid   = None
+            self._state.current_spool = None
+            self._state.miss_count    = 0
+
     def _poll(self):
+        self._check_hh_cleared()
         uid_hex = self._reader.read_tag()
 
         if uid_hex is None:
@@ -1130,9 +1190,6 @@ class NFCGate:
             if self._debug >= 1:
                 logger.info("nfc_gate: [%s] gate %d — %s uid=%s spool=%s",
                             self._name, gate, event_type, uid, spool)
-            if (event_type == EVENT_CHANGED and spool is not None
-                    and self._spoolman is not None):
-                self._spoolman.update_spool_location(spool, gate)
 
             # Determine whether to suppress the Happy Hare dispatch.
             suppress = False
@@ -1184,6 +1241,15 @@ class NFCGate:
                 if self._debug >= 2:
                     logger.debug("nfc_gate: [%s] gate %d — dispatching GCode "
                                  "for event %s", self._name, gate, event_type)
+                # Update the Spoolman location field only when we are actually
+                # dispatching to HH — not on suppressed startup re-seeds.
+                if self._spoolman is not None:
+                    if event_type == EVENT_CHANGED and spool is not None:
+                        self._spoolman.update_spool_location(spool, gate)
+                    elif event_type == EVENT_REMOVED and spool is not None:
+                        # Clear the gate location so Spoolman doesn't show the
+                        # spool as still sitting in this gate after removal.
+                        self._spoolman.clear_spool_location(spool)
                 self._klipper.dispatch(event_type, gate, uid, spool)
 
         if (uid_hex is not None and self._suppress_next_dispatch_uid is not None
@@ -1453,9 +1519,6 @@ class NFCGateManager:
             if self._debug >= 1:
                 logger.info("nfc_gates: gate %d — state change: %s "
                             "(uid=%s spool=%s)", i, event_type, uid, spool)
-            if (event_type == EVENT_CHANGED and spool is not None
-                    and self._spoolman is not None):
-                self._spoolman.update_spool_location(spool, gate)
             if (self._suppress_next_dispatch_uid[i] is not None
                     and uid == self._suppress_next_dispatch_uid[i]):
                 logger.info(
@@ -1463,6 +1526,11 @@ class NFCGateManager:
                     "suppressed; no GCode dispatch", i, uid)
                 self._suppress_next_dispatch_uid[i] = None
             else:
+                if self._spoolman is not None:
+                    if event_type == EVENT_CHANGED and spool is not None:
+                        self._spoolman.update_spool_location(spool, gate)
+                    elif event_type == EVENT_REMOVED and spool is not None:
+                        self._spoolman.clear_spool_location(spool)
                 self._klipper.dispatch(event_type, gate, uid, spool)
         elif self._debug >= 2:
             logger.debug("nfc_gates: gate %d — no state change (%r)",
