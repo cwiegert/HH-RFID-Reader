@@ -700,7 +700,8 @@ class NFCGate:
         self._state      = GateState(self._gate, self._absent_threshold)
         self._suppress_next_dispatch_uid   = None
         self._suppress_next_dispatch_spool = None  # paired with uid — suppress only when both match
-        self._hh_seed_spool_id = None   # set on startup from HH gate map; cleared after first match
+        self._hh_seed_spool_id   = None  # set on startup from HH gate map; cleared after first match
+        self._hh_seed_available  = False  # True only when HH had the gate marked available at seed time
         self._hh_confirmed_spool = None  # last spool HH acknowledged; enables _check_hh_cleared
         self._failed     = False
         self._klipper    = KlipperInterface(self.printer, self.reactor)
@@ -909,12 +910,15 @@ class NFCGate:
                 hh_spool = -1
 
             if hh_spool > 0:
-                self._hh_seed_spool_id = hh_spool
+                self._hh_seed_spool_id  = hh_spool
+                self._hh_seed_available = bool(hh_avail)
                 logger.info(
                     "nfc_gate: [%s] gate %d — HH seed: spool_id=%d  "
-                    "gate_status=%s  first poll matching this spool will be "
-                    "absorbed silently (HH already knows)",
-                    self._name, self._gate, hh_spool, hh_avail)
+                    "gate_status=%s  %s",
+                    self._name, self._gate, hh_spool, hh_avail,
+                    "first poll matching this spool will be absorbed silently"
+                    if hh_avail else
+                    "gate_status=0 — dispatch will still fire to set AVAILABLE=1")
             else:
                 logger.info(
                     "nfc_gate: [%s] gate %d — HH reports gate empty/unknown "
@@ -1201,20 +1205,30 @@ class NFCGate:
             # so it fires at most once, regardless of match.
             if self._hh_seed_spool_id is not None:
                 if event_type == EVENT_CHANGED and spool == self._hh_seed_spool_id:
-                    suppress = True
-                    self._hh_confirmed_spool = spool  # HH already had it — treat as confirmed
-                    logger.info(
-                        "nfc_gate: [%s] gate %d — startup HH sync: "
-                        "spool=%d matches HH seed; cache seeded silently "
-                        "(no dispatch — HH already knows)",
-                        self._name, gate, spool)
+                    if self._hh_seed_available:
+                        # HH had spool AND marked gate available — nothing to do
+                        suppress = True
+                        self._hh_confirmed_spool = spool
+                        logger.info(
+                            "nfc_gate: [%s] gate %d — startup HH sync: "
+                            "spool=%d matches HH seed (available); absorbed silently",
+                            self._name, gate, spool)
+                    else:
+                        # HH had the spool ID but gate_status=0 — let dispatch through
+                        # so MMU_GATE_MAP AVAILABLE=1 gets applied
+                        logger.info(
+                            "nfc_gate: [%s] gate %d — startup HH sync: "
+                            "spool=%d matches HH seed but gate_status=0; "
+                            "dispatching to set AVAILABLE=1",
+                            self._name, gate, spool)
                 elif event_type == EVENT_CHANGED:
                     logger.info(
                         "nfc_gate: [%s] gate %d — startup HH sync: "
                         "resolved spool=%s differs from HH seed=%d; "
                         "dispatching CHANGED (spool swapped since last restart?)",
                         self._name, gate, spool, self._hh_seed_spool_id)
-                self._hh_seed_spool_id = None  # one-shot — always clear
+                self._hh_seed_spool_id   = None  # one-shot — always clear
+                self._hh_seed_available  = False
 
             # ── CLEAR_CACHE suppress ─────────────────────────────────────────
             # Only suppress when the uid AND spool both match the pre-clear
