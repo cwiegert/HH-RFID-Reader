@@ -1320,18 +1320,47 @@ class NFCGate:
             self._suppress_next_dispatch_uid   = None
             self._suppress_next_dispatch_spool = None
 
+    def _hh_filament_label(self):
+        """Return a short string describing this gate's MMU filament state."""
+        mmu = self.printer.lookup_object('mmu', None)
+        if mmu is None:
+            return "HH: n/a"
+        try:
+            status       = mmu.get_status(self.reactor.monotonic())
+            gate_status  = status.get('gate_status', [])
+            active_gate  = int(status.get('gate', -1) or -1)
+            filament_pos = int(status.get('filament_pos', 0) or 0)
+            gstat        = int(gate_status[self._gate] or 0) if self._gate < len(gate_status) else 0
+        except (IndexError, TypeError, ValueError):
+            return "HH: unknown"
+        if active_gate == self._gate and filament_pos > 0:
+            return "HH: loaded (pos %d)" % filament_pos
+        if gstat >= 1:
+            return "HH: available"
+        return "HH: empty"
+
     def status_line(self):
         if self._failed:
             return ("  Gate %d  [%s]:  READER FAILED (check wiring, address 0x24)"
                     % (self._gate, self._name))
+        if self._hh_load_paused:
+            poll_state = "polling suspended"
+        elif self._polling:
+            poll_state = "polling"
+        else:
+            poll_state = "not polling"
+        hh_label = self._hh_filament_label()
         if self._state.current_spool is not None:
-            return ("  Gate %d  [%s]:  spool %-6d   UID %s"
+            return ("  Gate %d  [%s]:  spool %-6d   UID %s   [%s]  [%s]"
                     % (self._gate, self._name,
-                       self._state.current_spool, self._state.current_uid))
+                       self._state.current_spool, self._state.current_uid,
+                       poll_state, hh_label))
         if self._state.current_uid is not None:
-            return ("  Gate %d  [%s]:  tag %s  (UID not in Spoolman)"
-                    % (self._gate, self._name, self._state.current_uid))
-        return "  Gate %d  [%s]:  empty" % (self._gate, self._name)
+            return ("  Gate %d  [%s]:  tag %s  (UID not in Spoolman)   [%s]  [%s]"
+                    % (self._gate, self._name, self._state.current_uid,
+                       poll_state, hh_label))
+        return ("  Gate %d  [%s]:  empty   [%s]  [%s]"
+                % (self._gate, self._name, poll_state, hh_label))
 
     def get_status(self, _eventtime=None):
         return {
