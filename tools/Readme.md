@@ -152,3 +152,7 @@ sudo usermod -aG i2c $USER
 - Hold tag flat and close (< 3 cm) to the antenna coil
 - Run `--debug` to see whether `InListPassiveTarget` is completing
 - Try rotating the tag — some tags are orientation-sensitive
+
+---
+
+*Copyright (C) 2026 WoodWorker. Licensed under [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/) — see [LICENSE](../LICENSE).*

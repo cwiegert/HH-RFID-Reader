@@ -211,3 +211,7 @@ startup_poll_delay: 6.0
 - [Spoolman Integration](../shared/spoolman-integration.md) — register your tag UIDs
 - [Commands & Macros](../shared/klipper-functions.md) — full command reference
 - [Configuration Reference](../shared/configuration.md) — tune polling, logging, and timing
+
+---
+
+*Copyright (C) 2026 WoodWorker. Licensed under [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/) — see [LICENSE](../../LICENSE).*

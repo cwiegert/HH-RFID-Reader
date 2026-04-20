@@ -151,3 +151,7 @@ console_log_level: info
 ```
 
 Restart Klipper, then run `NFC_GATE GATE=0 POLL=1`.
+
+---
+
+*Copyright (C) 2026 WoodWorker. Licensed under [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/) — see [LICENSE](../../LICENSE).*

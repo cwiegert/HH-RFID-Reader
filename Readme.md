@@ -155,4 +155,6 @@ See [How It Works](docs/shared/how-it-works.md) for the boot sequence, per-poll 
 
 ## License
 
-See [LICENSE](LICENSE).
+Copyright (C) 2026 WoodWorker.
+Licensed under [Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International](https://creativecommons.org/licenses/by-nc-sa/4.0/).
+See [LICENSE](LICENSE) for the full terms.

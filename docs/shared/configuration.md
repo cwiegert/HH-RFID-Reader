@@ -210,3 +210,7 @@ MMU_GATE_MAP GATE={gate} APPLY=1
 Called when a tag is detected but no matching spool is found in Spoolman. Parameters: `GATE`, `UID`.
 
 Default: prints the unknown UID to the console with instructions to register it.
+
+---
+
+*Copyright (C) 2026 WoodWorker. Licensed under [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/) — see [LICENSE](../../LICENSE).*

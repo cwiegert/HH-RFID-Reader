@@ -210,3 +210,7 @@ python3 ~/pn532_scan.py               # read tags continuously
 ```
 
 Useful for confirming a PN532 is alive before wiring it to a lane MCU.
+
+---
+
+*Copyright (C) 2026 WoodWorker. Licensed under [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/) — see [LICENSE](../../LICENSE).*

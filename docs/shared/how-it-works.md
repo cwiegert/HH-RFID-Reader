@@ -95,3 +95,7 @@ MMU_GATE_MAP GATE={gate} APPLY=1
 ```
 
 You can edit `nfc_macros.cfg` to match your Happy Hare version without touching any Python.
+
+---
+
+*Copyright (C) 2026 WoodWorker. Licensed under [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/) — see [LICENSE](../../LICENSE).*

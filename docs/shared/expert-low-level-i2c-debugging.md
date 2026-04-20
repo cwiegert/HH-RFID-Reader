@@ -306,3 +306,7 @@ console_output:    False
 Restart Klipper.
 
 Normal polling (`READ=1`) will now function without interference from manual bus commands.
+
+---
+
+*Copyright (C) 2026 WoodWorker. Licensed under [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/) — see [LICENSE](../../LICENSE).*

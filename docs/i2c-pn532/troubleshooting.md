@@ -209,3 +209,7 @@ NFC_GATE GATE=0 HELP=1    ; lists all available debug commands
 ```
 
 See [Expert: Low-Level I2C Debugging](../shared/expert-low-level-i2c-debugging.md) for the complete step-by-step manual sequence.
+
+---
+
+*Copyright (C) 2026 WoodWorker. Licensed under [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/) — see [LICENSE](../../LICENSE).*

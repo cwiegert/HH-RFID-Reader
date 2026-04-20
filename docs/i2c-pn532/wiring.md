@@ -128,3 +128,7 @@ Follow this sequence to avoid chasing phantom failures:
 8. If INIT passes, run `NFC_GATE GATE=0 SCAN=1` with a tag nearby
 
 If the BME280 breaks only after the PN532 is connected, the fault is physical — mode selection, swapped SDA/SCL, or pull-up interaction. It is not a Spoolman or Happy Hare issue.
+
+---
+
+*Copyright (C) 2026 WoodWorker. Licensed under [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/) — see [LICENSE](../../LICENSE).*
