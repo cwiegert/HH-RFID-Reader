@@ -145,9 +145,9 @@ Enable verbose logging to see the full Spoolman HTTP exchange:
 
 ```ini
 [nfc_gate]
-debug:             2
+debug:             3
 console_output:    True
-console_log_level: 3
+console_log_level: info
 ```
 
 Restart Klipper, then run `NFC_GATE GATE=0 POLL=1`.

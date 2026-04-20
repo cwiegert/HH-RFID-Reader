@@ -107,7 +107,7 @@ These are tuned for CAN bus round-trip latency on the EBB42. Leave them at defau
 ```ini
 [nfc_gate]
 log_file:          nfc_reader.log
-debug:             1
+debug:             2
 console_output:    False
 console_log_level: warning
 ```
@@ -115,9 +115,9 @@ console_log_level: warning
 | Setting | Default | Description |
 |---|---|---|
 | `log_file` | `nfc_reader.log` | Log filename. Relative paths resolve to `~/printer_data/logs/`. Set to an absolute path to write elsewhere. Leave empty to use the main Klipper log only. |
-| `debug` | `1` | `0` = errors only. `1` = operational events (state changes, Spoolman results). `2` = full trace including I2C frames and cache activity. |
+| `debug` | `2` | `0` (or `off`) = no logging. `1` (or `error`) = errors only. `2` (or `warning`) = warnings and errors. `3` (or `info`) = state changes, Spoolman lookups, HH handoff. `4` (or `debug`) = full I2C protocol trace. |
 | `console_output` | `False` | Send NFC log messages to the Fluidd/Mainsail console. Errors always appear in the console regardless of this setting. |
-| `console_log_level` | `warning` | Minimum level to show in console when `console_output: True`. `error`, `warning`, or `info`. |
+| `console_log_level` | `warning` | Minimum level to show in console when `console_output: True`. Accepts string (`error`, `warning`, `info`, `debug`) or numeric (`1`–`4`). |
 
 **Recommended for normal printing:**
 ```ini
@@ -129,7 +129,7 @@ console_log_level: warning
 ```ini
 console_output:    True
 console_log_level: info
-debug:             2
+debug:             3
 ```
 
 ---
@@ -192,6 +192,7 @@ Called when a new tag UID resolves to a Spoolman spool. Parameters: `GATE`, `SPO
 Default:
 ```gcode
 MMU_GATE_MAP GATE={gate} SPOOLID={spool_id} AVAILABLE=1 SYNC=1 QUIET=1
+MMU_GATE_MAP GATE={gate} APPLY=1
 ```
 
 ### `_NFC_SPOOL_REMOVED`
@@ -200,7 +201,8 @@ Called after `absent_threshold` consecutive missed polls. Parameter: `GATE`.
 
 Default:
 ```gcode
-MMU_GATE_MAP GATE={gate} SPOOLID=-1 SYNC=1 QUIET=1
+MMU_GATE_MAP GATE={gate} SPOOLID=-1 AVAILABLE=0 SYNC=1 QUIET=1
+MMU_GATE_MAP GATE={gate} APPLY=1
 ```
 
 ### `_NFC_TAG_NO_SPOOL`

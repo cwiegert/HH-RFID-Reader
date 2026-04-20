@@ -22,6 +22,27 @@ This is the day-to-day reference for operating the NFC gate reader from the Flui
 | `NFC_GATE GATE=<n> HELP=1` | Show available commands |
 | `NFC_HH_SYNC_CACHE` | Re-seed all lane caches from the current Happy Hare gate map |
 | `NFC_GATE GATE=<n> HH_SYNC=1 SPOOL_ID=<n>` | Seed one lane's cache directly (called by `NFC_HH_SYNC_CACHE`) |
+| <span style="color:red">━━━ **Low-Level Debug** — requires `low_level_debug: True` — bypasses normal state machine ━━━</span> | |
+| `NFC_GATE GATE=<n> STEP=WAKEUP` | Write `0x00` to nudge PN532 out of power-down |
+| `NFC_GATE GATE=<n> STEP=READY` | Read STATUS byte — expects `01` (ready) |
+| `NFC_GATE GATE=<n> STEP=FIRMWARE_WRITE` | Send `GetFirmwareVersion` command frame |
+| `NFC_GATE GATE=<n> STEP=FIRMWARE_ACK` | Read ACK — expects `01 00 00 FF 00 FF 00` |
+| `NFC_GATE GATE=<n> STEP=FIRMWARE_READY` | Poll STATUS until `01` |
+| `NFC_GATE GATE=<n> STEP=FIRMWARE_RESPONSE` | Read and parse firmware response |
+| `NFC_GATE GATE=<n> STEP=FIRMWARE_ACK_DIRECT DELAY=0.050` | Write firmware command and read ACK with configurable delay (timing probe) |
+| `NFC_GATE GATE=<n> STEP=SAM_WRITE` | Send `SAMConfiguration` command frame |
+| `NFC_GATE GATE=<n> STEP=SAM_ACK` | Read ACK |
+| `NFC_GATE GATE=<n> STEP=SAM_READY` | Poll STATUS until `01` |
+| `NFC_GATE GATE=<n> STEP=SAM_RESPONSE` | Read and parse SAM response |
+| `NFC_GATE GATE=<n> STEP=PASSIVE_WRITE` | Send `InListPassiveTarget` command frame |
+| `NFC_GATE GATE=<n> STEP=PASSIVE_ACK` | Read ACK |
+| `NFC_GATE GATE=<n> STEP=PASSIVE_READY` | Poll STATUS until `01` |
+| `NFC_GATE GATE=<n> STEP=PASSIVE_RESPONSE LEN=30` | Read raw tag-detect response |
+| `NFC_GATE GATE=<n> READY_READ=1` | Read PN532 STATUS byte (`01`=ready, `00`=busy) |
+| `NFC_GATE GATE=<n> ACK_READ=1 LEN=7` | Read STATUS then ACK frame |
+| `NFC_GATE GATE=<n> RAW_READ=1 LEN=<n>` | Read exactly N raw bytes |
+| `NFC_GATE GATE=<n> RAW_WRITE=<hex>` | Write raw bytes (no framing added) |
+| `NFC_GATE GATE=<n> RAW_CMD=<hex>` | Build and send a complete PN532 command frame |
 
 ---
 
@@ -86,9 +107,9 @@ NFC_GATE_STATUS
 Example output:
 ```
 NFC gate status  (5 gates configured):
-  Gate 0  [lane0]:  empty
-  Gate 1  [lane1]:  empty
-  Gate 4  [lane4]:  spool 43     UID 04456192D32A81
+  Gate 0:  empty   [not polling]  [HH: empty]
+  Gate 1:  empty   [polling]  [HH: empty]
+  Gate 4:  spool 43     UID 04456192D32A81   [polling]  [HH: spool 43]
 ```
 
 ---
@@ -285,9 +306,10 @@ Parameters:
 Default behavior:
 ```gcode
 MMU_GATE_MAP GATE={gate} SPOOLID={spool_id} AVAILABLE=1 SYNC=1 QUIET=1
+MMU_GATE_MAP GATE={gate} APPLY=1
 ```
 
-This calls Happy Hare's `MMU_GATE_MAP` to update the gate map. `AVAILABLE=1` marks the gate as having filament loaded and ready. `SYNC=1` lets Happy Hare push the update to Spoolman.
+This calls Happy Hare's `MMU_GATE_MAP` to update the gate map. `AVAILABLE=1` marks the gate as having filament loaded and ready. `SYNC=1` lets Happy Hare push the update to Spoolman. `APPLY=1` applies the updated map immediately.
 
 ---
 
@@ -304,10 +326,13 @@ Parameters:
 
 Default behavior:
 ```gcode
-MMU_GATE_MAP GATE={gate} SPOOLID=-1 SYNC=1 QUIET=1
+MMU_GATE_MAP GATE={gate} SPOOLID=-1 AVAILABLE=0 SYNC=1 QUIET=1
+MMU_GATE_MAP GATE={gate} APPLY=1
 ```
 
-Clears the gate in Happy Hare's gate map.
+Clears the gate in Happy Hare's gate map. `AVAILABLE=0` marks the gate as empty. `APPLY=1` applies the change immediately.
+
+The macro also checks `printer.mmu.action` — if the MMU is mid-load, unload, or homing, the removal is silently ignored to avoid clearing the gate while filament is actively moving.
 
 ---
 
@@ -363,7 +388,8 @@ The event macros are in `~/printer_data/config/NFC/nfc_macros.cfg`. Edit them to
 | Command | Effect |
 |---|---|
 | `MMU_GATE_MAP GATE=<n> SPOOLID=<id> AVAILABLE=1 SYNC=1 QUIET=1` | Assign a spool to a gate, mark it available, and sync to Spoolman |
-| `MMU_GATE_MAP GATE=<n> SPOOLID=-1 SYNC=1 QUIET=1` | Clear a gate and sync to Spoolman |
+| `MMU_GATE_MAP GATE=<n> APPLY=1` | Apply the current gate map immediately |
+| `MMU_GATE_MAP GATE=<n> SPOOLID=-1 AVAILABLE=0 SYNC=1 QUIET=1` | Clear a gate, mark it empty, and sync to Spoolman |
 
 The default macros are designed for Happy Hare with `spoolman_support: push`. `SYNC=1` tells Happy Hare to push the local gate map change to Spoolman. If your Happy Hare version uses different command names or parameters, update the macro body.
 
@@ -371,32 +397,7 @@ The default macros are designed for Happy Hare with `spoolman_support: push`. `S
 
 ## Expert: Low-Level Debug Commands
 
-These commands expose raw PN532 I2C bus access for bring-up debugging. They are hidden by default.
-
-Enable in `nfc_vars.cfg`:
-
-```ini
-[nfc_gate]
-low_level_debug: True
-```
-
-Restart Klipper, then:
-
-```gcode
-NFC_GATE GATE=0 HELP=1    ; shows all available commands including debug steps
-```
-
-| Command | What it does |
-|---|---|
-| `NFC_GATE GATE=<n> STEP=WAKEUP` | Send PN532 wake byte |
-| `NFC_GATE GATE=<n> STEP=FIRMWARE_WRITE` | Send `GetFirmwareVersion` command frame |
-| `NFC_GATE GATE=<n> STEP=FIRMWARE_ACK` | Read ACK for firmware command |
-| `NFC_GATE GATE=<n> STEP=FIRMWARE_RESPONSE` | Read and parse firmware response |
-| `NFC_GATE GATE=<n> STEP=SAM_WRITE` | Send `SAMConfiguration` command |
-| `NFC_GATE GATE=<n> STEP=PASSIVE_WRITE` | Send `InListPassiveTarget` (scan for tag) |
-| `NFC_GATE GATE=<n> STEP=PASSIVE_RESPONSE` | Read raw tag-detect response |
-| `NFC_GATE GATE=<n> RAW_READ=1 LEN=<n>` | Raw PN532 transport read |
-| `NFC_GATE GATE=<n> RAW_WRITE=<hex>` | Raw PN532 transport write |
+These commands expose raw PN532 I2C bus access for bring-up debugging. They are hidden by default — enable with `low_level_debug: True` in `nfc_vars.cfg`.
 
 > [!WARNING]
 > Low-level commands bypass the normal state machine. Sending the wrong sequence can leave the PN532 in a state where normal polling fails until it is restarted. Use only during manual bring-up. Set `low_level_debug: False` before printing.
