@@ -28,6 +28,24 @@ Set **SEL0 = 1, SEL1 = 0**. Check your board's silkscreen — some boards number
 
 ---
 
+## Soldering the PN532
+
+The PN532 antenna pads are fragile — the copper ring on the top (antenna) side will lift off the board if overheated. Always solder from the back.
+
+**Method:**
+
+1. Insert the wire from the **back** of the board so it pokes through the hole toward the antenna side.
+2. Apply the iron to the back of the board. Let solder pool up on the back pad.
+3. Feed enough solder that the pool flows **through the hole** and wets the antenna-side ring — you should see a small fillet appear on the top.
+4. Remove heat immediately once the solder flows through. Lingering heat is what lifts the antenna-side ring.
+
+> [!WARNING]
+> **Never apply the iron directly to the antenna-side pad.** The copper ring on the top of the board is bonded to a thin substrate and will delaminate with sustained heat. If the ring lifts, the mechanical connection is gone even if the hole still looks filled.
+
+A proper joint: solder pool visible on the back, small filled fillet on the antenna side, wire cannot be pulled out by hand.
+
+---
+
 ## Pin Connections
 
 Connect each PN532 to its lane's EBB42 using these four wires:
