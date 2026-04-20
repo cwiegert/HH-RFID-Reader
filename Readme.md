@@ -15,6 +15,7 @@ Spool with NFC tag → PN532 on EBB42 → Klipper I2C → Spoolman lookup → Ha
 - A Voron with an EMU running [Happy Hare](https://github.com/moggieuk/Happy-Hare)
 - One EBB42 per filament lane (already required by Happy Hare on most EMU builds)
 - One PN532 NFC reader module per gate (~$3–5 each)
+- M2 x 4 self-tapping screws to mount each PN532 to the bracket
 - Spoolman running and accessible from the Pi
 - NFC tags on your spools (NTAG213/215/216 or Mifare Classic)
 
