@@ -602,6 +602,22 @@ class NFCGateDefaults:
                 "nfc_gate: could not configure NFC logging %r: %s",
                 log_file, e)
 
+        if self.spoolman_url:
+            self._spoolman = SpoolmanClient(
+                self.spoolman_url,
+                rfid_key=self.spoolman_rfid_key,
+                timeout=self.spoolman_timeout,
+                cache_ttl=self.spoolman_cache_ttl,
+                debug=self.debug,
+                moonraker_url=self.moonraker_url)
+            logger.info("nfc_gate: Spoolman enabled — url=%s rfid_key=%s",
+                        self.spoolman_url, self.spoolman_rfid_key)
+        else:
+            self._spoolman = None
+            logger.warning(
+                "nfc_gate: spoolman_url not set — set spoolman_url in "
+                "[nfc_gate]. Use 'auto' to read Moonraker.")
+
     def cmd_NFC_GATE_STATUS(self, gcmd):
         gcmd.respond_info('\n'.join(_lane_status_lines(self._printer)))
 
@@ -649,35 +665,34 @@ class NFCGate:
                       console_output=console_output,
                       console_log_level=console_log_level)
 
-        spoolman_url       = config.get('spoolman_url',
-                                        d.spoolman_url if d else '')
-        moonraker_url      = config.get('moonraker_url',
-                                        d.moonraker_url if d else 'http://127.0.0.1:7125')
-        spoolman_rfid_key  = config.get('spoolman_rfid_key',
-                                        d.spoolman_rfid_key if d else 'rfid')
-        spoolman_timeout   = config.getfloat('spoolman_timeout',
-                                              d.spoolman_timeout if d else 5.0,
-                                              minval=0.5, maxval=30.0)
-        spoolman_cache_ttl = config.getfloat('spoolman_cache_ttl',
-                                              d.spoolman_cache_ttl if d else 300.0,
-                                              minval=0., maxval=3600.)
-
-        if spoolman_url:
-            self._spoolman = SpoolmanClient(
-                spoolman_url,
-                rfid_key=spoolman_rfid_key,
-                timeout=spoolman_timeout,
-                cache_ttl=spoolman_cache_ttl,
-                debug=self._debug,
-                moonraker_url=moonraker_url)
-            logger.info("nfc_gate: [%s] Spoolman enabled — url=%s rfid_key=%s",
-                         self._name, spoolman_url, spoolman_rfid_key)
+        if d is not None:
+            # Share the single SpoolmanClient created by NFCGateDefaults.
+            self._spoolman = d._spoolman
         else:
-            self._spoolman = None
-            logger.warning(
-                "nfc_gate: [%s] spoolman_url not set — set spoolman_url in "
-                "[nfc_gate] or [nfc_gate %s]. Use 'auto' to read Moonraker.",
-                self._name, self._name)
+            # No base [nfc_gate] section — create a per-lane client as fallback.
+            spoolman_url      = config.get('spoolman_url', '')
+            moonraker_url     = config.get('moonraker_url', 'http://127.0.0.1:7125')
+            spoolman_rfid_key = config.get('spoolman_rfid_key', 'rfid')
+            spoolman_timeout  = config.getfloat('spoolman_timeout', 5.0,
+                                                 minval=0.5, maxval=30.0)
+            spoolman_cache_ttl = config.getfloat('spoolman_cache_ttl', 300.0,
+                                                  minval=0., maxval=3600.)
+            if spoolman_url:
+                self._spoolman = SpoolmanClient(
+                    spoolman_url,
+                    rfid_key=spoolman_rfid_key,
+                    timeout=spoolman_timeout,
+                    cache_ttl=spoolman_cache_ttl,
+                    debug=self._debug,
+                    moonraker_url=moonraker_url)
+                logger.info("nfc_gate: [%s] Spoolman enabled — url=%s rfid_key=%s",
+                            self._name, spoolman_url, spoolman_rfid_key)
+            else:
+                self._spoolman = None
+                logger.warning(
+                    "nfc_gate: [%s] spoolman_url not set — set spoolman_url in "
+                    "[nfc_gate] or [nfc_gate %s]. Use 'auto' to read Moonraker.",
+                    self._name, self._name)
 
         default_i2c_addr = d.i2c_address if d else 0x24
         i2c = bus_module.MCU_I2C_from_config(config,
