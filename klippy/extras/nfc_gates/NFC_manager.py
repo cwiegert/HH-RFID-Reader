@@ -1424,10 +1424,16 @@ class NFCGate:
 
         self._run_jog(self._scan_jog_mm)
         self._scan_mm_total += self._scan_jog_mm
-        if self._debug >= 4:
-            logger.info(
-                "nfc_gate: [%s] scan mode: no tag — jogged %.1fmm (total %.1fmm)",
-                self._name, self._scan_jog_mm, self._scan_mm_total)
+        msg = ("NFC Gate[%d] - jog: moved %.1fmm  total %.1fmm / %.1fmm"
+               % (self._gate, self._scan_jog_mm,
+                  self._scan_mm_total, self._scan_max_mm))
+        logger.warning(msg)
+        gcode = self.printer.lookup_object('gcode', None)
+        if gcode is not None:
+            try:
+                gcode.respond_info(msg)
+            except Exception:
+                pass
         return eventtime + self._scan_interval
 
     def _finish_scan(self):
