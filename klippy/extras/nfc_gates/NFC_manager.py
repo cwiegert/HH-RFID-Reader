@@ -1424,7 +1424,7 @@ class NFCGate:
 
         self._run_jog(self._scan_jog_mm)
         self._scan_mm_total += self._scan_jog_mm
-        msg = ("NFC Gate[%d] - jog: moved %.1fmm  total %.1fmm / %.1fmm"
+        msg = ("NFC Gate[%d] - moved %.1fmm  total %.1fmm / %.1fmm"
                % (self._gate, self._scan_jog_mm,
                   self._scan_mm_total, self._scan_max_mm))
         logger.warning(msg)
