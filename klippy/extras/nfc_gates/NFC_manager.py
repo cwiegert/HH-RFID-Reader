@@ -1126,6 +1126,16 @@ class NFCGate:
                         prev   = self._prev_gate_status
                         self._prev_gate_status = curr
                         if curr == 0:
+                            if self._hh_load_paused:
+                                self._hh_load_paused      = False
+                                self._state.current_uid   = None
+                                self._state.current_spool = None
+                                self._state.miss_count    = 0
+                                self._hh_confirmed_spool  = None
+                                logger.info(
+                                    "nfc_gate: [%s] gate %d — gate ejected; "
+                                    "resuming poll and clearing NFC cache",
+                                    self._name, self._gate)
                             return self.reactor.monotonic() + self._poll_interval
                         if (prev == 0 and curr == 1
                                 and action == 'idle'
@@ -1223,7 +1233,7 @@ class NFCGate:
         # in the status before polling stops.  If the tag has never been read
         # (e.g. startup with HH already populated), polling continues until the
         # first successful scan, then suspends.
-        if self._hh_gate_is_loaded() and self._state.current_spool is not None:
+        if not self._scan_mode and self._hh_gate_is_loaded() and self._state.current_spool is not None:
             if not self._hh_load_paused:
                 self._hh_load_paused = True
                 logger.info(
