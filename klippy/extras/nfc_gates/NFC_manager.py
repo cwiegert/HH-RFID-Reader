@@ -1481,7 +1481,7 @@ class NFCGate:
     def _run_jog(self, mm):
         gcode = self.printer.lookup_object('gcode')
         gcode.run_script(
-            "MMU_SELECT_GATE GATE=%d\nMMU_TEST_MOVE MOVE=%.2f"
+            "MMU_SELECT GATE=%d\nMMU_TEST_MOVE MOVE=%.2f"
             % (self._gate, mm))
 
     def _run_rewind(self):
