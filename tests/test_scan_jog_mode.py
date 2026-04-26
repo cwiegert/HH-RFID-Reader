@@ -352,8 +352,18 @@ def test_run_jog_gcode_content():
     g._run_jog(37.5)
     scripts = g.printer.gcode_scripts
     assert len(scripts) == 1
-    assert 'MMU_SELECT_GATE GATE=2' in scripts[0]
+    assert 'MMU_SELECT GATE=2' in scripts[0]
     assert 'MMU_TEST_MOVE MOVE=37.50' in scripts[0]
+    assert 'M400' in scripts[0]
+
+def test_run_jog_no_select_on_subsequent_steps():
+    """After the first jog, MMU_SELECT must not be re-issued."""
+    g = _make_gate(gate=2)
+    g._scan_mm_total = 50.0   # simulate one jog already done
+    g._run_jog(50.0)
+    script = g.printer.gcode_scripts[0]
+    assert 'MMU_SELECT' not in script
+    assert 'MMU_TEST_MOVE MOVE=50.00' in script
 
 def test_run_jog_negative_distance():
     g = _make_gate(gate=0)
@@ -362,19 +372,19 @@ def test_run_jog_negative_distance():
 
 def test_run_rewind_gcode_content():
     g = _make_gate(gate=3)
+    g._scan_mm_total = 100.0
     g._run_rewind()
     scripts = g.printer.gcode_scripts
     assert len(scripts) == 1
-    assert 'MMU_SELECT_GATE GATE=3' in scripts[0]
-    assert 'MMU_UNLOAD restore=0' in scripts[0]
+    assert 'MMU_TEST_MOVE MOVE=-100.00' in scripts[0]
+    assert 'M400' in scripts[0]
+    assert 'MMU_UNLOAD' not in scripts[0]
 
-def test_rewind_uses_unload_not_test_move():
-    """Rewind must be MMU_UNLOAD — never a negative MMU_TEST_MOVE."""
+def test_rewind_skipped_when_nothing_jogged():
+    """_run_rewind must not issue any GCode if scan_mm_total is 0."""
     g = _make_gate(gate=1)
-    g._run_rewind()
-    script = g.printer.gcode_scripts[0]
-    assert 'MMU_UNLOAD' in script
-    assert 'MMU_TEST_MOVE' not in script
+    g._run_rewind()   # scan_mm_total defaults to 0.0
+    assert len(g.printer.gcode_scripts) == 0
 
 
 # ── Poll timer resume ─────────────────────────────────────────────────────────

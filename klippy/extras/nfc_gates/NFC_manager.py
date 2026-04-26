@@ -1559,15 +1559,19 @@ class NFCGate:
         # return until the stepper has physically stopped.  Without it,
         # run_script returns as soon as the move is queued and the scan_interval
         # settle timer starts while the spool is still moving.
+        # MMU_SELECT is issued only on the first jog (scan_mm_total == 0) to
+        # establish gate context; subsequent jogs reuse the active selection.
         if self._scan_mm_total == 0.0:
-            gcode.run_script("MMU_SELECT_GATE GATE=%d\nMMU_TEST_MOVE MOVE=%.2f QUIET=1\nM400"
+            gcode.run_script("MMU_SELECT GATE=%d\nMMU_TEST_MOVE MOVE=%.2f QUIET=1\nM400"
                              % (self._gate, mm))
         else:
             gcode.run_script("MMU_TEST_MOVE MOVE=%.2f QUIET=1\nM400" % mm)
 
     def _run_rewind(self):
+        if self._scan_mm_total <= 0.0:
+            return
         gcode = self.printer.lookup_object('gcode')
-        gcode.run_script("MMU_SELECT_GATE GATE=%d\nMMU_UNLOAD restore=0" % self._gate)
+        gcode.run_script("MMU_TEST_MOVE MOVE=%.2f QUIET=1\nM400" % -self._scan_mm_total)
 
     # ─────────────────────────────────────────────────────────────────────────
 
