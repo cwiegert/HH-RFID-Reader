@@ -38,6 +38,9 @@ _nfc_pkg.__path__    = [os.path.join(_EXTRAS, 'nfc_gates')]
 _nfc_pkg.__package__ = 'nfc_gates'
 
 _null = _NullLogger()
+class _MockSpoolmanClient:
+    def __init__(self, *a, **k): pass
+
 _stub('nfc_gates.log',
       logger=_null, configure=lambda *a, **k: None,
       info=lambda *a, **k: None,
@@ -49,7 +52,7 @@ _stub('nfc_gates.pn532_driver',
       PN532_COMMAND_SAMCONFIGURATION=0x14,
       PN532_COMMAND_INLISTPASSIVETARGET=0x4A)
 _stub('nfc_gates.rc522_driver',   RC522Driver=object)
-_stub('nfc_gates.spoolman_client', SpoolmanClient=object)
+_stub('nfc_gates.spoolman_client', SpoolmanClient=_MockSpoolmanClient)
 
 from nfc_gates.NFC_manager import NFCGateDefaults
 

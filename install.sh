@@ -157,12 +157,91 @@ if not appended:
 PYEOF
 }
 
+# ── nfc_vars.cfg migrations ──────────────────────────────────────────────────
+#
+# merge_config intentionally does not overwrite existing sections.  When a key
+# is removed or added inside [nfc_gate], handle that as a small migration here.
+migrate_nfc_vars() {
+    local dst="$1"
+    local name
+    name="$(basename "${dst}")"
+
+    if [ ! -f "${dst}" ]; then
+        return
+    fi
+
+    python3 - "${dst}" <<'PYEOF' \
+        || echo "    WARNING: migration script failed — ${name} left unchanged"
+import re
+import sys
+
+path = sys.argv[1]
+
+with open(path) as f:
+    lines = f.readlines()
+
+changed = False
+out = []
+removed_scan_interval = False
+has_scan_poll_interval = any(
+    re.match(r'^\s*scan_poll_interval\s*:', line) for line in lines)
+
+old_scan_interval_comment = (
+    'Seconds between NFC read attempts during scan mode',
+    'This must be long enough for MMU_TEST_MOVE',
+    'the next read fires',
+    'commands stack up',
+    'conservative floor',
+    'motor is still settling',
+)
+
+for line in lines:
+    if re.match(r'^\s*scan_interval\s*:', line):
+        # Drop the old explanatory block from the template when present.
+        while out and out[-1].lstrip().startswith('#') and any(
+                phrase in out[-1] for phrase in old_scan_interval_comment):
+            out.pop()
+        removed_scan_interval = True
+        changed = True
+        continue
+    out.append(line)
+
+if not has_scan_poll_interval:
+    insert = [
+        '\n',
+        '# Seconds between NFC read attempts while scan-jog is active.  Jog chunk cadence\n',
+        '# is calculated automatically from scan_jog_mm / Happy Hare gear_short_move_speed\n',
+        '# plus a small acceleration buffer, so there is no manual move interval to tune.\n',
+        'scan_poll_interval:  0.1\n',
+    ]
+    inserted = False
+    for i, line in enumerate(out):
+        if re.match(r'^\s*scan_max_mm\s*:', line):
+            out[i + 1:i + 1] = insert
+            inserted = True
+            changed = True
+            break
+    if not inserted:
+        out.extend(insert)
+        changed = True
+
+if changed:
+    with open(path, 'w') as f:
+        f.writelines(out)
+    if removed_scan_interval:
+        print('    [migrate] removed deprecated scan_interval from {}'.format(path))
+    if not has_scan_poll_interval:
+        print('    [migrate] added scan_poll_interval to {}'.format(path))
+PYEOF
+}
+
 # ── Install / merge config files ──────────────────────────────────────────────
 echo ""
 echo "Installing config files to ${NFC_CONFIG_DIR}/..."
 echo ""
 
 merge_config "${REPO_DIR}/config/nfc_vars.cfg"   "${NFC_CONFIG_DIR}/nfc_vars.cfg"
+migrate_nfc_vars "${NFC_CONFIG_DIR}/nfc_vars.cfg"
 merge_config "${REPO_DIR}/config/nfc_macros.cfg" "${NFC_CONFIG_DIR}/nfc_macros.cfg"
 merge_config "${REPO_DIR}/config/pn532_i2C.cfg"  "${NFC_CONFIG_DIR}/pn532_i2C.cfg"
 

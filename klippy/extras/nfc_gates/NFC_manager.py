@@ -589,6 +589,8 @@ class NFCGateDefaults:
                                                    minval=1.0, maxval=500.0)
         self.scan_max_mm        = config.getfloat('scan_max_mm', 600.0,
                                                    minval=10.0, maxval=5000.0)
+        # Deprecated compatibility key. Chunk cadence is now calculated from
+        # scan_jog_mm and Happy Hare's gear_short_move_speed.
         self.scan_interval      = config.getfloat('scan_interval', 2.0,
                                                    minval=0.5, maxval=60.0)
         self.scan_poll_interval = config.getfloat('scan_poll_interval', 0.1,
@@ -733,6 +735,8 @@ class NFCGate:
         self._scan_max_mm   = config.getfloat('scan_max_mm',
                                                d.scan_max_mm if d else 600.0,
                                                minval=10.0, maxval=5000.0)
+        # Deprecated compatibility key. Read it so existing configs remain
+        # valid, but chunk timing is derived in _scan_chunk_interval().
         self._scan_interval = config.getfloat('scan_interval',
                                                d.scan_interval if d else 2.0,
                                                minval=0.5, maxval=60.0)
@@ -741,11 +745,11 @@ class NFCGate:
                                                     minval=0.1, maxval=5.0)
         self._scan_enabled  = config.getboolean('scan_enabled',
                                                  d.scan_enabled if d else True)
-        self._scan_timer        = None
-        self._scan_mode         = False
-        self._scan_mm_total     = 0.0
-        self._scan_next_jog_time = 0.0  # monotonic timestamp — jog fires when now >= this
-        self._prev_gate_status  = -1   # -1 = unknown; prevents false trigger on cold start
+        self._scan_timer           = None
+        self._scan_mode            = False
+        self._scan_mm_total        = 0.0
+        self._scan_next_chunk_time = 0.0
+        self._prev_gate_status     = -1   # -1 = unknown; prevents false trigger on cold start
         self._scan_pending      = False  # armed on 0→1 edge; fires when HH confirms idle
 
         # delayed-init state
@@ -1459,9 +1463,9 @@ class NFCGate:
         self._start_scan_mode()
         gcmd.respond_info(
             "NFC_GATE[%s]: scan-jog started for gate %d "
-            "(step=%.0fmm  max=%.0fmm  interval=%.1fs)"
+            "(max=%.0fmm  poll=%.2fs)"
             % (self._name, self._gate,
-               self._scan_jog_mm, self._scan_max_mm, self._scan_interval))
+               self._scan_max_mm, self._scan_poll_interval))
 
     def _is_printing(self):
         ps = self.printer.lookup_object('print_stats', None)
@@ -1469,23 +1473,55 @@ class NFCGate:
             return False
         return ps.get_status(0).get('state', '') == 'printing'
 
+    def _get_scan_speed(self):
+        """Return gear_short_move_speed from Happy Hare, or 80 mm/s as fallback."""
+        mmu = self.printer.lookup_object('mmu', None)
+        if mmu is not None:
+            speed = getattr(mmu, 'gear_short_move_speed', None)
+            if speed is not None:
+                try:
+                    speed = float(speed)
+                    if speed > 0.0:
+                        return speed
+                except (TypeError, ValueError):
+                    pass
+        return 80.0
+
+    def _scan_chunk_interval(self, mm):
+        """Return the time to wait before issuing the next scan chunk."""
+        return (abs(mm) / self._get_scan_speed()) + 0.10
+
+    def _resume_poll_after_rewind(self):
+        """Restart regular polling after the queued rewind move can finish."""
+        delay = self._poll_interval
+        if self._scan_mm_total > 0.0:
+            delay += self._scan_chunk_interval(self._scan_mm_total)
+        self.reactor.update_timer(
+            self._poll_timer,
+            self.reactor.monotonic() + delay)
+
     def _start_scan_mode(self):
-        NFCGate._active_scan_gate = self._gate
-        self._scan_mode          = True
-        self._scan_mm_total      = 0.0
-        self._scan_next_jog_time = self.reactor.monotonic()  # fire first jog on first poll tick
-        self._hh_seed_spool_id   = None  # seed irrelevant during scan-jog
-        self._hh_seed_available  = False
-        self._scan_timer    = self.reactor.register_timer(
+        NFCGate._active_scan_gate    = self._gate
+        self._scan_mode              = True
+        self._scan_mm_total          = 0.0
+        # Poll once before moving; if the tag is already readable, scan exits
+        # without adding any motion. Otherwise the first chunk fires on tick 1.
+        self._scan_next_chunk_time   = self.reactor.monotonic()
+        self._hh_seed_spool_id       = None
+        self._hh_seed_available      = False
+
+        self._scan_timer = self.reactor.register_timer(
             self._scan_step_event,
-            self.reactor.monotonic() + 0.5)
+            self.reactor.monotonic() + self._scan_poll_interval)
         if self._debug >= 3:
             logger.info(
                 "nfc_gate: [%s] gate %d scan mode started — "
-                "step=%.1fmm max=%.1fmm jog_interval=%.1fs poll_interval=%.1fs",
+                "chunk=%.1fmm max=%.1fmm speed=%.1fmm/s chunk_interval=%.2fs poll=%.2fs",
                 self._name, self._gate,
                 self._scan_jog_mm, self._scan_max_mm,
-                self._scan_interval, self._scan_poll_interval)
+                self._get_scan_speed(),
+                self._scan_chunk_interval(self._scan_jog_mm),
+                self._scan_poll_interval)
 
     def _scan_step_event(self, eventtime):
         if not self._scan_mode:
@@ -1498,9 +1534,8 @@ class NFCGate:
             self._rewind_and_exit_scan()
             return self.reactor.NEVER
 
-        # Poll on every tick — reads happen at scan_poll_interval regardless of
-        # whether a jog is in progress.  The jog is non-blocking (no M400) so
-        # the reactor is free to fire this timer while the stepper is moving.
+        # Poll every tick while the stepper moves. Jog is non-blocking so the
+        # reactor fires this timer freely between chunks.
         try:
             tag_found = self._poll()
         except Exception:
@@ -1518,17 +1553,18 @@ class NFCGate:
             self._rewind_and_exit_scan()
             return self.reactor.NEVER
 
-        # Issue a jog only when the jog interval has elapsed since the last one.
-        # This decouples jog cadence (scan_interval) from poll cadence
-        # (scan_poll_interval), allowing multiple reads per jog step.
+        # Issue the next chunk only after the previous one has had time to
+        # complete. Interval = chunk_mm / gear_short_move_speed + small accel
+        # buffer. This replaces the manual scan_interval config.
         now = self.reactor.monotonic()
-        if now >= self._scan_next_jog_time:
-            self._run_jog(self._scan_jog_mm)
-            self._scan_mm_total += self._scan_jog_mm
-            self._scan_next_jog_time = now + self._scan_interval
+        if now >= self._scan_next_chunk_time:
+            remaining = self._scan_max_mm - self._scan_mm_total
+            chunk = min(self._scan_jog_mm, remaining)
+            self._run_jog(chunk)
+            self._scan_mm_total += chunk
+            self._scan_next_chunk_time = now + self._scan_chunk_interval(chunk)
             msg = ("NFC Gate[%d] - moved %.1fmm  total %.1fmm / %.1fmm"
-                   % (self._gate, self._scan_jog_mm,
-                      self._scan_mm_total, self._scan_max_mm))
+                   % (self._gate, chunk, self._scan_mm_total, self._scan_max_mm))
             logger.info(msg)
             self._console(msg)
 
@@ -1537,24 +1573,22 @@ class NFCGate:
     def _finish_scan(self):
         self._scan_mode = False
         NFCGate._active_scan_gate = None
+        self._state.miss_count = 0
         msg = "NFC Gate[%d]: rewinding %.1fmm" % (self._gate, self._scan_mm_total)
         logger.info(msg)
         self._console(msg)
         self._run_rewind()
-        self.reactor.update_timer(
-            self._poll_timer,
-            self.reactor.monotonic() + self._poll_interval)
+        self._resume_poll_after_rewind()
 
     def _rewind_and_exit_scan(self):
         self._scan_mode = False
         NFCGate._active_scan_gate = None
+        self._state.miss_count = 0
         msg = "NFC Gate[%d]: no tag found — rewinding %.1fmm" % (self._gate, self._scan_mm_total)
         logger.warning(msg)
         self._console(msg)
         self._run_rewind()
-        self.reactor.update_timer(
-            self._poll_timer,
-            self.reactor.monotonic() + self._poll_interval)
+        self._resume_poll_after_rewind()
 
     def _console(self, msg):
         """Send a message directly to the Klipper console, bypassing the logger."""
