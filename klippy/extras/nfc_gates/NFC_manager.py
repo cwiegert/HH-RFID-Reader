@@ -745,6 +745,11 @@ class NFCGate:
         # after restart does not re-dispatch a spool HH already knows about.
         if not self._failed:
             self._seed_cache_from_hh(eventtime)
+            # Bootstrap the scan-jog edge detector with the current gate status
+            # so a pre-loaded gate never triggers a scan on the first poll.
+            hh = self._read_hh_status(eventtime)
+            if hh.present and self._gate < hh.gate_count:
+                self._prev_gate_status = hh.status
 
         if self._gcode is not None:
             if self._failed:
