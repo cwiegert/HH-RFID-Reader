@@ -804,7 +804,7 @@ class NFCGate:
         # Scan-jog gate-status edge detection.
         # Reads HH gate_status on every tick — Python dict only, no I2C.
         # When gate is empty (curr==0) skip the I2C read entirely.
-        # On 0→1 transition with HH idle and not printing, enter scan mode.
+        # On < 1 -> >=1 transition with HH idle and not printing, enter scan mode.
         if self._scan_enabled:
             hh = self._read_hh_status(eventtime)
             if hh.present and self._gate < hh.gate_count:
@@ -861,11 +861,11 @@ class NFCGate:
                         and not self._is_printing()):
                     now = self.reactor.monotonic()
                     if self._scan_idle_ready_time <= 0.0:
-                        self._scan_idle_ready_time = now + 0.5
+                        self._scan_idle_ready_time = now + 0.1
                         if self._debug >= 3:
                             logger.info(
                                 "nfc_gate: [%s] gate %d — HH idle; "
-                                "waiting 0.5s before scan-jog",
+                                "waiting 0.1s before scan-jog",
                                 self._name, self._gate)
                         return self._scan_idle_ready_time
                     if now < self._scan_idle_ready_time:
@@ -880,12 +880,12 @@ class NFCGate:
                                 self._name, self._gate,
                                 NFCGate._active_scan_gate)
                         self._scan_pending = True  # re-arm; retry next tick
-                        self._scan_idle_ready_time = now + 1.0
+                        self._scan_idle_ready_time = now + 0.25
                         return self._scan_idle_ready_time
                     self._start_scan_mode()
                     return self.reactor.NEVER
                 if getattr(self, '_scan_pending', False):
-                    return self.reactor.monotonic() + 1.0
+                    return self.reactor.monotonic() + .25
 
         if self._debug >= 4:
             logger.debug("nfc_gate: [%s] poll cycle start — "
