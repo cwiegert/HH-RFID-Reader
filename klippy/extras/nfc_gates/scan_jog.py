@@ -98,6 +98,11 @@ def start(gate):
     gate._hh_seed_available = False
     gate._scan_found_event = None
 
+    # Select the gate once — MMU_SELECT always prints the gate map so we
+    # call it here rather than on every jog step.
+    gcode = gate.printer.lookup_object('gcode')
+    gcode.run_script("MMU_SELECT GATE=%d" % gate._gate)
+
     gate._scan_timer = gate.reactor.register_timer(
         gate._scan_step_event,
         gate.reactor.monotonic())
@@ -200,13 +205,12 @@ def console(gate, msg):
 
 def run_jog(gate, mm):
     gcode = gate.printer.lookup_object('gcode')
-    gcode.run_script("MMU_SELECT GATE=%d\nMMU_TEST_MOVE MOVE=%.2f QUIET=1"
-                     % (gate._gate, mm))
+    gcode.run_script("MMU_TEST_MOVE MOVE=%.2f QUIET=1" % mm)
 
 
 def run_rewind(gate):
     if gate._scan_mm_total <= 0.0:
         return
     gcode = gate.printer.lookup_object('gcode')
-    gcode.run_script("MMU_SELECT GATE=%d\nMMU_TEST_MOVE MOVE=%.2f QUIET=1\nM400"
+    gcode.run_script("MMU_TEST_MOVE MOVE=%.2f QUIET=1\nM400"
                      % (gate._gate, -gate._scan_mm_total))
