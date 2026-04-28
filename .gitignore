@@ -182,3 +182,6 @@ cython_debug/
 
 #   ignore the voron restore file
 VoronBackup_restorefrom_Backup.sh 
+
+# Local Happy Hare reference files kept only for manual porting notes.
+klippy/extras/HH_code - for porting/

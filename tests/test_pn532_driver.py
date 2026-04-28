@@ -37,6 +37,10 @@ _stub('nfc_gates.log',
 
 time.sleep = lambda _: None
 
+# Other manager tests stub this module during collection; always import the
+# real driver here so the driver tests do not depend on pytest file order.
+sys.modules.pop('nfc_gates.pn532_driver', None)
+
 from nfc_gates.pn532_driver import (
     PN532Driver,
     _CMD_SAMCONFIGURATION, _CMD_GETFIRMWAREVERSION,

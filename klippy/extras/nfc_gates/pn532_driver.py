@@ -12,9 +12,8 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # PN532 NFC reader driver — I2C and SPI variants.
 #
-# Drop-in replacement for rc522_driver.py.  The public interface is identical:
-# init(), is_alive(), and read_tag() return the same types so NFCGateManager
-# works unchanged regardless of which driver is selected.
+# init(), is_alive(), and read_tag() are the public reader interface used by
+# NFCGate.
 #
 # Integration model
 # ─────────────────
@@ -39,18 +38,18 @@
 # interpret tag payloads as spool IDs, know about lanes/gates, query or write
 # Spoolman, or issue Happy Hare commands.
 #
-# NFCGate / NFCGateManager own the application state.  The manager receives
-# UID/tag identity from this driver, asks SpoolmanClient to resolve UID →
+# NFCGate owns the application state.  It receives UID/tag identity from this
+# driver, asks SpoolmanClient to resolve UID →
 # spool record / spool_id, debounces changed/removed states, and dispatches
 # all Happy Hare-facing commands (MMU_GATE_MAP and MMU_SPOOLMAN).  This keeps
 # Happy Hare as the source of truth for gate maps and Spoolman sync.
 #
-# Why PN532 over RC522 for I2C?
-# ──────────────────────────────
+# Why PN532 for I2C?
+# ─────────────────
 # The PN532 implements the full ISO14443A stack in hardware.  One
 # InListPassiveTarget command hands back the tag UID — no manual REQA /
-# ANTICOLL / SELECT sequence required.  One InRelease cleans up.  This cuts
-# CAN bus traffic significantly compared to an RC522 doing the equivalent.
+# ANTICOLL / SELECT sequence required.  One InRelease cleans up and keeps
+# CAN bus traffic low.
 #
 # PN532 I2C protocol overview
 # ───────────────────────────
@@ -69,10 +68,7 @@
 #   DCS  = (-sum(data_field)) & 0xFF
 #
 # Since we cannot use the IRQ pin directly from a Klipper reactor callback
-# (it would require a custom MCU command), we use fixed time.sleep() delays
-# identical to the RC522 driver approach.  The two configurable delays are
-# exposed under the same config keys as the RC522 driver so a single config
-# section works for either chip (with different recommended values):
+# (it would require a custom MCU command), we use fixed time.sleep() delays:
 #
 #   transceive_delay  maps to InListPassiveTarget wait (250 ms default).
 #     The PN532 scans until a tag is found or its internal timer expires.
@@ -611,7 +607,7 @@ class _PN532Base:
         """
         Return True if the PN532 responds to GetFirmwareVersion.
 
-        Kept for API compatibility with RC522Driver — callers should call
+        Kept for API compatibility with older reader drivers — callers should call
         init() first and check for RuntimeError rather than calling is_alive()
         standalone.
         """
@@ -671,8 +667,7 @@ class PN532Driver(_PN532Base):
     Reads only the tag UID.
     No data is read from tag memory; tags never need to be written to.
 
-    The public interface is identical to RC522Driver — NFCGateManager can use
-    either driver without any other code changes.
+    Provides the reader interface used by NFCGate.
 
     Parameters
     ----------
@@ -941,8 +936,7 @@ class PN532Driver(_PN532Base):
 # appears in the I2C response.  The frame starts directly with the preamble:
 #   [0x00, 0x00, 0xFF, LEN, LCS, TFI, CMD, payload..., DCS, 0x00]
 #
-# Public interface is identical to PN532Driver (I2C) so NFCGateManager works
-# with either driver without modification.
+# Public interface is identical to PN532Driver (I2C).
 
 # SPI frame byte offsets (no STATUS prefix, unlike I2C)
 _SPI_OFF_LEN     = 3
@@ -1188,3 +1182,297 @@ class PN532SPIDriver(_PN532Base):
         if not ready or ready[0] != 0x01:
             return ready, []
         return ready, self.low_level_raw_read(length)
+
+
+# =============================================================================
+# NFC_GATE low-level debug command helpers
+# =============================================================================
+
+def get_low_level_debug(config, default=False):
+    """Read the guarded raw PN532 debug flag."""
+    return config.getboolean(
+        'low_level_debug',
+        config.getboolean('Low_Level_debug', default))
+
+
+def _ll_parse_hex_bytes(value):
+    value = value.replace(',', ' ').replace(':', ' ').replace('-', ' ')
+    data = []
+    for token in value.split():
+        token = token.strip().strip('"\'')
+        if not token:
+            continue
+        if token.lower().startswith('0x'):
+            token = token[2:]
+        data.append(int(token, 16) & 0xFF)
+    return data
+
+
+def _ll_hex(data):
+    return ' '.join('%02X' % (b & 0xFF) for b in data)
+
+
+def low_level_debug_requested(gcmd):
+    return (
+        gcmd.get_int("HELP", 0) or
+        gcmd.get("STEP", None) is not None or
+        gcmd.get_int("RAW_READ", 0) or
+        gcmd.get("RAW_WRITE", None) is not None or
+        gcmd.get("RAW_CMD", None) is not None or
+        gcmd.get_int("READY_READ", 0) or
+        gcmd.get_int("ACK_READ", 0))
+
+
+def low_level_debug_help_lines(command_base):
+    return [
+        "PN532 is NOT initialized. Run Phase 1 + Phase 2 before anything else.",
+        "--- Phase 1: Wake and firmware check (REQUIRED) ---",
+        "1. %s STEP=WAKEUP" % command_base,
+        "2. %s STEP=READY" % command_base,
+        "3. %s STEP=FIRMWARE_WRITE" % command_base,
+        "4. %s STEP=FIRMWARE_ACK" % command_base,
+        "5. %s STEP=FIRMWARE_READY" % command_base,
+        "6. %s STEP=FIRMWARE_RESPONSE" % command_base,
+        "   Direct ACK timing probe (optional):",
+        "   %s STEP=FIRMWARE_ACK_DIRECT DELAY=0.050" % command_base,
+        "--- Phase 2: SAMConfiguration (REQUIRED) ---",
+        "7. %s STEP=SAM_WRITE" % command_base,
+        "8. %s STEP=SAM_ACK" % command_base,
+        "9. %s STEP=SAM_READY" % command_base,
+        "10. %s STEP=SAM_RESPONSE" % command_base,
+        "--- Phase 3: Tag detect (optional, requires Phase 1 + 2) ---",
+        "11. %s STEP=PASSIVE_WRITE" % command_base,
+        "12. %s STEP=PASSIVE_ACK" % command_base,
+        "13. %s STEP=PASSIVE_READY" % command_base,
+        "14. %s STEP=PASSIVE_RESPONSE LEN=30" % command_base,
+        "--- Raw tools ---",
+        "%s RAW_READ=1 LEN=1" % command_base,
+        "%s RAW_WRITE=00" % command_base,
+        "%s RAW_CMD=02" % command_base,
+        "%s READY_READ=1" % command_base,
+        "%s ACK_READ=1 LEN=7" % command_base,
+    ]
+
+
+def _ll_response(gcmd, label, message):
+    gcmd.respond_info("NFC_GATE[%s]: %s" % (label, message))
+
+
+def _ll_next(gcmd, label, command_base, next_args):
+    _ll_response(gcmd, label, "NEXT: %s %s" % (command_base, next_args))
+
+
+def _ll_write(gcmd, reader, label, op, data):
+    _ll_response(gcmd, label, "%s WRITE before: %s" % (op, _ll_hex(data)))
+    written = reader.low_level_raw_write(data)
+    _ll_response(gcmd, label, "%s WRITE after: OK" % op)
+    return written
+
+
+def _ll_command_write(gcmd, reader, label, op, cmd_and_params):
+    frame = reader.low_level_command_frame(cmd_and_params)
+    _ll_write(gcmd, reader, label, op, frame)
+    return frame
+
+
+def _ll_read(gcmd, reader, label, op, length):
+    _ll_response(gcmd, label, "%s READ before: %d byte(s)" % (op, length))
+    data = reader.low_level_raw_read(length)
+    _ll_response(gcmd, label, "%s READ after: %s" % (op, _ll_hex(data)))
+    return data
+
+
+def _ll_ready(gcmd, reader, label):
+    data = _ll_read(gcmd, reader, label, "READY", 1)
+    if not data:
+        _ll_response(gcmd, label, "READY result: no bytes returned")
+        return False
+    if data[0] == 0x01:
+        _ll_response(gcmd, label, "READY result: ready (0x01)")
+        return True
+    if data[0] == 0x00:
+        _ll_response(gcmd, label, "READY result: busy (0x00)")
+    else:
+        _ll_response(gcmd, label, "READY result: unknown status 0x%02X" % data[0])
+    return False
+
+
+def _ll_ack(gcmd, reader, label, command_base, length):
+    ready_data = _ll_read(gcmd, reader, label, "ACK_READY", 1)
+    if not ready_data:
+        _ll_response(gcmd, label, "ACK_READY result: no bytes returned")
+        return False
+    if ready_data[0] != 0x01:
+        _ll_response(
+            gcmd, label,
+            "ACK_READY result: busy/unknown 0x%02X; not reading ACK yet" %
+            ready_data[0])
+        _ll_next(gcmd, label, command_base, "STEP=%s" %
+                 gcmd.get("STEP", "FIRMWARE_ACK").upper())
+        return False
+    ack_data = _ll_read(gcmd, reader, label, "ACK", length)
+    return _ll_report_ack(gcmd, label, "ACK", ack_data, length)
+
+
+def _ll_report_ack(gcmd, label, op, ack_data, length):
+    if not ack_data:
+        _ll_response(gcmd, label, "%s result: no bytes returned" % op)
+        return False
+    if length < 7:
+        _ll_response(gcmd, label, "%s probe only: read %d byte(s), raw=%s" %
+                     (op, length, _ll_hex(ack_data)))
+        _ll_response(gcmd, label, "Try the same ACK step with LEN=%d next" %
+                     min(length + 1, 7))
+        return False
+    if len(ack_data) >= 7 and ack_data[1:] == [0x00, 0x00, 0xFF, 0x00, 0xFF, 0x00]:
+        _ll_response(gcmd, label, "%s status byte: 0x%02X" %
+                     (op, ack_data[0]))
+        _ll_response(gcmd, label, "%s frame: %s" %
+                     (op, _ll_hex(ack_data[1:])))
+        _ll_response(gcmd, label, "%s result: valid PN532 ACK" % op)
+        return True
+    if ack_data == [0x00, 0x00, 0xFF, 0x00, 0xFF, 0x00]:
+        _ll_response(gcmd, label, "%s frame: %s" % (op, _ll_hex(ack_data)))
+        _ll_response(gcmd, label, "%s result: valid PN532 ACK" % op)
+        return True
+    _ll_response(gcmd, label,
+                 "%s result: invalid, expected 00 00 FF 00 FF 00" % op)
+    return False
+
+
+def _ll_parse_response(gcmd, label, name, data, expected_cmd):
+    if not data:
+        _ll_response(gcmd, label, "%s response: no bytes returned" % name)
+        return False
+    status = None
+    if len(data) >= 4 and data[0] == 0x00 and data[1] == 0x00 and data[2] == 0xFF:
+        frame = data
+    else:
+        status = data[0]
+        frame = data[1:]
+    if status is not None:
+        _ll_response(gcmd, label, "%s status byte: 0x%02X" % (name, status))
+    if len(frame) >= 7 and frame[0] == 0x00 and frame[1] == 0x00 and \
+            frame[2] == 0xFF and frame[5] == 0xD5 and frame[6] == expected_cmd:
+        if expected_cmd == 0x03 and len(frame) >= 11:
+            _ll_response(gcmd, label,
+                         "Firmware parsed: v%d.%d IC=0x%02X support=0x%02X" %
+                         (frame[8], frame[9], frame[7], frame[10]))
+        elif expected_cmd == 0x15:
+            _ll_response(gcmd, label, "SAM response parsed: OK")
+        elif expected_cmd == 0x4B:
+            _ll_response(gcmd, label, "Passive response parsed header: OK")
+        return True
+    _ll_response(gcmd, label, "%s response did not match expected PN532 frame" % name)
+    return False
+
+
+def run_low_level_debug(gcmd, reader, label, command_base, enabled):
+    if not low_level_debug_requested(gcmd):
+        return False
+    if not enabled:
+        _ll_response(gcmd, label, "low_level_debug is disabled in config")
+        return True
+    if not hasattr(reader, 'low_level_raw_read'):
+        _ll_response(gcmd, label, "reader does not support low-level debug")
+        return True
+
+    raw_write = gcmd.get("RAW_WRITE", None)
+    if raw_write is not None:
+        data = _ll_parse_hex_bytes(raw_write)
+        _ll_write(gcmd, reader, label, "RAW", data)
+        _ll_next(gcmd, label, command_base, "RAW_READ=1 LEN=1")
+        return True
+    raw_cmd = gcmd.get("RAW_CMD", None)
+    if raw_cmd is not None:
+        cmd = _ll_parse_hex_bytes(raw_cmd)
+        _ll_command_write(gcmd, reader, label, "RAW_CMD", cmd)
+        _ll_next(gcmd, label, command_base, "ACK_READ=1 LEN=7")
+        return True
+    if gcmd.get_int("RAW_READ", 0):
+        length = gcmd.get_int("LEN", 1, minval=1, maxval=64)
+        _ll_read(gcmd, reader, label, "RAW", length)
+        return True
+    if gcmd.get_int("READY_READ", 0):
+        _ll_ready(gcmd, reader, label)
+        return True
+    if gcmd.get_int("ACK_READ", 0):
+        length = gcmd.get_int("LEN", 7, minval=1, maxval=64)
+        _ll_ack(gcmd, reader, label, command_base, length)
+        return True
+
+    step = gcmd.get("STEP", "HELP").upper()
+    if step == "HELP":
+        gcmd.respond_info('\n'.join(low_level_debug_help_lines(command_base)))
+    elif step == "WAKEUP":
+        _ll_write(gcmd, reader, label, "WAKEUP", [0x00])
+        time.sleep(0.05)
+        _ll_next(gcmd, label, command_base, "STEP=READY")
+    elif step == "READY":
+        if _ll_ready(gcmd, reader, label):
+            _ll_next(gcmd, label, command_base, "STEP=FIRMWARE_WRITE")
+    elif step == "FIRMWARE_WRITE":
+        _ll_command_write(gcmd, reader, label, "FIRMWARE",
+                          [PN532_COMMAND_GETFIRMWAREVERSION])
+        _ll_next(gcmd, label, command_base, "STEP=FIRMWARE_ACK")
+    elif step == "FIRMWARE_ACK":
+        if _ll_ack(gcmd, reader, label, command_base,
+                   gcmd.get_int("LEN", 7, minval=1, maxval=64)):
+            _ll_next(gcmd, label, command_base, "STEP=FIRMWARE_READY")
+    elif step == "FIRMWARE_READY":
+        if _ll_ready(gcmd, reader, label):
+            _ll_next(gcmd, label, command_base, "STEP=FIRMWARE_RESPONSE")
+    elif step == "FIRMWARE_RESPONSE":
+        data = _ll_read(gcmd, reader, label, "FIRMWARE_RESPONSE",
+                        gcmd.get_int("LEN", 14, minval=1, maxval=64))
+        if _ll_parse_response(gcmd, label, "Firmware", data, 0x03):
+            _ll_next(gcmd, label, command_base, "STEP=SAM_WRITE")
+    elif step == "FIRMWARE_ACK_DIRECT":
+        delay = gcmd.get_float("DELAY", 0.050, minval=0.0, maxval=2.0)
+        _ll_command_write(gcmd, reader, label, "FIRMWARE_DIRECT",
+                          [PN532_COMMAND_GETFIRMWAREVERSION])
+        _ll_response(gcmd, label,
+                     "FIRMWARE_DIRECT waiting %.3f seconds before ACK read" % delay)
+        time.sleep(delay)
+        length = gcmd.get_int("LEN", 7, minval=1, maxval=64)
+        data = _ll_read(gcmd, reader, label, "FIRMWARE_DIRECT_ACK", length)
+        if _ll_report_ack(gcmd, label, "FIRMWARE_DIRECT_ACK", data, length):
+            _ll_next(gcmd, label, command_base, "STEP=FIRMWARE_READY")
+    elif step == "SAM_WRITE":
+        _ll_command_write(gcmd, reader, label, "SAM",
+                          [PN532_COMMAND_SAMCONFIGURATION, 0x01, 0x14, 0x01])
+        _ll_next(gcmd, label, command_base, "STEP=SAM_ACK")
+    elif step == "SAM_ACK":
+        if _ll_ack(gcmd, reader, label, command_base,
+                   gcmd.get_int("LEN", 7, minval=1, maxval=64)):
+            _ll_next(gcmd, label, command_base, "STEP=SAM_READY")
+    elif step == "SAM_READY":
+        if _ll_ready(gcmd, reader, label):
+            _ll_next(gcmd, label, command_base, "STEP=SAM_RESPONSE")
+    elif step == "SAM_RESPONSE":
+        data = _ll_read(gcmd, reader, label, "SAM_RESPONSE",
+                        gcmd.get_int("LEN", 9, minval=1, maxval=64))
+        if _ll_parse_response(gcmd, label, "SAM", data, 0x15):
+            _ll_next(gcmd, label, command_base, "STEP=PASSIVE_WRITE")
+    elif step == "PASSIVE_WRITE":
+        _ll_command_write(gcmd, reader, label, "PASSIVE",
+                          [PN532_COMMAND_INLISTPASSIVETARGET, 0x01, 0x00])
+        _ll_next(gcmd, label, command_base, "STEP=PASSIVE_ACK")
+    elif step == "PASSIVE_ACK":
+        if _ll_ack(gcmd, reader, label, command_base,
+                   gcmd.get_int("LEN", 7, minval=1, maxval=64)):
+            _ll_next(gcmd, label, command_base, "STEP=PASSIVE_READY")
+    elif step == "PASSIVE_READY":
+        if _ll_ready(gcmd, reader, label):
+            _ll_next(gcmd, label, command_base, "STEP=PASSIVE_RESPONSE LEN=30")
+    elif step == "PASSIVE_RESPONSE":
+        data = _ll_read(gcmd, reader, label, "PASSIVE_RESPONSE",
+                        gcmd.get_int("LEN", 30, minval=1, maxval=64))
+        if data:
+            _ll_response(gcmd, label,
+                         "Passive response raw includes leading transport/status byte")
+        _ll_parse_response(gcmd, label, "Passive", data, 0x4B)
+    else:
+        _ll_response(gcmd, label, "Unknown STEP=%s" % step)
+        gcmd.respond_info('\n'.join(low_level_debug_help_lines(command_base)))
+    return True

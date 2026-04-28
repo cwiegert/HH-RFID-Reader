@@ -38,6 +38,9 @@ _nfc_pkg.__path__    = [os.path.join(_EXTRAS, 'nfc_gates')]
 _nfc_pkg.__package__ = 'nfc_gates'
 
 _null = _NullLogger()
+class _MockSpoolmanClient:
+    def __init__(self, *a, **k): pass
+
 _stub('nfc_gates.log',
       logger=_null, configure=lambda *a, **k: None,
       info=lambda *a, **k: None,
@@ -47,9 +50,16 @@ _stub('nfc_gates.pn532_driver',
       PN532Driver=object,
       PN532_COMMAND_GETFIRMWAREVERSION=0x02,
       PN532_COMMAND_SAMCONFIGURATION=0x14,
-      PN532_COMMAND_INLISTPASSIVETARGET=0x4A)
-_stub('nfc_gates.rc522_driver',   RC522Driver=object)
-_stub('nfc_gates.spoolman_client', SpoolmanClient=object)
+      PN532_COMMAND_INLISTPASSIVETARGET=0x4A,
+      get_low_level_debug=lambda config, default=False: default,
+      low_level_debug_requested=lambda gcmd: False,
+      low_level_debug_help_lines=lambda command_base: [],
+      run_low_level_debug=lambda *a, **k: False)
+_stub('nfc_gates.spoolman_client', SpoolmanClient=_MockSpoolmanClient)
+
+# Manager tests install different dependency stubs; import a fresh manager copy
+# so pytest collection order cannot leak stubs between files.
+sys.modules.pop('nfc_gates.NFC_manager', None)
 
 from nfc_gates.NFC_manager import NFCGateDefaults
 
@@ -212,19 +222,22 @@ def test_scan_defaults():
     d = NFCGateDefaults(MockConfig())
     assert d.scan_jog_mm   == 50.0
     assert d.scan_max_mm   == 600.0
-    assert d.scan_interval == 2.0
+    assert d.scan_poll_interval == 0.1
+    assert d.scan_settle_time == 0.02
     assert d.scan_enabled  == True
 
 def test_scan_keys_overridden():
     d = NFCGateDefaults(MockConfig({
-        'scan_jog_mm':   25.0,
-        'scan_max_mm':   300.0,
-        'scan_interval': 1.5,
-        'scan_enabled':  False,
+        'scan_jog_mm':        25.0,
+        'scan_max_mm':        300.0,
+        'scan_poll_interval': 0.2,
+        'scan_settle_time':   0.0,
+        'scan_enabled':       False,
     }))
     assert d.scan_jog_mm   == 25.0
     assert d.scan_max_mm   == 300.0
-    assert d.scan_interval == 1.5
+    assert d.scan_poll_interval == 0.2
+    assert d.scan_settle_time == 0.0
     assert d.scan_enabled  == False
 
 def test_scan_jog_mm_below_min_raises():
@@ -241,10 +254,10 @@ def test_scan_max_mm_below_min_raises():
     except (ValueError, Exception):
         pass
 
-def test_scan_interval_below_min_raises():
+def test_scan_settle_time_below_min_raises():
     try:
-        NFCGateDefaults(MockConfig({'scan_interval': 0.1}))
-        assert False, "Expected error for scan_interval below minval"
+        NFCGateDefaults(MockConfig({'scan_settle_time': -0.1}))
+        assert False, "Expected error for scan_settle_time below minval"
     except (ValueError, Exception):
         pass
 

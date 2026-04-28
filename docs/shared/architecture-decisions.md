@@ -171,12 +171,4 @@ No layer reaches back up the stack. No layer reaches sideways. The only directio
 
 ---
 
-## SPI and Remote Pico Readers
-
-SPI and remote Pico reader designs remain architectural possibilities within the codebase (`RC522Driver` exists, `NFCGateManager` handles the shared-MCU path). They are intentionally not documented as supported install paths because the I2C per-lane design is the one that has been worked through to completion. Documenting partial or unvalidated paths as supported would create support burden without benefit.
-
-When SPI support is ready, it will be documented as a separate setup guide alongside this one.
-
----
-
 *Copyright (C) 2026 WoodWorker. Licensed under [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/) — see [LICENSE](../../LICENSE).*

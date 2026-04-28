@@ -215,8 +215,8 @@ This is intentional: a Spoolman outage does not affect HH or printing. Gates tha
 | Integration — Spoolman / HH sync (`debug ≥ 3`, `logger.info()`) | ✅ | ❌ | if `console_output: True` |
 | Warnings — config issues, failure transitions (`debug ≥ 2`, `logger.warning()`) | ✅ | ✅ | if `console_output: True` |
 | Errors — init fail, I2C error (`debug ≥ 1`, `logger.error()`) | ✅ | ✅ | ✅ always |
-| PN532 / RC522 init result OK (`logger.info()`) | ✅ | ❌ | ✅ via `respond_info` |
-| PN532 / RC522 init result failed (`logger.error()`) | ✅ | ✅ | ✅ via `respond_info` |
+| PN532 init result OK (`logger.info()`) | ✅ | ❌ | ✅ via `respond_info` |
+| PN532 init result failed (`logger.error()`) | ✅ | ✅ | ✅ via `respond_info` |
 | Startup seed result — unconditional `logger.info()` | ✅ | ❌ | ✅ via `respond_info` |
 
 `klippy.log` receives all `WARNING` and `ERROR` level records automatically via `_KlippyForwardHandler`. No explicit `log_both()` call is required. `INFO` and `DEBUG` records go to `nfc_reader.log` only regardless of which call site emits them.

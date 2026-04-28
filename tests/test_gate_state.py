@@ -53,8 +53,11 @@ _stub('nfc_gates.pn532_driver',
       PN532Driver=object,
       PN532_COMMAND_GETFIRMWAREVERSION=0x02,
       PN532_COMMAND_SAMCONFIGURATION=0x14,
-      PN532_COMMAND_INLISTPASSIVETARGET=0x4A)
-_stub('nfc_gates.rc522_driver',  RC522Driver=object)
+      PN532_COMMAND_INLISTPASSIVETARGET=0x4A,
+      get_low_level_debug=lambda config, default=False: default,
+      low_level_debug_requested=lambda gcmd: False,
+      low_level_debug_help_lines=lambda command_base: [],
+      run_low_level_debug=lambda *a, **k: False)
 _stub('nfc_gates.spoolman_client', SpoolmanClient=object)
 
 from nfc_gates.NFC_manager import GateState, EVENT_CHANGED, EVENT_UID_ONLY, EVENT_REMOVED

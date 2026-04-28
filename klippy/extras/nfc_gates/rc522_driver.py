@@ -9,6 +9,25 @@
 # International. You may not use this file except in compliance with the
 # License. Full terms: https://creativecommons.org/licenses/by-nc-sa/4.0/
 #
+# WORK IN PROGRESS — NOT IMPLEMENTED / NOT SUPPORTED -------------------------
+# ██╗    ██╗ ██████╗ ██████╗ ██╗  ██╗     ██╗███╗   ██╗
+# ██║    ██║██╔═══██╗██╔══██╗██║ ██╔╝     ██║████╗  ██║
+# ██║ █╗ ██║██║   ██║██████╔╝█████╔╝      ██║██╔██╗ ██║
+# ██║███╗██║██║   ██║██╔══██╗██╔═██╗      ██║██║╚██╗██║
+# ╚███╔███╔╝╚██████╔╝██║  ██║██║  ██╗     ██║██║ ╚████║
+#  ╚══╝╚══╝  ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝     ╚═╝╚═╝  ╚═══╝
+#
+# ██████╗ ██████╗  ██████╗  ██████╗ ██████╗ ███████╗███████╗███████╗
+# ██╔══██╗██╔══██╗██╔═══██╗██╔════╝ ██╔══██╗██╔════╝██╔════╝██╔════╝
+# ██████╔╝██████╔╝██║   ██║██║  ███╗██████╔╝█████╗  ███████╗███████╗
+# ██╔═══╝ ██╔══██╗██║   ██║██║   ██║██╔══██╗██╔══╝  ╚════██║╚════██║
+# ██║     ██║  ██║╚██████╔╝╚██████╔╝██║  ██║███████╗███████║███████║
+# ╚═╝     ╚═╝  ╚═╝ ╚═════╝  ╚═════╝ ╚═╝  ╚═╝╚══════╝╚══════╝╚══════╝
+#
+# This file is intentionally parked for future RC522/SPI work. The supported
+# implementation is the per-lane PN532/I2C path. Do not configure or document
+# this driver as usable until RC522 support is rebuilt and tested separately.
+#
 # ─────────────────────────────────────────────────────────────────────────────
 # RC522 NFC reader driver — communicates with the RC522 chip over SPI using
 # Klipper's MCU_SPI interface.

@@ -90,7 +90,9 @@ self._gcode.register_mux_command(
 
 The `NFC_GATE_STATUS` command is registered as a plain `register_command` by `NFCGateDefaults` (the base `[nfc_gate]` section). If no base section exists, the first `NFCGate` registers it as a fallback.
 
-Sub-commands within `cmd_NFC_GATE` are parsed by checking parameters in a fixed priority order: `READ`, `STATUS`, `INIT`, `SCAN`, `CLEAR_CACHE`, `CLEAR`, `POLL`, `APPLY`, `HH_SYNC`. Low-level debug commands are checked first and take priority over all others.
+Sub-commands within `cmd_NFC_GATE` are parsed by checking parameters in a fixed priority order: `READ`, `STATUS`, `INIT`, `SCAN`, `JOG_SCAN`, `CLEAR_CACHE`, `CLEAR`, `POLL`, `APPLY`, `HH_SYNC`. Low-level debug commands are checked first and take priority over all others.
+
+`JOG_SCAN=1` triggers the scan-and-jog sequence on demand, bypassing the automatic 0→1 edge-detection trigger. Calls `scan_jog.manual_jog_scan(self, gcmd)` after verifying the reader is healthy, HH is idle, and no other gate is scanning.
 
 ---
 

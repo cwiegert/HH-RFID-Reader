@@ -1,14 +1,14 @@
 # Design: Scan-and-Jog Mode (Spool Pre-load NFC Identification)
 
 > Engineering reference — not end-user documentation.
-> Status: **Implemented** — branch `scan-jog-mode`, not yet merged to `main`
-> Source: `klippy/extras/nfc_gates/NFC_manager.py`
+> Status: **Implemented** — `scan_jog.py` module, integrated into `NFC_manager.py`
+> Source: `klippy/extras/nfc_gates/scan_jog.py`, `klippy/extras/nfc_gates/NFC_manager.py`
 
 ---
 
 ## Problem Statement
 
-When a spool is manually loaded into a lane, Happy Hare parks the filament at the gate entrance (gate_status → 1, action → Idle). At that point the NFC tag is on the spool hub — potentially centimeters away from the PN532 antenna. The normal 30s polling loop may not read the tag at all if the hub face isn't already aligned over the reader. The user needs a mode where, after filament is parked at the gate, the system automatically spins the spool in small increments to find the tag, identifies the spool, and then winds back to the parked position.
+When a spool is manually loaded into a lane, Happy Hare parks the filament at the gate entrance (gate_status → 1, action → Idle). At that point the NFC tag is on the spool hub — potentially centimeters away from the PN532 antenna. The normal polling loop may not read the tag at all if the hub face isn't already aligned over the reader. The user needs a mode where, after filament is parked at the gate, the system automatically spins the spool in small increments to find the tag, identifies the spool, and then winds back to the parked position.
 
 ---
 
@@ -25,293 +25,242 @@ When a spool is manually loaded into a lane, Happy Hare parks the filament at th
 
 ## Why Not a GCode Macro Loop
 
-Happy Hare's `_MMU_EVENT ACTION=gate_map_changed` is a GCode macro callback, not a Klipper event. Driving the jog loop from GCode would require:
+Driving the jog loop from GCode would require a `[delayed_gcode]` that reschedules itself, a cancel mechanism (no clean cancel exists), and scope crossing on every iteration. The Python-only approach eliminates all three problems. Reactor timers are first-class objects: they start, reschedule, and cancel entirely within `_scan_step_event` return values. The jog command (`MMU_TEST_MOVE`) is still issued via `gcode.run_script()`, which is safe from the reactor thread — the same pattern used by `KlipperInterface._run_gcode()`.
 
-1. A `[delayed_gcode]` that reschedules itself via `UPDATE_DELAYED_GCODE`.
-2. A cancel mechanism (no clean cancel for `delayed_gcode` — you must schedule with DURATION=0 and check state inside).
-3. Scope crossing on every iteration: GCode → Python (NFC read) → GCode (reschedule / jog).
+---
 
-The Python-only approach eliminates all three problems. Reactor timers are first-class objects: they start, reschedule, and cancel entirely within `_scan_step_event` return values. The jog command (`MMU_TEST_MOVE`) is still issued via `gcode.run_script()`, which is safe from the reactor thread — the same pattern used by `KlipperInterface._run_gcode()` today.
+## Code Structure
+
+All scan-jog logic lives in `klippy/extras/nfc_gates/scan_jog.py` as module-level functions. `NFCGate` in `NFC_manager.py` delegates to them via thin wrapper methods:
+
+```python
+# NFCGate wrappers in NFC_manager.py
+def _start_scan_mode(self):   return scan_jog.start(self)
+def _scan_step_event(self, t): return scan_jog.step_event(self, t)
+def _finish_scan(self):        return scan_jog.finish(self)
+def _rewind_and_exit_scan(self): return scan_jog.rewind_and_exit(self)
+def _run_jog(self, mm):        return scan_jog.run_jog(self, mm)
+def _run_rewind(self):         return scan_jog.run_rewind(self)
+```
+
+`gate` is passed as the first argument to every `scan_jog` function so it can read and write `gate._scan_mode`, `gate._scan_mm_total`, etc. directly.
 
 ---
 
 ## Trigger Detection
 
-Happy Hare does not fire a Klipper event when gate status changes. The `mmu:*` event namespace exists but does not include gate-status transitions. The only Python-readable signal is `mmu.get_status()['gate_status'][N]`.
+Trigger detection is folded into `_poll_timer_event`. The gate-status edge-detection path runs every tick when `scan_enabled` is True:
 
-Trigger detection is folded into the existing `_poll_event` tick. When the gate is empty (`gate_status == 0`) the poll tick skips the I2C read (no tag present) and instead checks for the load transition. It watches for all of:
+```
+_poll_timer_event (every poll_interval)
+  ├── read HH gate_status (Python dict — no I2C)
+  │
+  ├── curr == 0  → skip I2C entirely; also handles _hh_load_paused resume/suspend
+  │
+  ├── 0→1 edge  → set _scan_pending = True; reset _scan_idle_ready_time
+  │
+  ├── _scan_pending == True AND curr == 1 AND hh.idle AND not printing
+  │     first fire:  _scan_idle_ready_time = now + 2.0  → return that time
+  │     settled:     _scan_pending = False
+  │                  if NFCGate._active_scan_gate is not None:
+  │                      re-arm _scan_pending, retry in 1.0 s
+  │                  else:
+  │                      _start_scan_mode() → park poll timer, return NEVER
+  │
+  └── _scan_pending == True but conditions not met → return now + 1.0
+```
 
-- `gate_status[N]` was 0 (empty), is now 1 (available/parked)
-- `mmu.action == "Idle"`
-- Not currently printing (`print_stats.state != "printing"`)
-- Not already in scan mode (`_scan_mode == False`)
-- NFC reader is healthy (`_failed == False`)
+**Key details:**
+- `_prev_gate_status` initializes to `-1` on startup. The `-1 → 1` transition at cold start is ignored; only `0 → 1` triggers scan mode. This prevents a false trigger when HH already has `gate_status = 1` from a previous session.
+- A 2-second idle-settle delay (`_scan_idle_ready_time`) is inserted after HH reports idle. This prevents premature scan entry while HH is still completing its park move.
+- If another gate holds the scan lock, `_scan_pending` is re-armed and a 1-second retry is scheduled rather than silently dropping the trigger.
 
-Initialization value for `_prev_gate_status` is `-1` (unknown). This prevents a false trigger on cold start when HH already has status=1 from a previous session — the -1 → 1 transition is ignored; only 0 → 1 triggers scan mode.
-
-When the gate is empty the poll tick checks only a Python dict — no I2C, no HTTP, no GCode. The existing poll interval (default 30 s) is adequate for detecting the load event; the user has already spent several seconds manually inserting filament before HH parks it.
-
-**Manual trigger:** `NFC_GATE GATE=N JOG_SCAN=1` bypasses the edge-detection path and enters scan mode on demand. It runs the same precondition checks (not printing, HH idle, no other gate scanning, reader healthy) and calls `_start_scan_mode()` directly. This is the correct recovery path when the automatic 0→1 trigger was missed or `scan_enabled` is False.
+**Manual trigger:** `NFC_GATE GATE=N JOG_SCAN=1` calls `scan_jog.manual_jog_scan(gate, gcmd)` directly. It runs the same precondition checks (not printing, HH idle, no other gate scanning, reader healthy) and calls `start(gate)`. No edge detection is involved.
 
 ---
 
 ## Gate Context and Scan Lock
 
-`MMU_SELECT_GATE` sets a global active-gate context inside Happy Hare. If two
-lanes both enter scan mode concurrently, their `MMU_SELECT_GATE` calls will
-interleave and each `MMU_TEST_MOVE` may move the wrong lane's filament — a race
-condition that cannot be caught at the GCode level.
-
-Because all `nfc_gate` instances share the same Klipper printer object and run
-on the same reactor thread, a **class-level lock** is sufficient. No threading
-primitives are needed — the reactor is single-threaded, so reads and writes of a
-class variable are atomic with respect to timer callbacks.
+If two lanes entered scan mode concurrently, their `MMU_SELECT GATE=N` calls would interleave and `MMU_TEST_MOVE` would move the wrong lane's filament. Because all `nfc_gate` instances run on the same reactor thread, a **class-level lock** is sufficient:
 
 ```python
-# Class variable — shared across all nfc_gate instances
-NfcGate._active_scan_gate = None   # set to self._gate while scan is running
+# Class variable — shared across all NFCGate instances
+NFCGate._active_scan_gate = None   # gate number that currently holds the lock, or None
 ```
 
 Rules:
-- **Entry**: `_start_scan_mode` only proceeds if `NfcGate._active_scan_gate is None`. If another gate holds the lock, the trigger is silently dropped; the gate's `_prev_gate_status` is still updated so it won't re-trigger on the same load event.
-- **Hold**: while a scan is running, `_active_scan_gate == self._gate`. Other gates see a non-None value and skip scan entry.
-- **Release**: both `_finish_scan` and `_rewind_and_exit_scan` clear `_active_scan_gate = None` before resuming the poll timer.
+- **Entry**: `scan_jog.start()` sets `NFCGate._active_scan_gate = gate._gate`.
+- **Hold**: while scan is running, `_active_scan_gate` is non-None. Other gates re-arm `_scan_pending` and retry in 1 second.
+- **Release**: both `finish()` and `rewind_and_exit()` set `NFCGate._active_scan_gate = None`.
+- `_handle_disconnect` also clears the lock if this gate owns it.
 
-Normal polling (I2C reads only, no MMU moves) is **not** gated by this lock.
-Gates that are not scanning continue to poll and identify tags independently.
+Normal polling (I2C reads, no MMU moves) is not gated by this lock.
 
 ---
 
 ## State Machine
 
-Scan-and-jog adds a second timer (`_scan_timer`) to the existing `_poll_timer`:
-
 ```
-                    ┌─────────────────────────────────────────────────┐
-                    │                                                 │
-       klippy:      ▼                                                 │
-       connect ──► POLLING ──(0→1 gate_status, HH idle, not printing)──► SCAN_JOG
-                    ▲                                                         │
-                    │              tag found OR max_mm OR print starts        │
-                    └─────────────────────────────────────────────────────────┘
+              klippy:
+              connect ──► POLLING ──(0→1, HH idle, not printing)──► SCAN_JOG
+                           ▲                                               │
+                           │        tag found OR max_mm OR print starts   │
+                           └───────────────────────────────────────────────┘
 ```
 
-`_poll_timer` runs continuously. When scan mode starts, the poll timer is parked at `NEVER` and `_scan_timer` takes over. When scan mode ends (success or abort), `_scan_timer` returns `NEVER` and the poll timer is resumed.
+When scan mode starts, the poll timer is parked at `NEVER` and `_scan_timer` takes over. When scan mode ends, `_scan_timer` returns `NEVER` and the poll timer is resumed.
 
 ---
 
-## New Instance State
+## Instance State Variables
 
 ```python
-# Class variable — declared once at class body level, shared across all instances
-NfcGate._active_scan_gate = None   # gate number that currently owns the MMU, or None
+# Class variable — shared across all NFCGate instances
+NFCGate._active_scan_gate = None   # gate number holding the scan lock, or None
 
-# Timer handles (instance)
-self._scan_timer       = None    # registered only during active scan
+# Timers
+self._scan_timer           = None      # registered only during active scan
 
-# Scan mode tracking (instance)
-self._scan_mode        = False
-self._scan_mm_total    = 0.0     # mm jogged forward so far — logged on success, not used for rewind
+# Scan mode
+self._scan_mode            = False
+self._scan_mm_total        = 0.0       # mm jogged forward so far
+self._scan_next_chunk_time = 0.0       # reactor timestamp when next jog chunk may fire
+self._scan_found_event     = None      # cached event suppressed during jog; dispatched after rewind
 
-# Previous HH gate_status value — for edge detection in poll tick (instance)
-self._prev_gate_status = -1      # -1 = unknown (cold start)
+# Trigger detection
+self._prev_gate_status     = -1        # -1 = cold start (no 0→1 false trigger)
+self._scan_pending         = False     # armed on 0→1; fires when HH confirms idle
+self._scan_idle_ready_time = 0.0       # timestamp for 2s HH-idle settle delay
 ```
 
 ---
 
-## New Config Keys
+## Config Keys
 
-All added to `[nfc_gate]` (and overridable per `[nfc_gate laneN]`):
+All added to `[nfc_gate]` (overridable per `[nfc_gate laneN]`):
 
-| Key | Default | Meaning |
-|---|---|---|
-| `scan_jog_mm` | `50.0` | Filament advance per step (mm) |
-| `scan_max_mm` | `600` | Maximum total advance before abort and rewind |
-| `scan_interval` | `2.0` | Seconds between NFC poll attempts during scan |
-| `scan_enabled` | `True` | Master switch — set False to disable scan mode entirely |
+| Key | Python fallback | Shipped `nfc_vars.cfg` | Meaning |
+|---|---|---|---|
+| `scan_enabled` | `True` | `True` | Master switch — `False` disables scan mode entirely |
+| `scan_jog_mm` | `50.0` | `25.0` | Filament advance per jog step (mm) |
+| `scan_max_mm` | `600.0` | `600` | Maximum total advance before abort and rewind |
+| `scan_poll_interval` | `0.1` | `0.1` | Minimum seconds between NFC reads during scan |
+| `scan_settle_time` | `0.02` | `0.02` | Extra seconds after each jog chunk before reading |
+
+`scan_jog_mm` of 25 mm gives a ~5 cm read window (25 mm on each side of center plus the antenna width) for finding tags that are slightly off-axis.
 
 ---
 
-## Implementation Sketch
+## Implementation: `scan_jog.py`
 
-### Poll tick (enhanced with edge detection)
+### `start(gate)` — enter scan mode
 
 ```python
-def _poll_event(self, eventtime):
-    if self._failed or self._scan_mode:
-        return eventtime + self._poll_interval
+def start(gate):
+    gate.__class__._active_scan_gate = gate._gate
+    gate._scan_mode = True
+    gate._scan_mm_total = 0.0
+    gate._scan_next_chunk_time = gate.reactor.monotonic()
+    gate._hh_seed_spool_id = None     # clear startup seed — scan must re-read
+    gate._hh_seed_available = False
+    gate._scan_found_event = None
 
-    mmu = self.printer.lookup_object('mmu', None)
-    if mmu is None:
-        return eventtime + self._poll_interval
+    # MMU_SELECT prints the gate map on every call — issue it once here
+    # rather than on each jog step.
+    gcode = gate.printer.lookup_object('gcode')
+    gcode.run_script("MMU_SELECT GATE=%d" % gate._gate)
 
-    try:
-        status = mmu.get_status(eventtime)
-        gate_statuses = status.get('gate_status', [])
-        if self._gate >= len(gate_statuses):
-            return eventtime + self._poll_interval
-        curr = int(gate_statuses[self._gate] or 0)
-        action = status.get('action', '').lower()
-    except Exception:
-        return eventtime + self._poll_interval
-
-    prev = self._prev_gate_status
-    self._prev_gate_status = curr
-
-    # Gate is empty — check for load transition, skip I2C
-    if curr == 0:
-        return eventtime + self._poll_interval
-
-    # Detect 0→1 load event and enter scan mode
-    if (self._scan_enabled
-            and prev == 0 and curr == 1
-            and action == 'idle'
-            and not self._is_printing()):
-        if NfcGate._active_scan_gate is not None:
-            if self._debug >= 3:
-                logger.info(
-                    "nfc_gate: [%s] gate %d — scan trigger deferred: "
-                    "gate %d already scanning",
-                    self._name, self._gate, NfcGate._active_scan_gate)
-        else:
-            self._start_scan_mode()
-            return self.reactor.NEVER   # poll resumes when scan exits
-
-    # Normal poll path — gate is loaded, read the tag
-    self._poll()
-    return eventtime + self._poll_interval
+    gate._scan_timer = gate.reactor.register_timer(
+        gate._scan_step_event,
+        gate.reactor.monotonic())
 ```
 
-### Print guard
+### `step_event(gate, eventtime)` — the loop body
 
 ```python
-def _is_printing(self):
-    ps = self.printer.lookup_object('print_stats', None)
-    if ps is None:
-        return False
-    return ps.get_status(0).get('state', '') == 'printing'
-```
+def step_event(gate, eventtime):
+    if not gate._scan_mode:
+        return gate.reactor.NEVER
 
-### Scan mode entry
+    if is_printing(gate):
+        gate._rewind_and_exit_scan()
+        return gate.reactor.NEVER
 
-```python
-def _start_scan_mode(self):
-    NfcGate._active_scan_gate = self._gate
-    self._scan_mode = True
-    self._scan_mm_total = 0.0
-    # Schedule first NFC read after a short settle
-    self._scan_timer = self.reactor.register_timer(
-        self._scan_step_event,
-        self.reactor.monotonic() + 0.5
-    )
-    if self._debug >= 3:
-        logger.info(
-            "nfc_gate: [%s] gate %d scan mode started — "
-            "step=%.1fmm max=%.1fmm interval=%.1fs",
-            self._name, self._gate, self._scan_jog_mm, self._scan_max_mm, self._scan_interval)
-```
-
-### Scan step (the loop body)
-
-```python
-def _scan_step_event(self, eventtime):
-    if not self._scan_mode:
-        return self.reactor.NEVER
-
-    # Abort if a print starts mid-scan
-    if self._is_printing():
-        logger.warning("nfc_gate: [%s] scan mode: print started — aborting", self._name)
-        self._rewind_and_exit_scan()
-        return self.reactor.NEVER
-
-    tag_found = self._poll()
+    now = gate.reactor.monotonic()
+    tag_found = gate._poll()
 
     if tag_found:
-        self._finish_scan()
-        return self.reactor.NEVER           # ← terminates the loop
+        gate._finish_scan()
+        return gate.reactor.NEVER
 
-    if self._scan_mm_total >= self._scan_max_mm:
-        logger.warning(
-            "nfc_gate: [%s] scan mode: no tag after %.1fmm — rewinding",
-            self._name, self._scan_mm_total)
-        self._rewind_and_exit_scan()
-        return self.reactor.NEVER           # ← terminates the loop
+    if gate._scan_mm_total >= gate._scan_max_mm:
+        gate._rewind_and_exit_scan()
+        return gate.reactor.NEVER
 
-    self._run_jog(self._scan_jog_mm)
-    self._scan_mm_total += self._scan_jog_mm
-    if self._debug >= 4:
-        logger.info(
-            "nfc_gate: [%s] scan mode: no tag — jogged %.1fmm (total %.1fmm)",
-            self._name, self._scan_jog_mm, self._scan_mm_total)
-    return eventtime + self._scan_interval  # ← reschedules next attempt
+    # Jog only when the previous chunk is estimated complete; poll every tick.
+    if now >= gate._scan_next_chunk_time:
+        remaining = gate._scan_max_mm - gate._scan_mm_total
+        chunk = min(gate._scan_jog_mm, remaining)
+        gate._run_jog(chunk)
+        gate._scan_mm_total += chunk
+        gate._scan_next_chunk_time = now + chunk_interval(gate, chunk)
+
+    return now + gate._scan_poll_interval
 ```
 
-### Tag found
+The timer always returns `now + scan_poll_interval` so NFC is polled continuously throughout the scan. Jog chunks are gated by `_scan_next_chunk_time`, which advances by `chunk_interval = (abs(mm) / gear_short_move_speed) + scan_settle_time` after each issue. This decouples read frequency from motor timing — the tag can be detected anywhere in the move, not only after the chunk completes.
+
+### `finish(gate)` — tag found
 
 ```python
-def _finish_scan(self):
-    self._scan_mode = False
-    NfcGate._active_scan_gate = None
-    # Rewind so filament is at parked position — _poll() already identified the tag
-    self._run_rewind()
-    if self._debug >= 3:
-        logger.info(
-            "nfc_gate: [%s] gate %d scan mode: tag identified after %.1fmm — rewound",
-            self._name, self._gate, self._scan_mm_total)
-    # Resume normal polling
-    self.reactor.update_timer(
-        self._poll_timer,
-        self.reactor.monotonic() + self._poll_interval)
+def finish(gate):
+    gate._scan_mode = False
+    gate.__class__._active_scan_gate = None
+    gate._state.miss_count = 0
+    gate._run_rewind()
+    # Dispatch the spool event that was suppressed while the filament was moving.
+    if gate._scan_found_event is not None:
+        event_type, g, uid, spool = gate._scan_found_event
+        gate._scan_found_event = None
+        gate._klipper.dispatch(event_type, g, uid, spool)
+    gate._resume_poll_after_rewind()
 ```
 
-### Abort path
+### `rewind_and_exit(gate)` — abort path
 
 ```python
-def _rewind_and_exit_scan(self):
-    self._scan_mode = False
-    NfcGate._active_scan_gate = None
-    self._run_rewind()
-    self.reactor.update_timer(
-        self._poll_timer,
-        self.reactor.monotonic() + self._poll_interval)
+def rewind_and_exit(gate):
+    gate._scan_mode = False
+    gate.__class__._active_scan_gate = None
+    gate._state.miss_count = 0
+    gate._run_rewind()
+    gate._resume_poll_after_rewind()
 ```
 
-### Jog primitive
+`resume_poll_after_rewind` restarts the poll timer with an extra delay equal to the rewind move duration (`scan_mm_total / speed`) so the first scheduled poll fires after the rewind is complete.
+
+### `run_jog(gate, mm)` — jog primitive
 
 ```python
-def _run_jog(self, mm):
-    """Select this gate then advance filament via MMU_TEST_MOVE.
-
-    Safe to call from reactor thread — gcode.run_script() is the same
-    mechanism used by KlipperInterface._run_gcode().
-    Positive mm = advance toward MMU; negative mm = retract toward spool.
-    Speed and accel are intentionally omitted — MMU_TEST_MOVE defaults to
-    the values defined for the motor/homing combination, avoiding stepper
-    skips or filament grinding from an instantaneous speed change.
-    """
-    gcode = self._printer.lookup_object('gcode')
-    gcode.run_script(
-        "MMU_SELECT_GATE GATE=%d\nMMU_TEST_MOVE MOVE=%.2f"
-        % (self._gate, mm))
+def run_jog(gate, mm):
+    gcode = gate.printer.lookup_object('gcode')
+    gcode.run_script("MMU_TEST_MOVE MOVE=%.2f QUIET=1" % mm)
 ```
 
-### Rewind primitive
+`MMU_SELECT GATE=N` is issued once in `start()` before the scan timer fires. `run_jog` issues only `MMU_TEST_MOVE` since the gate context is already set. `QUIET=1` suppresses HH console output.
+
+### `run_rewind(gate)` — rewind primitive
 
 ```python
-def _run_rewind(self):
-    """Unload the active gate back to the parked position via MMU_UNLOAD.
-
-    MMU_UNLOAD restore=0 retracts to the gate entrance (parked) without
-    restoring the pre-load extruder position. This is the correct rewind
-    regardless of how far the spool was jogged — HH drives the move to the
-    known parked position rather than dead-reckoning a negative distance.
-    Safe to call from reactor thread via gcode.run_script().
-    """
-    gcode = self._printer.lookup_object('gcode')
-    gcode.run_script(
-        "MMU_SELECT_GATE GATE=%d\nMMU_UNLOAD restore=0"
-        % self._gate)
+def run_rewind(gate):
+    if gate._scan_mm_total <= 0.0:
+        return
+    gcode = gate.printer.lookup_object('gcode')
+    gcode.run_script("MMU_TEST_MOVE MOVE=%.2f QUIET=1\nM400"
+                     % -gate._scan_mm_total)
 ```
+
+Rewind is dead-reckoning: a negative `MMU_TEST_MOVE` of exactly `scan_mm_total`. `M400` (wait for moves) is appended so the reactor timer knows the rewind is physically complete before the next poll fires.
 
 ---
 
@@ -319,56 +268,51 @@ def _run_rewind(self):
 
 | Timer | Created | Destroyed | Interval |
 |---|---|---|---|
-| `_poll_timer` | `__init__` (parked at NEVER) | `_handle_disconnect` | `poll_interval` (30 s default) |
-| `_scan_timer` | `_start_scan_mode` | `_scan_step_event` returns NEVER | `scan_interval` (2 s default) |
+| `_poll_timer` | `__init__` (parked at NEVER) | `_handle_disconnect` | `poll_interval` (default 10 s) |
+| `_scan_timer` | `start()` | `step_event()` returns NEVER | `scan_poll_interval` |
 
-The scan timer is created anew on each scan entry. There is no need to deregister it explicitly — returning `reactor.NEVER` from `_scan_step_event` parks it permanently. `_scan_mode = False` is the canonical in-flight abort flag; any path that sets it to False before the next tick will cause the next `_scan_step_event` call to immediately return `NEVER`.
+The scan timer is created anew on each scan entry. Returning `reactor.NEVER` from `step_event` parks it permanently. `_scan_mode = False` is the canonical in-flight abort flag.
 
 ---
 
 ## GateState Interaction
 
-Scan mode is normal polling at a shorter interval, with a jog between each attempt. `_scan_step_event` calls `_poll()` directly on every tick — the same method the poll timer fires. `_poll()` does the I2C read and runs the full state machine (Spoolman lookup, `GateState.process_read`, both suppression checks, Spoolman location update, `KlipperInterface.dispatch`, `_hh_confirmed_spool`). When `_poll()` identifies a tag it returns `True`; `_scan_step_event` then calls `_finish_scan()` which rewinds and resumes the normal poll timer. No second read, no special logic in `_finish_scan`.
+`step_event` calls `gate._poll()` directly — the same method the poll timer fires. `_poll()` runs the full state machine including Spoolman lookup and `GateState.process_read`. When `_poll()` returns `True` (tag found), `step_event` calls `finish()` immediately.
 
-This means:
-- `GateState.miss_count` does **not** increment during scan ticks. `_poll()` checks `self._scan_mode` and skips the miss path when True — a no-read during a deliberate spool rotation is not an absence event.
-- When a tag is found, `_poll()` has already processed it through the full state machine. `_finish_scan` only needs to rewind and hand control back to the poll timer.
-- After scan mode completes, the first scheduled poll timer tick will fire into a gate that is already fully populated — `process_read` returns `None` (quiet).
+**Event dispatch is deferred during scan.** If a spool-changed event fires while `_scan_mode` is True (filament is still moving), `NFC_manager` caches it in `_scan_found_event` instead of dispatching immediately. `finish()` dispatches the cached event after `run_rewind()` returns, so HH and Spoolman receive the notification only after the filament is back at the parked position.
+
+`GateState.miss_count` does **not** increment during scan ticks. `process_read()` receives `scan_mode=True` when called from within scan mode — the miss path is skipped for no-read results. A missed NFC read during a deliberate spool rotation is not an absence event.
 
 ---
 
-## Interaction with `_hh_load_paused` (Normal Suspend Logic)
+## Interaction with `_hh_load_paused`
 
-When `_poll()` identifies a tag during a scan step, the normal path runs immediately: `GateState.process_read` sets `current_uid` and `current_spool`; `_hh_confirmed_spool` is set; `KlipperInterface.dispatch` issues the GCode so HH processes `_NFC_SPOOL_CHANGED` and sets `gate_spool_id[N] > 0`. `_finish_scan` then rewinds and resumes the poll timer. On the next scheduled poll timer tick, `_hh_gate_is_loaded()` returns True and the gate enters the normal suspended state exactly as it would after any other tag read.
+When `_poll()` identifies a tag during a scan step, `GateState.process_read` sets `current_uid` and `current_spool` but `KlipperInterface.dispatch` is suppressed — the event is cached in `_scan_found_event`. After the rewind completes, `finish()` dispatches `_NFC_SPOOL_CHANGED`; HH sets `gate_spool_id[N] > 0`. When the poll timer resumes, the first tick sees `_hh_gate_matches_current_spool()` returning True and enters the normal suspended state.
 
 ---
 
 ## Logging
 
-Scan-jog messages follow the standard debug level conventions defined in [Error Handling and Logging](error-logging.md):
+Scan-jog messages follow the standard debug level conventions:
 
 | Message | Level gate | `nfc_reader.log` | `klippy.log` |
 |---|---|---|---|
-| `scan mode started` | `debug >= 3` | ✅ | ❌ |
+| `scan mode started — chunk=Xmm max=Xmm speed=Xmm/s` | `debug >= 3` | ✅ | ❌ |
+| `gate loaded; waiting for HH idle before scan` | `debug >= 3` | ✅ | ❌ |
+| `HH idle; waiting 2.0s before scan-jog` | `debug >= 3` | ✅ | ❌ |
 | `scan trigger deferred: gate N already scanning` | `debug >= 3` | ✅ | ❌ |
-| `tag identified after Xmm — rewound` | `debug >= 3` | ✅ | ❌ |
-| `no tag — jogged Xmm (total Xmm)` | `debug >= 4` | ✅ | ❌ |
+| `tag identified — rewinding Xmm` | `info` (always) | ✅ | ❌ |
+| `no tag — jogged Xmm / Xmm` | `info` (always at each step) | ✅ | ❌ |
 | `print started — aborting` | warning (always) | ✅ | ✅ |
 | `no tag after Xmm — rewinding` | warning (always) | ✅ | ✅ |
 
-Set `debug: 3` on the test lane to observe scan start and success. Set `debug: 4` to also see each individual jog step.
+Set `debug: 3` to observe scan start and success. Set `debug: 4` for full poll detail during scans.
 
 ---
 
 ## Happy Hare Compatibility Notes
 
-- `MMU_SELECT_GATE` and `MMU_TEST_MOVE` are standard Happy Hare v2.x commands. `MMU_SELECT_GATE GATE=N` selects the lane before any move; `MMU_TEST_MOVE MOVE=mm` drives the gear stepper at its configured default speed and accel.
-- `mmu.get_status()['gate_status']` values: `0` = empty, `1` = available/parked, `2` = available from buffer. Scan mode triggers only on `0 → 1`. Buffer-loaded filament (`0 → 2`) does not trigger — the NFC tag will be on the spool hub on the lane, not yet near the gate.
-- `mmu.get_status()['action']` comparison is lowercased and checked for `== 'idle'` (exact). If HH changes its action string in a future release, this guard silently prevents scan mode from starting (safe-fail direction).
-
----
-
-## Open Questions (Needs Hardware Verification)
-
-1. **`MMU_TEST_MOVE` direction convention** — confirm that positive `MOVE` values advance filament toward the MMU (into the gate) on all HH versions. Negative values retract toward the spool.
-2. **`scan_jog_mm` default** — 50 mm per step is a starting point; tune after observing how many steps are typically needed to rotate the hub over the antenna.
+- `MMU_SELECT GATE=N` and `MMU_TEST_MOVE MOVE=mm QUIET=1` are standard Happy Hare v2.x commands.
+- `get_speed()` reads `mmu.gear_short_move_speed` from the HH Python object to compute chunk timing. Falls back to 80 mm/s if the attribute is absent.
+- `mmu.get_status()['gate_status']` values: `0` = empty, `1` = available/parked, `2` = available from buffer. Scan mode triggers only on `0 → 1`. Buffer-loaded filament (`0 → 2`) does not trigger.
+- `mmu.get_status()['action']` is lowercased and compared `== 'idle'` (exact). If HH changes its action string, the guard silently prevents scan mode from starting (safe-fail direction).

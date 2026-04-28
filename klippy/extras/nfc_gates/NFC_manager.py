@@ -9,12 +9,10 @@
 # International. You may not use this file except in compliance with the
 # License. Full terms: https://creativecommons.org/licenses/by-nc-sa/4.0/
 #
-# ─────────────────────────────────────────────────────────────────────────────
-# All gate coordination logic for both hardware paths:
+# Gate coordination logic for the supported per-lane PN532/I2C path:
 #
 #   NFCGateDefaults  — shared config defaults from the base [nfc_gate] section
 #   NFCGate          — per-lane manager for [nfc_gate laneN] (one PN532 per EBB42)
-#   NFCGateManager   — shared-MCU manager for [nfc_gates] (RC522/PN532 on a Pico)
 #
 # Internal helpers (not imported externally):
 #   GateState        — per-gate debounce state machine
@@ -28,19 +26,19 @@
 #
 # Ownership boundaries
 # ────────────────────
-# Reader drivers are hardware/protocol adapters only.  PN532Driver and
-# RC522Driver read tag identity and return UID values; they do not know about
-# lanes, Spoolman records, Happy Hare, or spool assignment policy.
+# Reader drivers are hardware/protocol adapters only.  PN532Driver reads tag
+# identity and returns UID values; it does not know about lanes, Spoolman
+# records, Happy Hare, or spool assignment policy.
 #
 # SpoolmanClient is a lookup/cache client only.  It resolves UID → spool record
 # / spool_id and may discover the Spoolman URL from Moonraker, but it does not
 # own gates and must not issue Happy Hare commands or write gate assignments.
 #
-# NFCGate / NFCGateManager own the lane/gate state machine.  They decide
-# whether a read is unchanged, changed, UID-only, or removed, and they are the
-# only layer that orchestrates Happy Hare-facing commands.  The default macro
-# boundary uses MMU_SPOOLMAN so Happy Hare remains the source of truth for
-# gate maps and Spoolman synchronization.
+# NFCGate owns the lane/gate state machine.  It decides whether a read is
+# unchanged, changed, UID-only, or removed, and it is the only layer that
+# orchestrates Happy Hare-facing commands.  The default macro boundary uses
+# MMU_GATE_MAP so Happy Hare remains the source of truth for gate maps and
+# Spoolman synchronization.
 #
 # Intended command flow:
 #   New spool:  _NFC_SPOOL_CHANGED GATE=<gate> SPOOL_ID=<spool_id> UID=<uid>
@@ -49,18 +47,11 @@
 #   Same tag:   no command
 
 import re
-import time
+from .. import bus as bus_module
 
-import bus as bus_module
-
+from . import hh_status, pn532_driver, scan_jog
 from .log            import configure, logger
-from .pn532_driver   import (
-    PN532Driver,
-    PN532_COMMAND_GETFIRMWAREVERSION,
-    PN532_COMMAND_SAMCONFIGURATION,
-    PN532_COMMAND_INLISTPASSIVETARGET,
-)
-from .rc522_driver   import RC522Driver
+from .pn532_driver   import PN532Driver
 from .spoolman_client import SpoolmanClient
 
 
@@ -78,328 +69,6 @@ def _get_console_config(config, default_enabled=False, default_level='warning'):
                        config.get('ui_log_level', default_level))
     return enabled, level
 
-
-def _get_low_level_debug(config, default=False):
-    """Read the guarded raw PN532 debug flag."""
-    return config.getboolean(
-        'low_level_debug',
-        config.getboolean('Low_Level_debug', default))
-
-
-def _parse_hex_bytes(value):
-    value = value.replace(',', ' ').replace(':', ' ').replace('-', ' ')
-    data = []
-    for token in value.split():
-        token = token.strip().strip('"\'')
-        if not token:
-            continue
-        if token.lower().startswith('0x'):
-            token = token[2:]
-        data.append(int(token, 16) & 0xFF)
-    return data
-
-
-def _hex(data):
-    return ' '.join('%02X' % (b & 0xFF) for b in data)
-
-
-def _low_level_requested(gcmd):
-    return (
-        gcmd.get_int("HELP", 0) or
-        gcmd.get("STEP", None) is not None or
-        gcmd.get_int("RAW_READ", 0) or
-        gcmd.get("RAW_WRITE", None) is not None or
-        gcmd.get("RAW_CMD", None) is not None or
-        gcmd.get_int("READY_READ", 0) or
-        gcmd.get_int("ACK_READ", 0))
-
-
-def _low_level_help_lines(command_base):
-    return [
-        "PN532 is NOT initialized. Run Phase 1 + Phase 2 before anything else.",
-        "--- Phase 1: Wake and firmware check (REQUIRED) ---",
-        "1. %s STEP=WAKEUP" % command_base,
-        "2. %s STEP=READY" % command_base,
-        "3. %s STEP=FIRMWARE_WRITE" % command_base,
-        "4. %s STEP=FIRMWARE_ACK" % command_base,
-        "5. %s STEP=FIRMWARE_READY" % command_base,
-        "6. %s STEP=FIRMWARE_RESPONSE" % command_base,
-        "   Direct ACK timing probe (optional):",
-        "   %s STEP=FIRMWARE_ACK_DIRECT DELAY=0.050" % command_base,
-        "--- Phase 2: SAMConfiguration (REQUIRED) ---",
-        "7. %s STEP=SAM_WRITE" % command_base,
-        "8. %s STEP=SAM_ACK" % command_base,
-        "9. %s STEP=SAM_READY" % command_base,
-        "10. %s STEP=SAM_RESPONSE" % command_base,
-        "--- Phase 3: Tag detect (optional, requires Phase 1 + 2) ---",
-        "11. %s STEP=PASSIVE_WRITE" % command_base,
-        "12. %s STEP=PASSIVE_ACK" % command_base,
-        "13. %s STEP=PASSIVE_READY" % command_base,
-        "14. %s STEP=PASSIVE_RESPONSE LEN=30" % command_base,
-        "--- Raw tools ---",
-        "%s RAW_READ=1 LEN=1" % command_base,
-        "%s RAW_WRITE=00" % command_base,
-        "%s RAW_CMD=02" % command_base,
-        "%s READY_READ=1" % command_base,
-        "%s ACK_READ=1 LEN=7" % command_base,
-    ]
-
-
-def _low_level_response(gcmd, label, message):
-    gcmd.respond_info("NFC_GATE[%s]: %s" % (label, message))
-
-
-def _low_level_next(gcmd, label, command_base, next_args):
-    _low_level_response(gcmd, label, "NEXT: %s %s" %
-                        (command_base, next_args))
-
-
-def _low_level_write(gcmd, reader, label, op, data):
-    _low_level_response(gcmd, label, "%s WRITE before: %s" %
-                        (op, _hex(data)))
-    written = reader.low_level_raw_write(data)
-    _low_level_response(gcmd, label, "%s WRITE after: OK" % op)
-    return written
-
-
-def _low_level_command_write(gcmd, reader, label, op, cmd_and_params):
-    frame = reader.low_level_command_frame(cmd_and_params)
-    _low_level_write(gcmd, reader, label, op, frame)
-    return frame
-
-
-def _low_level_read(gcmd, reader, label, op, length):
-    _low_level_response(gcmd, label, "%s READ before: %d byte(s)" %
-                        (op, length))
-    data = reader.low_level_raw_read(length)
-    _low_level_response(gcmd, label, "%s READ after: %s" %
-                        (op, _hex(data)))
-    return data
-
-
-def _low_level_ready(gcmd, reader, label):
-    data = _low_level_read(gcmd, reader, label, "READY", 1)
-    if not data:
-        _low_level_response(gcmd, label, "READY result: no bytes returned")
-        return False
-    if data[0] == 0x01:
-        _low_level_response(gcmd, label, "READY result: ready (0x01)")
-        return True
-    elif data[0] == 0x00:
-        _low_level_response(gcmd, label, "READY result: busy (0x00)")
-    else:
-        _low_level_response(gcmd, label,
-                            "READY result: unknown status 0x%02X" % data[0])
-    return False
-
-
-def _low_level_ack(gcmd, reader, label, command_base, length):
-    ready = _low_level_read(gcmd, reader, label, "ACK_READY", 1)
-    if not ready:
-        _low_level_response(gcmd, label, "ACK_READY result: no bytes returned")
-        return False
-    if ready[0] != 0x01:
-        _low_level_response(
-            gcmd, label,
-            "ACK_READY result: busy/unknown 0x%02X; not reading ACK yet" %
-            ready[0])
-        _low_level_next(gcmd, label, command_base, "STEP=%s" %
-                        gcmd.get("STEP", "FIRMWARE_ACK").upper())
-        return False
-    ack = _low_level_read(gcmd, reader, label, "ACK", length)
-    return _low_level_report_ack(gcmd, label, "ACK", ack, length)
-
-
-def _low_level_report_ack(gcmd, label, op, ack, length):
-    if not ack:
-        _low_level_response(gcmd, label, "%s result: no bytes returned" % op)
-        return False
-    if length < 7:
-        _low_level_response(gcmd, label,
-                            "%s probe only: read %d byte(s), raw=%s" %
-                            (op, length, _hex(ack)))
-        _low_level_response(gcmd, label,
-                            "Try the same ACK step with LEN=%d next" %
-                            min(length + 1, 7))
-        return False
-    elif len(ack) >= 7 and ack[1:] == [0x00, 0x00, 0xFF, 0x00, 0xFF, 0x00]:
-        _low_level_response(gcmd, label, "%s status byte: 0x%02X" %
-                            (op, ack[0]))
-        _low_level_response(gcmd, label, "%s frame: %s" %
-                            (op, _hex(ack[1:])))
-        _low_level_response(gcmd, label,
-                            "%s result: valid PN532 ACK" % op)
-        return True
-    elif ack == [0x00, 0x00, 0xFF, 0x00, 0xFF, 0x00]:
-        _low_level_response(gcmd, label, "%s frame: %s" %
-                            (op, _hex(ack)))
-        _low_level_response(gcmd, label,
-                            "%s result: valid PN532 ACK" % op)
-        return True
-    else:
-        _low_level_response(gcmd, label,
-                            "%s result: invalid, expected 00 00 FF 00 FF 00"
-                            % op)
-        return False
-
-
-def _low_level_parse_response(gcmd, label, name, data, expected_cmd):
-    if not data:
-        _low_level_response(gcmd, label, "%s response: no bytes returned" % name)
-        return False
-    status = None
-    if len(data) >= 4 and data[0] == 0x00 and data[1] == 0x00 and \
-            data[2] == 0xFF:
-        frame = data
-    else:
-        status = data[0]
-        frame = data[1:]
-    if status is not None:
-        _low_level_response(gcmd, label, "%s status byte: 0x%02X" %
-                            (name, status))
-    if len(frame) >= 7 and frame[0] == 0x00 and frame[1] == 0x00 and \
-            frame[2] == 0xFF and frame[5] == 0xD5 and frame[6] == expected_cmd:
-        if expected_cmd == 0x03 and len(frame) >= 11:
-            _low_level_response(
-                gcmd, label,
-                "Firmware parsed: v%d.%d IC=0x%02X support=0x%02X" %
-                (frame[8], frame[9], frame[7], frame[10]))
-        elif expected_cmd == 0x15:
-            _low_level_response(gcmd, label, "SAM response parsed: OK")
-        elif expected_cmd == 0x4B:
-            _low_level_response(gcmd, label,
-                                "Passive response parsed header: OK")
-        return True
-    _low_level_response(gcmd, label,
-                        "%s response did not match expected PN532 frame" % name)
-    return False
-
-
-def _run_low_level_debug(gcmd, reader, label, command_base, enabled):
-    if not _low_level_requested(gcmd):
-        return False
-    if not enabled:
-        _low_level_response(gcmd, label,
-                            "low_level_debug is disabled in config")
-        return True
-    if not hasattr(reader, 'low_level_raw_read'):
-        _low_level_response(gcmd, label,
-                            "reader does not support low-level debug")
-        return True
-
-    raw_write = gcmd.get("RAW_WRITE", None)
-    if raw_write is not None:
-        data = _parse_hex_bytes(raw_write)
-        _low_level_write(gcmd, reader, label, "RAW", data)
-        _low_level_next(gcmd, label, command_base, "RAW_READ=1 LEN=1")
-        return True
-    raw_cmd = gcmd.get("RAW_CMD", None)
-    if raw_cmd is not None:
-        cmd = _parse_hex_bytes(raw_cmd)
-        _low_level_command_write(gcmd, reader, label, "RAW_CMD", cmd)
-        _low_level_next(gcmd, label, command_base, "ACK_READ=1 LEN=7")
-        return True
-    if gcmd.get_int("RAW_READ", 0):
-        length = gcmd.get_int("LEN", 1, minval=1, maxval=64)
-        _low_level_read(gcmd, reader, label, "RAW", length)
-        return True
-    if gcmd.get_int("READY_READ", 0):
-        _low_level_ready(gcmd, reader, label)
-        return True
-    if gcmd.get_int("ACK_READ", 0):
-        length = gcmd.get_int("LEN", 7, minval=1, maxval=64)
-        _low_level_ack(gcmd, reader, label, command_base, length)
-        return True
-
-    step = gcmd.get("STEP", "HELP").upper()
-    if step == "HELP":
-        gcmd.respond_info('\n'.join(_low_level_help_lines(command_base)))
-    elif step == "WAKEUP":
-        _low_level_write(gcmd, reader, label, "WAKEUP", [0x00])
-        time.sleep(0.05)
-        _low_level_next(gcmd, label, command_base, "STEP=READY")
-    elif step == "READY":
-        if _low_level_ready(gcmd, reader, label):
-            _low_level_next(gcmd, label, command_base, "STEP=FIRMWARE_WRITE")
-    elif step == "FIRMWARE_WRITE":
-        _low_level_command_write(
-            gcmd, reader, label, "FIRMWARE",
-            [PN532_COMMAND_GETFIRMWAREVERSION])
-        _low_level_next(gcmd, label, command_base, "STEP=FIRMWARE_ACK")
-    elif step == "FIRMWARE_ACK":
-        if _low_level_ack(gcmd, reader, label, command_base,
-                          gcmd.get_int("LEN", 7, minval=1, maxval=64)):
-            _low_level_next(gcmd, label, command_base, "STEP=FIRMWARE_READY")
-    elif step == "FIRMWARE_READY":
-        if _low_level_ready(gcmd, reader, label):
-            _low_level_next(gcmd, label, command_base,
-                            "STEP=FIRMWARE_RESPONSE")
-    elif step == "FIRMWARE_RESPONSE":
-        data = _low_level_read(gcmd, reader, label, "FIRMWARE_RESPONSE",
-                               gcmd.get_int("LEN", 14,
-                                            minval=1, maxval=64))
-        if _low_level_parse_response(gcmd, label, "Firmware", data, 0x03):
-            _low_level_next(gcmd, label, command_base, "STEP=SAM_WRITE")
-    elif step == "FIRMWARE_ACK_DIRECT":
-        delay = gcmd.get_float("DELAY", 0.050, minval=0.0, maxval=2.0)
-        _low_level_command_write(
-            gcmd, reader, label, "FIRMWARE_DIRECT",
-            [PN532_COMMAND_GETFIRMWAREVERSION])
-        _low_level_response(
-            gcmd, label,
-            "FIRMWARE_DIRECT waiting %.3f seconds before ACK read" % delay)
-        time.sleep(delay)
-        length = gcmd.get_int("LEN", 7, minval=1, maxval=64)
-        data = _low_level_read(gcmd, reader, label,
-                               "FIRMWARE_DIRECT_ACK", length)
-        if _low_level_report_ack(gcmd, label, "FIRMWARE_DIRECT_ACK",
-                                 data, length):
-            _low_level_next(gcmd, label, command_base,
-                            "STEP=FIRMWARE_READY")
-    elif step == "SAM_WRITE":
-        _low_level_command_write(
-            gcmd, reader, label, "SAM",
-            [PN532_COMMAND_SAMCONFIGURATION, 0x01, 0x14, 0x01])
-        _low_level_next(gcmd, label, command_base, "STEP=SAM_ACK")
-    elif step == "SAM_ACK":
-        if _low_level_ack(gcmd, reader, label, command_base,
-                          gcmd.get_int("LEN", 7, minval=1, maxval=64)):
-            _low_level_next(gcmd, label, command_base, "STEP=SAM_READY")
-    elif step == "SAM_READY":
-        if _low_level_ready(gcmd, reader, label):
-            _low_level_next(gcmd, label, command_base, "STEP=SAM_RESPONSE")
-    elif step == "SAM_RESPONSE":
-        data = _low_level_read(gcmd, reader, label, "SAM_RESPONSE",
-                               gcmd.get_int("LEN", 9,
-                                            minval=1, maxval=64))
-        if _low_level_parse_response(gcmd, label, "SAM", data, 0x15):
-            _low_level_next(gcmd, label, command_base, "STEP=PASSIVE_WRITE")
-    elif step == "PASSIVE_WRITE":
-        _low_level_command_write(
-            gcmd, reader, label, "PASSIVE",
-            [PN532_COMMAND_INLISTPASSIVETARGET, 0x01, 0x00])
-        _low_level_next(gcmd, label, command_base, "STEP=PASSIVE_ACK")
-    elif step == "PASSIVE_ACK":
-        if _low_level_ack(gcmd, reader, label, command_base,
-                          gcmd.get_int("LEN", 7, minval=1, maxval=64)):
-            _low_level_next(gcmd, label, command_base, "STEP=PASSIVE_READY")
-    elif step == "PASSIVE_READY":
-        if _low_level_ready(gcmd, reader, label):
-            _low_level_next(gcmd, label, command_base,
-                            "STEP=PASSIVE_RESPONSE LEN=30")
-    elif step == "PASSIVE_RESPONSE":
-        data = _low_level_read(gcmd, reader, label, "PASSIVE_RESPONSE",
-                               gcmd.get_int("LEN", 30,
-                                            minval=1, maxval=64))
-        if data:
-            _low_level_response(
-                gcmd, label,
-                "Passive response raw includes leading transport/status byte")
-        _low_level_parse_response(gcmd, label, "Passive", data, 0x4B)
-    else:
-        _low_level_response(gcmd, label, "Unknown STEP=%s" % step)
-        gcmd.respond_info('\n'.join(_low_level_help_lines(command_base)))
-    return True
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -582,17 +251,17 @@ class NFCGateDefaults:
                                                    minval=0.005, maxval=1.0)
         self.debug              = config.getint('debug', 2, minval=0, maxval=4)
         self.console_output, self.console_log_level = _get_console_config(config)
-        self.low_level_debug    = _get_low_level_debug(config)
+        self.low_level_debug    = pn532_driver.get_low_level_debug(config)
         self.i2c_address        = config.getint('i2c_address', 0x24,
                                                  minval=0, maxval=127)
         self.scan_jog_mm        = config.getfloat('scan_jog_mm', 50.0,
                                                    minval=1.0, maxval=500.0)
         self.scan_max_mm        = config.getfloat('scan_max_mm', 600.0,
                                                    minval=10.0, maxval=5000.0)
-        self.scan_interval      = config.getfloat('scan_interval', 2.0,
-                                                   minval=0.5, maxval=60.0)
         self.scan_poll_interval = config.getfloat('scan_poll_interval', 0.1,
                                                    minval=0.1, maxval=5.0)
+        self.scan_settle_time   = config.getfloat('scan_settle_time', 0.02,
+                                                   minval=0., maxval=1.0)
         self.scan_enabled       = config.getboolean('scan_enabled', True)
 
         self._printer = config.get_printer()
@@ -665,7 +334,7 @@ class NFCGate:
         self._debug            = config.getint('debug',
                                                d.debug if d else 2,
                                                minval=0, maxval=4)
-        self._low_level_debug  = _get_low_level_debug(
+        self._low_level_debug  = pn532_driver.get_low_level_debug(
             config, d.low_level_debug if d else False)
         console_output, console_log_level = _get_console_config(
             config,
@@ -721,7 +390,7 @@ class NFCGate:
         self._hh_seed_spool_id   = None  # set on startup from HH gate map; cleared after first match
         self._hh_seed_available  = False  # True only when HH had the gate marked available at seed time
         self._hh_confirmed_spool = None  # last spool HH acknowledged; enables _check_hh_cleared
-        self._hh_load_paused     = False  # True while HH reports filament loaded from this gate
+        self._hh_load_paused     = False  # True while HH owns this gate assignment
         self._failed     = False
         self._klipper    = KlipperInterface(self.printer, self.reactor)
         self._polling    = False
@@ -733,19 +402,21 @@ class NFCGate:
         self._scan_max_mm   = config.getfloat('scan_max_mm',
                                                d.scan_max_mm if d else 600.0,
                                                minval=10.0, maxval=5000.0)
-        self._scan_interval = config.getfloat('scan_interval',
-                                               d.scan_interval if d else 2.0,
-                                               minval=0.5, maxval=60.0)
         self._scan_poll_interval = config.getfloat('scan_poll_interval',
                                                     d.scan_poll_interval if d else 0.1,
                                                     minval=0.1, maxval=5.0)
+        self._scan_settle_time = config.getfloat('scan_settle_time',
+                                                  d.scan_settle_time if d else 0.02,
+                                                  minval=0., maxval=1.0)
         self._scan_enabled  = config.getboolean('scan_enabled',
                                                  d.scan_enabled if d else True)
-        self._scan_timer        = None
-        self._scan_mode         = False
-        self._scan_mm_total     = 0.0
-        self._scan_next_jog_time = 0.0  # monotonic timestamp — jog fires when now >= this
-        self._prev_gate_status  = -1   # -1 = unknown; prevents false trigger on cold start
+        self._scan_timer           = None
+        self._scan_mode            = False
+        self._scan_mm_total        = 0.0
+        self._scan_next_chunk_time = 0.0
+        self._scan_idle_ready_time = 0.0
+        self._scan_found_event     = None  # cached event suppressed during jog; dispatched after rewind
+        self._prev_gate_status     = -1   # -1 = unknown; prevents false trigger on cold start
         self._scan_pending      = False  # armed on 0→1 edge; fires when HH confirms idle
 
         # delayed-init state
@@ -776,7 +447,7 @@ class NFCGate:
             "  NFC_GATE GATE=%d READ=0    - stop timer polling" % self._gate,
         ]
         if self._low_level_debug:
-            lines.extend(_low_level_help_lines(
+            lines.extend(pn532_driver.low_level_debug_help_lines(
                 "NFC_GATE GATE=%d" % self._gate))
         gcmd.respond_info('\n'.join(lines))
 
@@ -861,14 +532,14 @@ class NFCGate:
             % (self._name, spool_id, self._gate))
 
     def _cmd_low_level_debug(self, gcmd):
-        if _low_level_requested(gcmd) and self._polling:
+        if pn532_driver.low_level_debug_requested(gcmd) and self._polling:
             self._polling = False
             self.reactor.update_timer(self._poll_timer, self.reactor.NEVER)
             gcmd.respond_info(
                 "NFC_GATE[%s]: polling paused for low-level PN532 debug" %
                 self._name)
         try:
-            return _run_low_level_debug(
+            return pn532_driver.run_low_level_debug(
                 gcmd, self._reader, self._name,
                 "NFC_GATE GATE=%d" % self._gate,
                 self._low_level_debug)
@@ -915,6 +586,11 @@ class NFCGate:
             return
         self._cmd_help(gcmd)
 
+    def _read_hh_status(self, eventtime=None):
+        if eventtime is None:
+            eventtime = self.reactor.monotonic()
+        return hh_status.read(self.printer, self._gate, eventtime)
+
     def _seed_cache_from_hh(self, eventtime):
         """Read Happy Hare's gate map and pre-seed this lane's spool cache.
 
@@ -928,63 +604,51 @@ class NFCGate:
         Mismatches still dispatch normally.
         """
         try:
-            mmu = self.printer.lookup_object('mmu', None)
-            if mmu is None:
+            hh = self._read_hh_status(eventtime)
+            if not hh.present:
                 logger.info(
                     "nfc_gate: [%s] gate %d — HH MMU object not found; "
                     "skipping startup cache seed", self._name, self._gate)
                 return
-            status        = mmu.get_status(eventtime)
-            gate_spool_id = status.get('gate_spool_id', [])
-            gate_status   = status.get('gate_status', [])
-
-            if self._gate >= len(gate_spool_id):
+            if self._gate >= hh.gate_count:
                 logger.info(
                     "nfc_gate: [%s] gate %d — gate index exceeds HH map length "
                     "(%d gates); skipping seed", self._name, self._gate,
-                    len(gate_spool_id))
+                    hh.gate_count)
                 return
 
-            hh_spool = gate_spool_id[self._gate]
-            hh_avail = gate_status[self._gate] if self._gate < len(gate_status) else 0
+            if hh.assigned:
+                self._hh_seed_spool_id  = hh.spool
+                self._hh_seed_available = hh.available
 
-            try:
-                hh_spool = int(hh_spool)
-            except (TypeError, ValueError):
-                hh_spool = -1
-
-            if hh_spool > 0:
-                self._hh_seed_spool_id  = hh_spool
-                self._hh_seed_available = bool(hh_avail)
-
-                if bool(hh_avail) and self._spoolman is not None:
+                if hh.available and self._spoolman is not None:
                     # Gate is physically loaded — pre-populate NFC cache from
                     # Spoolman so status is correct before the first physical scan.
-                    uid = self._spoolman.get_uid_for_spool(hh_spool)
+                    uid = self._spoolman.get_uid_for_spool(hh.spool)
                     if uid:
                         self._state.current_uid   = uid
-                        self._state.current_spool = hh_spool
-                        self._hh_confirmed_spool  = hh_spool
+                        self._state.current_spool = hh.spool
+                        self._hh_confirmed_spool  = hh.spool
                         logger.info(
                             "nfc_gate: [%s] gate %d — startup: seeded from "
                             "HH+Spoolman spool_id=%d uid=%s",
-                            self._name, self._gate, hh_spool, uid)
+                            self._name, self._gate, hh.spool, uid)
                     else:
                         logger.info(
                             "nfc_gate: [%s] gate %d — HH seed: spool_id=%d "
                             "available (no UID in Spoolman — will verify on "
                             "first poll)",
-                            self._name, self._gate, hh_spool)
+                            self._name, self._gate, hh.spool)
                 else:
                     logger.info(
                         "nfc_gate: [%s] gate %d — HH seed: spool_id=%d  "
                         "gate_status=%s  (will verify on first physical scan)",
-                        self._name, self._gate, hh_spool, hh_avail)
+                        self._name, self._gate, hh.spool, hh.status)
             else:
                 logger.info(
                     "nfc_gate: [%s] gate %d — HH reports gate empty/unknown "
                     "(spool_id=%s); no seed applied",
-                    self._name, self._gate, hh_spool)
+                    self._name, self._gate, hh.spool)
 
         except Exception:
             logger.exception(
@@ -1082,6 +746,11 @@ class NFCGate:
         # after restart does not re-dispatch a spool HH already knows about.
         if not self._failed:
             self._seed_cache_from_hh(eventtime)
+            # Bootstrap the scan-jog edge detector with the current gate status
+            # so a pre-loaded gate never triggers a scan on the first poll.
+            hh = self._read_hh_status(eventtime)
+            if hh.present and self._gate < hh.gate_count:
+                self._prev_gate_status = hh.status
 
         if self._gcode is not None:
             if self._failed:
@@ -1136,60 +805,88 @@ class NFCGate:
         # Scan-jog gate-status edge detection.
         # Reads HH gate_status on every tick — Python dict only, no I2C.
         # When gate is empty (curr==0) skip the I2C read entirely.
-        # On 0→1 transition with HH idle and not printing, enter scan mode.
+        # On < 1 -> >=1 transition with HH idle and not printing, enter scan mode.
         if self._scan_enabled:
-            mmu = self.printer.lookup_object('mmu', None)
-            if mmu is not None:
-                try:
-                    status        = mmu.get_status(eventtime)
-                    gate_statuses = status.get('gate_status', [])
-                    if self._gate < len(gate_statuses):
-                        curr   = int(gate_statuses[self._gate] or 0)
-                        action = status.get('action', '').lower()
-                        prev   = self._prev_gate_status
-                        self._prev_gate_status = curr
-                        if curr == 0:
-                            self._scan_pending = False
-                            if self._hh_load_paused:
-                                self._hh_load_paused      = False
-                                self._state.current_uid   = None
-                                self._state.current_spool = None
-                                self._state.miss_count    = 0
-                                self._hh_confirmed_spool  = None
-                                logger.info(
-                                    "nfc_gate: [%s] gate %d — gate ejected; "
-                                    "resuming poll and clearing NFC cache",
-                                    self._name, self._gate)
-                                return self.reactor.monotonic() + 1.0
-                            return self.reactor.monotonic() + self._poll_interval
-                        # 0→1 edge: arm pending flag and let HH fully settle
-                        if prev == 0 and curr == 1:
-                            self._scan_pending = True
-                            if self._debug >= 3:
-                                logger.info(
-                                    "nfc_gate: [%s] gate %d — gate loaded; "
-                                    "waiting for HH idle before scan",
-                                    self._name, self._gate)
-                        # Fire scan once HH is idle and gate is confirmed loaded
-                        if (self._scan_pending and curr == 1
-                                and action == 'idle'
-                                and not self._is_printing()):
-                            self._scan_pending = False
-                            if NFCGate._active_scan_gate is not None:
-                                if self._debug >= 3:
-                                    logger.info(
-                                        "nfc_gate: [%s] gate %d — scan trigger "
-                                        "deferred: gate %d already scanning",
-                                        self._name, self._gate,
-                                        NFCGate._active_scan_gate)
-                                self._scan_pending = True  # re-arm; retry next tick
-                            else:
-                                self._start_scan_mode()
-                                return self.reactor.NEVER
-                        if self._scan_pending:
-                            return self.reactor.monotonic() + self._poll_interval
-                except Exception:
-                    pass
+            hh = self._read_hh_status(eventtime)
+            if hh.present and self._gate < hh.gate_count:
+                curr = hh.status
+                prev = self._prev_gate_status
+                self._prev_gate_status = curr
+                if self._debug >= 3:
+                    logger.info(
+                        "nfc_gate: [%s] gate %d — HH poll: "
+                        "prev=%s curr=%s action=%s pending=%s printing=%s "
+                        "active_scan=%s load_paused=%s",
+                        self._name, self._gate,
+                        prev, curr, hh.action,
+                        getattr(self, '_scan_pending', False),
+                        self._is_printing(),
+                        NFCGate._active_scan_gate if NFCGate._active_scan_gate is not None else 'none',
+                        self._hh_load_paused)
+                if curr <= 0:
+                    self._scan_pending = False
+                    nfc_spool = self._state.current_spool
+                    if hh.assigned and nfc_spool == hh.spool:
+                        if not self._hh_load_paused:
+                            self._hh_load_paused = True
+                            logger.info(
+                                "nfc_gate: [%s] gate %d — HH has assigned "
+                                "spool=%d; suspending NFC poll",
+                                self._name, self._gate, hh.spool)
+                        self._state.miss_count = 0
+                        return self.reactor.monotonic() + self._poll_interval
+                    if self._hh_load_paused and not hh.assigned:
+                        self._hh_load_paused      = False
+                        self._state.current_uid   = None
+                        self._state.current_spool = None
+                        self._state.miss_count    = 0
+                        self._hh_confirmed_spool  = None
+                        logger.info(
+                            "nfc_gate: [%s] gate %d — gate ejected; "
+                            "resuming poll and clearing NFC cache",
+                            self._name, self._gate)
+                        return self.reactor.monotonic() + 1.0
+                    return self.reactor.monotonic() + self._poll_interval
+                # 0→1 edge: arm pending flag and let HH fully settle
+                if prev < 1  and curr >= 1:
+                    self._scan_pending = True
+                    self._scan_idle_ready_time = 0.0
+                    if self._debug >= 3:
+                        logger.info(
+                            "nfc_gate: [%s] gate %d — gate loaded; "
+                            "waiting for HH idle before scan",
+                            self._name, self._gate)
+                # Fire scan once HH is idle and gate is confirmed loaded
+                if (getattr(self, '_scan_pending', False) and curr == 1
+                        and hh.idle
+                        and not self._is_printing()):
+                    now = self.reactor.monotonic()
+                    if self._scan_idle_ready_time <= 0.0:
+                        self._scan_idle_ready_time = now + 0.1
+                        if self._debug >= 3:
+                            logger.info(
+                                "nfc_gate: [%s] gate %d — HH idle; "
+                                "waiting 0.1s before scan-jog",
+                                self._name, self._gate)
+                        return self._scan_idle_ready_time
+                    if now < self._scan_idle_ready_time:
+                        return self._scan_idle_ready_time
+                    self._scan_pending = False
+                    self._scan_idle_ready_time = 0.0
+                    if NFCGate._active_scan_gate is not None:
+                        if self._debug >= 3:
+                            logger.info(
+                                "nfc_gate: [%s] gate %d — scan trigger "
+                                "deferred: gate %d already scanning",
+                                self._name, self._gate,
+                                NFCGate._active_scan_gate)
+                        self._scan_pending = True  # re-arm; retry next tick
+                        self._scan_idle_ready_time = now + 0.25
+                        return self._scan_idle_ready_time
+                    self._start_scan_mode()
+                    return self.reactor.NEVER
+                if getattr(self, '_scan_pending', False):
+                    return self.reactor.monotonic() + .25
 
         if self._debug >= 4:
             logger.debug("nfc_gate: [%s] poll cycle start — "
@@ -1220,23 +917,17 @@ class NFCGate:
             return  # Lane cache already empty — nothing to cross-check
         if self._hh_confirmed_spool != self._state.current_spool:
             return  # HH hasn't acknowledged this spool yet — don't second-guess it
-        mmu = self.printer.lookup_object('mmu', None)
-        if mmu is None:
-            return
-        try:
-            status         = mmu.get_status(self.reactor.monotonic())
-            gate_spool_ids = status.get('gate_spool_id', [])
-            hh_spool       = int(gate_spool_ids[self._gate] or -1)
-        except (IndexError, TypeError, ValueError):
+        hh = self._read_hh_status()
+        if not hh.present:
             return
         nfc_spool = self._state.current_spool
-        hh_differs = (hh_spool < 0) or (hh_spool != nfc_spool)
+        hh_differs = (not hh.assigned) or (hh.spool != nfc_spool)
         if hh_differs:
-            if hh_spool < 0:
+            if not hh.assigned:
                 reason = "HH cleared gate externally (NFC cache had spool=%d)" % nfc_spool
             else:
                 reason = ("HH has spool=%d but NFC cache has spool=%d "
-                          "(manual gate map change?)" % (hh_spool, nfc_spool))
+                          "(manual gate map change?)" % (hh.spool, nfc_spool))
             logger.info(
                 "nfc_gate: [%s] gate %d — %s; resetting lane cache so "
                 "next tag read re-dispatches _NFC_SPOOL_CHANGED",
@@ -1246,40 +937,32 @@ class NFCGate:
             self._state.miss_count    = 0
             self._hh_confirmed_spool  = None
 
-    def _hh_gate_is_available(self):
-        """Return True when HH has this gate marked as available (gate_status >= 1).
+    def _hh_gate_matches_current_spool(self):
+        """Return True when HH already owns this gate's current spool.
 
-        Polling suspends only when HH explicitly marks the gate as available —
-        meaning filament is physically present and confirmed by HH's own sensor.
-        Gates that are merely 'assigned' (spool ID set but status=0) keep
-        polling so NFC can verify the physical tag.
+        HH may report a gate as merely assigned (gate_spool_id > 0,
+        gate_status == 0) or available/loaded (gate_status >= 1).  Once NFC has
+        read and cached that same spool, either state is enough to stop NFC
+        polling until HH clears the assignment.
         """
-        mmu = self.printer.lookup_object('mmu', None)
-        if mmu is None:
+        nfc_spool = self._state.current_spool
+        if nfc_spool is None:
             return False
-        try:
-            status      = mmu.get_status(self.reactor.monotonic())
-            gate_status = status.get('gate_status', [])
-            gstat       = int(gate_status[self._gate] or 0)
-            return gstat >= 1
-        except (IndexError, TypeError, ValueError):
-            return False
+        hh = self._read_hh_status()
+        return hh.present and hh.spool == nfc_spool
 
     def _poll(self):
-        # Suspend scanning once HH has a spool assigned to this gate AND NFC
-        # has already read the tag at least once (current_spool is set).
-        # Requiring a confirmed scan first ensures the UID is always populated
-        # in the status before polling stops.  If the tag has never been read
-        # (e.g. startup with HH already populated), polling continues until the
-        # first successful scan, then suspends.
+        # Suspend scanning once HH already has the same spool assigned to this
+        # gate and NFC has read the tag at least once. Requiring the local NFC
+        # cache to have a spool keeps the UID visible in status output.
         if (not self._scan_mode
-                and self._hh_gate_is_available()
+                and self._hh_gate_matches_current_spool()
                 and self._state.current_spool is not None):
             if not self._hh_load_paused:
                 self._hh_load_paused = True
                 logger.info(
                     "nfc_gate: [%s] gate %d — spool confirmed by NFC; "
-                    "HH gate available — suspending poll until ejected",
+                    "HH owns same spool — suspending poll until ejected",
                     self._name, self._gate)
             self._state.miss_count = 0
             return
@@ -1375,236 +1058,95 @@ class NFCGate:
             self._hh_seed_spool_id  = None  # one-shot, always clear
             self._hh_seed_available = False
 
-            if self._spoolman is not None:
-                if event_type == EVENT_CHANGED and spool is not None:
-                    self._spoolman.update_spool_location(spool, gate)
-                elif event_type == EVENT_REMOVED and spool is not None:
-                    self._spoolman.clear_spool_location(spool)
-
-            if suppress:
+            if self._is_printing():
                 if self._debug >= 3:
                     logger.info(
-                        "nfc_gate: [%s] gate %d — startup seed match "
-                        "spool=%s; skipping HH dispatch",
-                        self._name, gate, spool)
+                        "nfc_gate: [%s] gate %d — %s detected during print; "
+                        "Spoolman and HH dispatch suppressed",
+                        self._name, gate, event_type)
+            elif self._scan_mode:
+                # Filament is moving — cache the event and dispatch after rewind.
+                self._scan_found_event = (event_type, gate, uid, spool)
+                if self._debug >= 3:
+                    logger.info(
+                        "nfc_gate: [%s] gate %d — %s detected during scan-jog; "
+                        "dispatch deferred until rewind complete",
+                        self._name, gate, event_type)
             else:
-                self._klipper.dispatch(event_type, gate, uid, spool)
-                if event_type == EVENT_CHANGED and spool is not None:
-                    self._hh_confirmed_spool = spool
-                elif event_type == EVENT_REMOVED:
-                    self._hh_confirmed_spool = None
+                if self._spoolman is not None:
+                    if event_type == EVENT_CHANGED and spool is not None:
+                        self._spoolman.update_spool_location(spool, gate)
+                    elif event_type == EVENT_REMOVED and spool is not None:
+                        self._spoolman.clear_spool_location(spool)
+
+                if suppress:
+                    if self._debug >= 3:
+                        logger.info(
+                            "nfc_gate: [%s] gate %d — startup seed match "
+                            "spool=%s; skipping HH dispatch",
+                            self._name, gate, spool)
+                else:
+                    self._klipper.dispatch(event_type, gate, uid, spool)
+                    if event_type == EVENT_CHANGED and spool is not None:
+                        self._hh_confirmed_spool = spool
+                    elif event_type == EVENT_REMOVED:
+                        self._hh_confirmed_spool = None
 
         return uid_hex is not None
 
     # ── Scan-and-jog mode ────────────────────────────────────────────────────
 
     def _manual_jog_scan(self, gcmd):
-        """Start the scan-and-jog sequence on demand, identical to an automatic
-        pre-load trigger.
-
-        The automatic path fires when Happy Hare reports a 0→1 gate_status edge
-        (filament loaded), HH is idle, and no print is active.  This command
-        replicates those exact precondition checks and, when they all pass,
-        enters scan-jog mode the same way — pausing the periodic poll timer and
-        scheduling the first scan step.
-
-        Preconditions (same as the automatic path):
-          - PN532 reader is not in a failed state
-          - No print is active
-          - Happy Hare action is 'idle'
-          - No other gate is already running a scan
-
-        If any condition is not met the command responds with a plain-language
-        explanation and does nothing.  On success it responds with the
-        configured step/max/interval values so the user can track progress.
-        """
-        if self._failed:
-            gcmd.respond_info(
-                "NFC_GATE[%s]: reader failed — run NFC_GATE GATE=%d INIT=1 first"
-                % (self._name, self._gate))
-            return
-        if self._is_printing():
-            gcmd.respond_info(
-                "NFC_GATE[%s]: print is active — cannot start scan-jog while printing"
-                % self._name)
-            return
-        mmu = self.printer.lookup_object('mmu', None)
-        if mmu is not None:
-            try:
-                action = mmu.get_status(
-                    self.reactor.monotonic()).get('action', '').lower()
-                if action != 'idle':
-                    gcmd.respond_info(
-                        "NFC_GATE[%s]: Happy Hare is busy (action=%s) — "
-                        "wait for idle before starting scan-jog"
-                        % (self._name, action))
-                    return
-            except Exception:
-                pass
-        if NFCGate._active_scan_gate is not None:
-            gcmd.respond_info(
-                "NFC_GATE[%s]: gate %d is already scanning — "
-                "only one gate may scan at a time"
-                % (self._name, NFCGate._active_scan_gate))
-            return
-        if self._scan_mode:
-            gcmd.respond_info(
-                "NFC_GATE[%s]: scan-jog already in progress for this gate"
-                % self._name)
-            return
-        # Pause the periodic poll timer for the scan duration, mirroring what
-        # _poll_timer_event does when it returns reactor.NEVER to hand off to
-        # the scan-step timer.
-        self.reactor.update_timer(self._poll_timer, self.reactor.NEVER)
-        self._start_scan_mode()
-        gcmd.respond_info(
-            "NFC_GATE[%s]: scan-jog started for gate %d "
-            "(step=%.0fmm  max=%.0fmm  interval=%.1fs)"
-            % (self._name, self._gate,
-               self._scan_jog_mm, self._scan_max_mm, self._scan_interval))
+        return scan_jog.manual_jog_scan(self, gcmd)
 
     def _is_printing(self):
-        ps = self.printer.lookup_object('print_stats', None)
-        if ps is None:
-            return False
-        return ps.get_status(0).get('state', '') == 'printing'
+        return scan_jog.is_printing(self)
+
+    def _get_scan_speed(self):
+        return scan_jog.get_speed(self)
+
+    def _scan_chunk_interval(self, mm):
+        return scan_jog.chunk_interval(self, mm)
+
+    def _scan_next_event_time(self, mm):
+        return scan_jog.next_event_time(self, mm)
+
+    def _resume_poll_after_rewind(self):
+        return scan_jog.resume_poll_after_rewind(self)
 
     def _start_scan_mode(self):
-        NFCGate._active_scan_gate = self._gate
-        self._scan_mode          = True
-        self._scan_mm_total      = 0.0
-        self._scan_next_jog_time = self.reactor.monotonic()  # fire first jog on first poll tick
-        self._hh_seed_spool_id   = None  # seed irrelevant during scan-jog
-        self._hh_seed_available  = False
-        self._scan_timer    = self.reactor.register_timer(
-            self._scan_step_event,
-            self.reactor.monotonic() + 0.5)
-        if self._debug >= 3:
-            logger.info(
-                "nfc_gate: [%s] gate %d scan mode started — "
-                "step=%.1fmm max=%.1fmm jog_interval=%.1fs poll_interval=%.1fs",
-                self._name, self._gate,
-                self._scan_jog_mm, self._scan_max_mm,
-                self._scan_interval, self._scan_poll_interval)
+        return scan_jog.start(self)
 
     def _scan_step_event(self, eventtime):
-        if not self._scan_mode:
-            return self.reactor.NEVER
-
-        if self._is_printing():
-            logger.warning(
-                "nfc_gate: [%s] scan mode: print started — aborting",
-                self._name)
-            self._rewind_and_exit_scan()
-            return self.reactor.NEVER
-
-        # Poll on every tick — reads happen at scan_poll_interval regardless of
-        # whether a jog is in progress.  The jog is non-blocking (no M400) so
-        # the reactor is free to fire this timer while the stepper is moving.
-        try:
-            tag_found = self._poll()
-        except Exception:
-            logger.exception("nfc_gate: [%s] scan step poll error", self._name)
-            tag_found = False
-
-        if tag_found:
-            self._finish_scan()
-            return self.reactor.NEVER
-
-        if self._scan_mm_total >= self._scan_max_mm:
-            logger.warning(
-                "nfc_gate: [%s] scan mode: no tag after %.1fmm — rewinding",
-                self._name, self._scan_mm_total)
-            self._rewind_and_exit_scan()
-            return self.reactor.NEVER
-
-        # Issue a jog only when the jog interval has elapsed since the last one.
-        # This decouples jog cadence (scan_interval) from poll cadence
-        # (scan_poll_interval), allowing multiple reads per jog step.
-        now = self.reactor.monotonic()
-        if now >= self._scan_next_jog_time:
-            self._run_jog(self._scan_jog_mm)
-            self._scan_mm_total += self._scan_jog_mm
-            self._scan_next_jog_time = now + self._scan_interval
-            msg = ("NFC Gate[%d] - moved %.1fmm  total %.1fmm / %.1fmm"
-                   % (self._gate, self._scan_jog_mm,
-                      self._scan_mm_total, self._scan_max_mm))
-            logger.info(msg)
-            self._console(msg)
-
-        return self.reactor.monotonic() + self._scan_poll_interval
+        return scan_jog.step_event(self, eventtime)
 
     def _finish_scan(self):
-        self._scan_mode = False
-        NFCGate._active_scan_gate = None
-        msg = "NFC Gate[%d]: rewinding %.1fmm" % (self._gate, self._scan_mm_total)
-        logger.info(msg)
-        self._console(msg)
-        self._run_rewind()
-        self.reactor.update_timer(
-            self._poll_timer,
-            self.reactor.monotonic() + self._poll_interval)
+        return scan_jog.finish(self)
 
     def _rewind_and_exit_scan(self):
-        self._scan_mode = False
-        NFCGate._active_scan_gate = None
-        msg = "NFC Gate[%d]: no tag found — rewinding %.1fmm" % (self._gate, self._scan_mm_total)
-        logger.warning(msg)
-        self._console(msg)
-        self._run_rewind()
-        self.reactor.update_timer(
-            self._poll_timer,
-            self.reactor.monotonic() + self._poll_interval)
+        return scan_jog.rewind_and_exit(self)
 
     def _console(self, msg):
-        """Send a message directly to the Klipper console, bypassing the logger."""
-        gcode = self.printer.lookup_object('gcode', None)
-        if gcode is None:
-            return
-        try:
-            gcode.respond_info(msg)
-        except Exception:
-            pass
+        return scan_jog.console(self, msg)
 
     def _run_jog(self, mm):
-        gcode = self.printer.lookup_object('gcode')
-        # No M400 — jog is intentionally non-blocking so the reactor remains
-        # free to fire the poll timer while the stepper is moving.
-        # MMU_SELECT is issued only on the first jog (scan_mm_total == 0) to
-        # establish gate context; subsequent jogs reuse the active selection.
-        if self._scan_mm_total == 0.0:
-            gcode.run_script("MMU_SELECT GATE=%d\nMMU_TEST_MOVE MOVE=%.2f QUIET=1"
-                             % (self._gate, mm))
-        else:
-            gcode.run_script("MMU_TEST_MOVE MOVE=%.2f QUIET=1" % mm)
+        return scan_jog.run_jog(self, mm)
 
     def _run_rewind(self):
-        if self._scan_mm_total <= 0.0:
-            return
-        gcode = self.printer.lookup_object('gcode')
-        gcode.run_script("MMU_TEST_MOVE MOVE=%.2f QUIET=1\nM400" % -self._scan_mm_total)
-
-    # ─────────────────────────────────────────────────────────────────────────
+        return scan_jog.run_rewind(self)
 
     def _hh_filament_label(self):
         """Return a short string describing this gate's HH spool assignment."""
-        mmu = self.printer.lookup_object('mmu', None)
-        if mmu is None:
+        hh = self._read_hh_status()
+        if not hh.present:
             return "HH: n/a"
-        try:
-            status         = mmu.get_status(self.reactor.monotonic())
-            gate_spool_ids = status.get('gate_spool_id', [])
-            gate_status    = status.get('gate_status', [])
-            active_gate    = int(status.get('gate', -1) or -1)
-            filament_pos   = int(status.get('filament_pos', 0) or 0)
-            spool_id       = int(gate_spool_ids[self._gate] or -1)
-            gstat          = int(gate_status[self._gate] or 0) if self._gate < len(gate_status) else 0
-        except (IndexError, TypeError, ValueError):
+        if self._gate >= hh.gate_count:
             return "HH: unknown"
-        if active_gate == self._gate and filament_pos > 0:
-            return "HH: spool %d  loading (pos %d)" % (spool_id, filament_pos)
-        if spool_id > 0:
-            return "HH: spool %d  %s" % (spool_id, "available" if gstat >= 1 else "assigned")
+        if hh.active_gate == self._gate and hh.filament_pos > 0:
+            return "HH: spool %d  loading (pos %d)" % (hh.spool, hh.filament_pos)
+        if hh.assigned:
+            return "HH: spool %d  %s" % (
+                hh.spool, "available" if hh.available else "assigned")
         return "HH: empty"
 
     def status_line(self):
@@ -1636,440 +1178,3 @@ class NFCGate:
             'uid':      self._state.current_uid or '',
             'failed':   self._failed,
         }
-
-# ─────────────────────────────────────────────────────────────────────────────
-# NFCGateManager — shared-MCU orchestrator for [nfc_gates]
-# ─────────────────────────────────────────────────────────────────────────────
-#
-# Handles 1–8 RC522 or PN532 readers all wired to a single CAN-connected MCU
-# (typically a Raspberry Pi Pico running standard Klipper firmware).
-#
-# Reader selection:
-#   gate_i2c_addresses present  → I2C / PN532 path
-#   gate_i2c_addresses absent   → SPI / RC522 path
-
-class NFCGateManager:
-    def __init__(self, config):
-        self.printer = config.get_printer()
-        self.reactor = self.printer.get_reactor()
-        ppins        = self.printer.lookup_object('pins')
-
-        self._poll_interval    = config.getfloat('poll_interval', 30.,
-                                                  minval=1., maxval=3600.)
-        self._startup_polling  = config.getint('startup_polling', -1,
-                                                minval=-1, maxval=1)
-        self._startup_poll_delay = config.getfloat('startup_poll_delay', 0.,
-                                                   minval=0., maxval=3600.)
-        self._absent_threshold = config.getint('absent_threshold', 3,
-                                                minval=1, maxval=255)
-        transceive_delay = config.getfloat('transceive_delay', 0.035,
-                                            minval=0.001, maxval=1.0)
-        self._debug      = config.getint('debug', 2, minval=0, maxval=4)
-        self._low_level_debug = _get_low_level_debug(config)
-        console_output, console_log_level = _get_console_config(config)
-
-        log_file = config.get('log_file', '')
-        configure(log_file, printer=self.printer,
-                  console_output=console_output,
-                  console_log_level=console_log_level)
-
-        spoolman_url       = config.get('spoolman_url', '')
-        moonraker_url      = config.get('moonraker_url',
-                                        'http://127.0.0.1:7125')
-        spoolman_rfid_key  = config.get('spoolman_rfid_key', 'rfid')
-        spoolman_timeout   = config.getfloat('spoolman_timeout', 5.0,
-                                              minval=0.5, maxval=30.0)
-        spoolman_cache_ttl = config.getfloat('spoolman_cache_ttl', 300.0,
-                                              minval=0., maxval=3600.)
-
-        if spoolman_url:
-            self._spoolman = SpoolmanClient(
-                spoolman_url,
-                rfid_key=spoolman_rfid_key,
-                timeout=spoolman_timeout,
-                cache_ttl=spoolman_cache_ttl,
-                debug=self._debug,
-                moonraker_url=moonraker_url)
-            logger.info("nfc_gates: Spoolman enabled — url=%s rfid_key=%s",
-                         spoolman_url, spoolman_rfid_key)
-        else:
-            self._spoolman = None
-            logger.warning(
-                "nfc_gates: spoolman_url not set — gates will report UIDs "
-                "but cannot resolve spool IDs.  Add spoolman_url to [nfc_gates] "
-                "or set spoolman_url: auto to read Moonraker.")
-
-        i2c_addrs_str = config.get('gate_i2c_addresses', '')
-        if i2c_addrs_str:
-            bus_objects   = self._setup_i2c(config, i2c_addrs_str)
-            self._readers = [PN532Driver(
-                b, i, transceive_delay, debug=self._debug,
-                low_level_debug=self._low_level_debug)
-                             for i, b in enumerate(bus_objects)]
-        else:
-            bus_objects   = self._setup_spi(config, ppins)
-            self._readers = [RC522Driver(b, i, transceive_delay, debug=self._debug)
-                             for i, b in enumerate(bus_objects)]
-
-        self._gate_count = len(bus_objects)
-        if not (1 <= self._gate_count <= 8):
-            raise config.error(
-                "nfc_gates: gate count must be 1–8; got %d" % self._gate_count)
-
-        self._states        = [GateState(i, self._absent_threshold)
-                               for i in range(self._gate_count)]
-        self._reader_failed = [False] * self._gate_count
-        self._suppress_next_dispatch_uid = [None] * self._gate_count
-        self._klipper       = KlipperInterface(self.printer, self.reactor)
-        self._polling       = False
-        self._poll_timer    = self.reactor.register_timer(
-            self._poll_timer_event)
-
-        gcode = self.printer.lookup_object('gcode')
-        gcode.register_command(
-            'NFC_GATE_STATUS', self.cmd_NFC_GATE_STATUS,
-            desc="Report current NFC gate spool assignments")
-        for i in range(self._gate_count):
-            gcode.register_mux_command(
-                cmd='NFC_GATE',
-                key='GATE',
-                value=str(i),
-                func=lambda gcmd, gate=i: self.cmd_NFC_GATE(gcmd, gate),
-                desc="Control or test one configured NFC gate")
-
-        self.printer.register_event_handler('klippy:connect',
-                                            self._handle_connect)
-        self.printer.register_event_handler('klippy:disconnect',
-                                            self._handle_disconnect)
-
-    def _setup_spi(self, config, ppins):
-        spi_speed   = config.getint('spi_speed', 1000000, minval=100000)
-        primary_spi = bus_module.MCU_SPI_from_config(config, mode=0,
-                                                     default_speed=spi_speed)
-        self._mcu   = primary_spi._mcu
-
-        extra_cs_names = [p.strip()
-                          for p in config.get('extra_cs_pins', '').split(',')
-                          if p.strip()]
-        all_spis = [primary_spi]
-        for cs_name in extra_cs_names:
-            cs_params = ppins.lookup_pin(cs_name, can_invert=False,
-                                         can_pullup=False)
-            if cs_params['chip'] is not self._mcu:
-                raise config.error(
-                    "nfc_gates: extra CS pin '%s' must be on the same MCU "
-                    "as cs_pin" % cs_name)
-            all_spis.append(bus_module.MCU_SPI(
-                self._mcu,
-                primary_spi._bus,
-                cs_params['pin'],
-                primary_spi._mode,
-                primary_spi._speed,
-                primary_spi._sw_pins,
-            ))
-        return all_spis
-
-    def _setup_i2c(self, config, addrs_str):
-        try:
-            addrs = [int(a.strip(), 0)
-                     for a in addrs_str.split(',') if a.strip()]
-        except ValueError as e:
-            raise config.error(
-                "nfc_gates: gate_i2c_addresses parse error: %s" % e)
-
-        i2c_speed   = config.getint('i2c_speed', 400000, minval=10000)
-        primary_i2c = bus_module.MCU_I2C_from_config(config,
-                                                     default_addr=addrs[0],
-                                                     default_speed=i2c_speed)
-        self._mcu   = primary_i2c._mcu
-
-        all_i2cs = [primary_i2c]
-        for addr in addrs[1:]:
-            all_i2cs.append(bus_module.MCU_I2C(
-                self._mcu, primary_i2c._bus, addr, i2c_speed))
-        return all_i2cs
-
-    def _handle_connect(self):
-        logger.info(
-            "nfc_gates: connected to MCU '%s', initialising %d gates "
-            "(poll=%.0fs, absent_threshold=%d, debug=%d)",
-            self._mcu.get_name(), self._gate_count,
-            self._poll_interval, self._absent_threshold, self._debug)
-
-        ok_count = 0
-        for i, reader in enumerate(self._readers):
-            try:
-                reader.init()
-                if reader.is_alive():
-                    ok_count += 1
-                    logger.info("nfc_gates: gate %d reader OK", i)
-                else:
-                    self._reader_failed[i] = True
-                    logger.error("nfc_gates: gate %d reader did not respond "
-                                  "after init (check wiring)", i)
-            except Exception as e:
-                self._reader_failed[i] = True
-                logger.error("nfc_gates: gate %d init error: %s", i, e)
-
-        logger.info("nfc_gates: %d/%d readers initialised",
-                     ok_count, self._gate_count)
-
-        if self._startup_polling == 1 and ok_count > 0:
-            self._polling = True
-            first_poll = self.reactor.monotonic() + self._startup_poll_delay
-            self.reactor.update_timer(self._poll_timer, first_poll)
-            logger.info("nfc_gates: startup polling enabled; first poll in %.1fs",
-                        self._startup_poll_delay)
-        else:
-            # Shared [nfc_gates] is not part of the documented path yet.  Keep
-            # it manual-start by default, matching the per-lane manager.
-            logger.info("nfc_gates: startup polling disabled; use "
-                        "NFC_GATE GATE=0 READ=1 to start polling")
-
-    def _handle_disconnect(self):
-        self._polling = False
-        self.reactor.update_timer(self._poll_timer, self.reactor.NEVER)
-
-    def _poll_timer_event(self, eventtime):
-        if not self._polling:
-            return self.reactor.NEVER
-        try:
-            self._poll_all_gates()
-        except Exception:
-            logger.exception("nfc_gates: unexpected error in poll cycle")
-        return self.reactor.monotonic() + self._poll_interval
-
-    def _poll_all_gates(self):
-        if self._debug >= 4:
-            logger.debug("nfc_gates: poll cycle — checking %d gate(s)",
-                         self._gate_count)
-
-        for i in range(self._gate_count):
-            self._poll_gate(i)
-
-    def _poll_gate(self, i):
-        if self._reader_failed[i]:
-            if self._debug >= 4:
-                logger.debug("nfc_gates: gate %d skipped (reader failed)", i)
-            return
-
-        try:
-            uid_hex = self._readers[i].read_tag()
-        except Exception as e:
-            logger.error("nfc_gates: gate %d read error: %s", i, e)
-            uid_hex = None
-
-        if self._debug >= 4 and uid_hex is None:
-            logger.debug("nfc_gates: gate %d — no tag (miss_count=%d)",
-                         i, self._states[i].miss_count + 1)
-
-        if uid_hex is not None:
-            # Always resolve through SpoolmanClient — see NFCGate._poll comment.
-            if self._spoolman is not None:
-                spool_id = self._spoolman.lookup_spool_by_uid(uid_hex)
-            else:
-                spool_id = None
-        else:
-            spool_id = None
-
-        event = self._states[i].process_read(uid_hex, spool_id)
-        if event is not None:
-            event_type, gate, uid, spool = event
-            if self._debug >= 3:
-                logger.info("nfc_gates: gate %d — state change: %s "
-                            "(uid=%s spool=%s)", i, event_type, uid, spool)
-            if (self._suppress_next_dispatch_uid[i] is not None
-                    and uid == self._suppress_next_dispatch_uid[i]):
-                logger.info(
-                    "nfc_gates: gate %d — cache refresh for uid=%s "
-                    "suppressed; no GCode dispatch", i, uid)
-                self._suppress_next_dispatch_uid[i] = None
-            else:
-                if self._spoolman is not None:
-                    if event_type == EVENT_CHANGED and spool is not None:
-                        self._spoolman.update_spool_location(spool, gate)
-                    elif event_type == EVENT_REMOVED and spool is not None:
-                        self._spoolman.clear_spool_location(spool)
-                self._klipper.dispatch(event_type, gate, uid, spool)
-        elif self._debug >= 4:
-            logger.debug("nfc_gates: gate %d — no state change (%r)",
-                         i, self._states[i])
-        if (uid_hex is not None and self._suppress_next_dispatch_uid[i] is not None
-                and uid_hex == self._suppress_next_dispatch_uid[i]):
-            self._suppress_next_dispatch_uid[i] = None
-
-    def _gate_status_line(self, i):
-        state = self._states[i]
-        if self._reader_failed[i]:
-            return "Gate %d: READER FAILED (check wiring)" % i
-        if state.current_spool is not None:
-            return "Gate %d: spool %-6d  UID %s" % (
-                i, state.current_spool, state.current_uid)
-        if state.current_uid is not None:
-            return "Gate %d: tag %s (UID not in Spoolman)" % (
-                i, state.current_uid)
-        return "Gate %d: empty" % i
-
-    def _manual_scan_gate(self, gcmd, i):
-        try:
-            reader = self._readers[i]
-            if hasattr(reader, 'read_target'):
-                target_info = reader.read_target()
-                if target_info is None:
-                    gcmd.respond_info("NFC_GATE[gate%d]: no tag detected" % i)
-                    return
-                gcmd.respond_info(
-                    "NFC_GATE[gate%d]: UID=%s Tg=%s SENS_RES=0x%04X SAK=0x%02X UIDLen=%d"
-                    % (i, target_info['uid'], target_info['target'],
-                       target_info['sens_res'], target_info['sak'],
-                       target_info['uid_length']))
-            else:
-                uid_hex = reader.read_tag()
-                if uid_hex is None:
-                    gcmd.respond_info("NFC_GATE[gate%d]: no tag detected" % i)
-                    return
-                gcmd.respond_info("NFC_GATE[gate%d]: UID=%s" % (i, uid_hex))
-        finally:
-            reader = self._readers[i]
-            if hasattr(reader, '_release_current_target'):
-                reader._release_current_target(reason="manual_scan")
-
-    def _apply_current_spool_gate(self, gcmd, i):
-        """Dispatch the current cached spool for one gate to Happy Hare."""
-        state = self._states[i]
-        if state.current_spool is None:
-            gcmd.respond_info(
-                "NFC_GATE[gate%d]: no cached spool_id to apply; run POLL=1 first"
-                % i)
-            return
-        uid_hex = state.current_uid or ''
-        spool_id = state.current_spool
-        logger.info(
-            "nfc_gates: gate %d — manual apply spool=%s uid=%s",
-            i, spool_id, uid_hex)
-        self._klipper.dispatch(EVENT_CHANGED, i, uid_hex, spool_id)
-        gcmd.respond_info(
-            "NFC_GATE[gate%d]: dispatched cached spool_id=%s to Happy Hare"
-            % (i, spool_id))
-
-    def _clear_spool_cache_gate(self, gcmd, i):
-        """Clear cached spool resolution for one gate without dispatching."""
-        state = self._states[i]
-        old_spool = state.current_spool
-        state.current_spool = None
-        self._suppress_next_dispatch_uid[i] = state.current_uid
-        if self._spoolman is not None:
-            self._spoolman.clear_cache()
-        reader = self._readers[i]
-        if hasattr(reader, '_clear_current_card'):
-            reader._clear_current_card()
-        logger.info(
-            "nfc_gates: gate %d — spool cache cleared "
-            "(uid=%s old_spool=%s); next read will resolve Spoolman again",
-            i, state.current_uid, old_spool)
-        gcmd.respond_info(
-            "NFC_GATE[gate%d]: cleared cached spool_id; no NFC_Manager "
-            "event was dispatched. Next tag read will resolve Spoolman again."
-            % i)
-
-    def _manual_init_gate(self, gcmd, i):
-        self._reader_failed[i] = False
-        try:
-            self._readers[i].init()
-            alive = self._readers[i].is_alive()
-            self._reader_failed[i] = not alive
-            gcmd.respond_info("NFC_GATE[gate%d]: reader %s" %
-                              (i, "OK" if alive else "not responding"))
-        except Exception as e:
-            self._reader_failed[i] = True
-            gcmd.respond_info("NFC_GATE[gate%d]: init failed: %s" % (i, e))
-
-    def _cmd_low_level_debug_gate(self, gcmd, i):
-        if _low_level_requested(gcmd) and self._polling:
-            self._polling = False
-            self.reactor.update_timer(self._poll_timer, self.reactor.NEVER)
-            gcmd.respond_info(
-                "NFC_GATE[gate%d]: polling paused for low-level PN532 debug"
-                % i)
-        try:
-            return _run_low_level_debug(
-                gcmd, self._readers[i], "gate%d" % i,
-                "NFC_GATE GATE=%d" % i,
-                self._low_level_debug)
-        except Exception as e:
-            gcmd.respond_info("NFC_GATE[gate%d]: low-level debug failed: %s" %
-                              (i, e))
-            return True
-
-    def cmd_NFC_GATE(self, gcmd, gate):
-        if gate < 0 or gate >= self._gate_count:
-            gcmd.respond_info("NFC_GATE: invalid gate %s" % gate)
-            return
-
-        if self._cmd_low_level_debug_gate(gcmd, gate):
-            return
-
-        read_value = gcmd.get("READ", None)
-        if read_value is not None:
-            enabled = gcmd.get_int("READ", minval=0, maxval=1) == 1
-            if enabled:
-                self._polling = True
-                self.reactor.update_timer(self._poll_timer, self.reactor.NOW)
-                gcmd.respond_info("NFC_GATE[gate%d]: polling started" % gate)
-            else:
-                self._polling = False
-                self.reactor.update_timer(self._poll_timer, self.reactor.NEVER)
-                gcmd.respond_info("NFC_GATE[gate%d]: polling stop requested" % gate)
-            return
-        if gcmd.get_int("STATUS", 0):
-            gcmd.respond_info("NFC_GATE[gate%d]: %s" %
-                              (gate, self._gate_status_line(gate)))
-            return
-        if gcmd.get_int("INIT", 0):
-            self._manual_init_gate(gcmd, gate)
-            return
-        if gcmd.get_int("SCAN", 0):
-            self._manual_scan_gate(gcmd, gate)
-            return
-        if gcmd.get_int("CLEAR_CACHE", 0):
-            self._clear_spool_cache_gate(gcmd, gate)
-            return
-        if gcmd.get_int("CLEAR", 0):
-            self._clear_spool_cache_gate(gcmd, gate)
-            return
-        if gcmd.get_int("POLL", 0):
-            self._poll_gate(gate)
-            gcmd.respond_info("NFC_GATE[gate%d]: one poll complete; %s" %
-                              (gate, self._gate_status_line(gate)))
-            return
-        if gcmd.get_int("APPLY", 0):
-            self._apply_current_spool_gate(gcmd, gate)
-            return
-
-        lines = [
-            "NFC_GATE GATE=%d commands:" % gate,
-            "  NFC_GATE GATE=%d STATUS=1" % gate,
-            "  NFC_GATE GATE=%d INIT=1" % gate,
-            "  NFC_GATE GATE=%d SCAN=1" % gate,
-            "  NFC_GATE GATE=%d POLL=1" % gate,
-            "  NFC_GATE GATE=%d APPLY=1" % gate,
-            "  NFC_GATE GATE=%d CLEAR_CACHE=1" % gate,
-            "  NFC_GATE GATE=%d READ=1" % gate,
-            "  NFC_GATE GATE=%d READ=0" % gate,
-        ]
-        if self._low_level_debug:
-            lines.extend(_low_level_help_lines(
-                "NFC_GATE GATE=%d" % gate))
-        gcmd.respond_info('\n'.join(lines))
-
-    cmd_NFC_GATE_STATUS_help = (
-        "Report current NFC gate spool assignments (host-side state mirror)")
-
-    def cmd_NFC_GATE_STATUS(self, gcmd):
-        lines = [
-            "NFC gate status — %d gates, poll %.0fs, absent threshold %d:"
-            % (self._gate_count, self._poll_interval, self._absent_threshold)
-        ]
-        for i, state in enumerate(self._states):
-            lines.append("  " + self._gate_status_line(i))
-        gcmd.respond_info('\n'.join(lines))
