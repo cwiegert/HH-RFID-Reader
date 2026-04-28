@@ -2,38 +2,42 @@
 #
 # Scan-and-jog mode helpers for NFCGate.
 
-from .log import logger
+from .log import info_both, logger
 
 
 def manual_jog_scan(gate, gcmd):
     """Start scan-and-jog on demand, matching the automatic trigger path."""
     if gate._failed:
-        gcmd.respond_info(
-            "NFC_GATE[%s]: reader failed — run NFC_GATE GATE=%d INIT=1 first"
-            % (gate._name, gate._gate))
+        msg = ("❌ NFC_GATE[%s]: reader failed — "
+               "run NFC_GATE GATE=%d INIT=1 first"
+               % (gate._name, gate._gate))
+        logger.error(msg)
+        gcmd.respond_info(msg)
         return
     if is_printing(gate):
-        gcmd.respond_info(
-            "NFC_GATE[%s]: print is active — cannot start scan-jog while printing"
-            % gate._name)
+        msg = "🚫 NFC_GATE[%s]: print is active — cannot start scan-jog while printing" % gate._name
+        logger.warning(msg)
+        gcmd.respond_info(msg)
         return
     hh = gate._read_hh_status()
     if hh.present and not hh.idle:
-        gcmd.respond_info(
-            "NFC_GATE[%s]: Happy Hare is busy (action=%s) — "
-            "wait for idle before starting scan-jog"
-            % (gate._name, hh.action))
+        msg = ("⛔ NFC_GATE[%s]: Happy Hare is busy (action=%s) — "
+               "wait for idle before starting scan-jog"
+               % (gate._name, hh.action))
+        logger.warning(msg)
+        gcmd.respond_info(msg)
         return
     if gate.__class__._active_scan_gate is not None:
-        gcmd.respond_info(
-            "NFC_GATE[%s]: gate %d is already scanning — "
-            "only one gate may scan at a time"
-            % (gate._name, gate.__class__._active_scan_gate))
+        msg = ("⛔ NFC_GATE[%s]: gate %d is already scanning — "
+               "only one gate may scan at a time"
+               % (gate._name, gate.__class__._active_scan_gate))
+        logger.warning(msg)
+        gcmd.respond_info(msg)
         return
     if gate._scan_mode:
-        gcmd.respond_info(
-            "NFC_GATE[%s]: scan-jog already in progress for this gate"
-            % gate._name)
+        msg = "⛔ NFC_GATE[%s]: scan-jog already in progress for this gate" % gate._name
+        logger.warning(msg)
+        gcmd.respond_info(msg)
         return
 
     gate.reactor.update_timer(gate._poll_timer, gate.reactor.NEVER)
@@ -131,6 +135,9 @@ def step_event(gate, eventtime):
         tag_found = gate._poll()
     except Exception:
         logger.exception("nfc_gate: [%s] scan step poll error", gate._name)
+        msg = "❌ NFC Gate[%d]: scan poll failed" % gate._gate
+        logger.error(msg)
+        gate._console(msg)
         tag_found = False
 
     if tag_found:
@@ -149,13 +156,20 @@ def step_event(gate, eventtime):
     if now >= gate._scan_next_chunk_time:
         remaining = gate._scan_max_mm - gate._scan_mm_total
         chunk = min(gate._scan_jog_mm, remaining)
+        next_position = gate._scan_mm_total + chunk
+        msg = ("NFC Gate[%d]: moving %.1fmm  scan position %.1f / %.1fmm"
+               % (gate._gate, chunk, next_position, gate._scan_max_mm))
+        logger.info(msg)
+        gate._console(msg)
+        if gate._debug >= 4:
+            logger.debug("NFC Gate[%d]: run_script MMU_TEST_MOVE MOVE=%.2f QUIET=1",
+                         gate._gate, chunk)
         gate._run_jog(chunk)
         gate._scan_mm_total += chunk
         gate._scan_next_chunk_time = now + chunk_interval(gate, chunk)
-        msg = ("NFC Gate[%d] - moved %.1fmm  total %.1fmm / %.1fmm"
-               % (gate._gate, chunk, gate._scan_mm_total, gate._scan_max_mm))
-        logger.info(msg)
-        gate._console(msg)
+        logger.info(
+            "NFC Gate[%d]: move queued %.1fmm  scan position %.1f / %.1fmm",
+            gate._gate, chunk, gate._scan_mm_total, gate._scan_max_mm)
 
     return now + gate._scan_poll_interval
 
@@ -164,7 +178,10 @@ def finish(gate):
     gate._scan_mode = False
     gate.__class__._active_scan_gate = None
     gate._state.miss_count = 0
-    msg = "NFC Gate[%d]: rewinding %.1fmm" % (gate._gate, gate._scan_mm_total)
+    found_msg = "😊 NFC Gate[%d]: tag found" % gate._gate
+    info_both(found_msg)
+    gate._console(found_msg)
+    msg = "⏪ NFC Gate[%d]: rewinding %.1fmm" % (gate._gate, gate._scan_mm_total)
     logger.info(msg)
     gate._console(msg)
     gate._run_rewind()
@@ -173,6 +190,14 @@ def finish(gate):
         event_type, g, uid, spool = gate._scan_found_event
         gate._scan_found_event = None
         gate._klipper.dispatch(event_type, g, uid, spool)
+        if event_type == 'changed' and spool is not None:
+            msg = "✅ NFC Gate[%d]: spool %s assigned" % (g, spool)
+            info_both(msg)
+            gate._console(msg)
+        elif event_type == 'uid_only':
+            msg = "⚠️ NFC Gate[%d]: tag has no Spoolman match" % g
+            logger.warning(msg)
+            gate._console(msg)
     gate._resume_poll_after_rewind()
 
 
@@ -180,7 +205,7 @@ def rewind_and_exit(gate):
     gate._scan_mode = False
     gate.__class__._active_scan_gate = None
     gate._state.miss_count = 0
-    msg = "NFC Gate[%d]: no tag found — rewinding %.1fmm" % (
+    msg = "⚠️ NFC Gate[%d]: no tag found — ⏪ rewinding %.1fmm" % (
         gate._gate, gate._scan_mm_total)
     logger.warning(msg)
     gate._console(msg)
@@ -213,8 +238,6 @@ def run_rewind(gate):
     if gate._scan_mm_total <= 0.0:
         return
     gcode = gate.printer.lookup_object('gcode')
-    #gcode.run_script("MMU_SELECT GATE=%.2f\nMMU_TEST_MOVE MOVE=%.2f QUIET=1\nM400"
-     #                % (gate._gate, -gate._scan_mm_total))
     gcode.run_script("MMU_TEST_MOVE MOVE=%.2f QUIET=1\nM400"
                      % (-gate._scan_mm_total - 50))
     gcode.run_script ("mmu_check_gate")

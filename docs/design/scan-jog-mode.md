@@ -124,7 +124,8 @@ self._scan_timer           = None      # registered only during active scan
 # Scan mode
 self._scan_mode            = False
 self._scan_mm_total        = 0.0       # mm jogged forward so far
-self._scan_next_chunk_time = 0.0       # reactor timestamp when next chunk may fire
+self._scan_next_chunk_time = 0.0       # reactor timestamp when next jog chunk may fire
+self._scan_found_event     = None      # cached event suppressed during jog; dispatched after rewind
 
 # Trigger detection
 self._prev_gate_status     = -1        # -1 = cold start (no 0→1 false trigger)
@@ -162,6 +163,12 @@ def start(gate):
     gate._scan_next_chunk_time = gate.reactor.monotonic()
     gate._hh_seed_spool_id = None     # clear startup seed — scan must re-read
     gate._hh_seed_available = False
+    gate._scan_found_event = None
+
+    # MMU_SELECT prints the gate map on every call — issue it once here
+    # rather than on each jog step.
+    gcode = gate.printer.lookup_object('gcode')
+    gcode.run_script("MMU_SELECT GATE=%d" % gate._gate)
 
     gate._scan_timer = gate.reactor.register_timer(
         gate._scan_step_event,
@@ -175,14 +182,11 @@ def step_event(gate, eventtime):
     if not gate._scan_mode:
         return gate.reactor.NEVER
 
-    now = gate.reactor.monotonic()
-    if now < gate._scan_next_chunk_time:
-        return gate._scan_next_chunk_time
-
     if is_printing(gate):
         gate._rewind_and_exit_scan()
         return gate.reactor.NEVER
 
+    now = gate.reactor.monotonic()
     tag_found = gate._poll()
 
     if tag_found:
@@ -193,15 +197,18 @@ def step_event(gate, eventtime):
         gate._rewind_and_exit_scan()
         return gate.reactor.NEVER
 
-    remaining = gate._scan_max_mm - gate._scan_mm_total
-    chunk = min(gate._scan_jog_mm, remaining)
-    gate._run_jog(chunk)
-    gate._scan_mm_total += chunk
-    gate._scan_next_chunk_time = next_event_time(gate, chunk)
-    return gate._scan_next_chunk_time
+    # Jog only when the previous chunk is estimated complete; poll every tick.
+    if now >= gate._scan_next_chunk_time:
+        remaining = gate._scan_max_mm - gate._scan_mm_total
+        chunk = min(gate._scan_jog_mm, remaining)
+        gate._run_jog(chunk)
+        gate._scan_mm_total += chunk
+        gate._scan_next_chunk_time = now + chunk_interval(gate, chunk)
+
+    return now + gate._scan_poll_interval
 ```
 
-`next_event_time` returns `reactor.monotonic() + max(chunk_interval(gate, chunk), gate._scan_poll_interval)` where `chunk_interval = (abs(mm) / gear_short_move_speed) + scan_settle_time`. This prevents the NFC read from firing before the jog move has physically completed.
+The timer always returns `now + scan_poll_interval` so NFC is polled continuously throughout the scan. Jog chunks are gated by `_scan_next_chunk_time`, which advances by `chunk_interval = (abs(mm) / gear_short_move_speed) + scan_settle_time` after each issue. This decouples read frequency from motor timing — the tag can be detected anywhere in the move, not only after the chunk completes.
 
 ### `finish(gate)` — tag found
 
@@ -211,6 +218,11 @@ def finish(gate):
     gate.__class__._active_scan_gate = None
     gate._state.miss_count = 0
     gate._run_rewind()
+    # Dispatch the spool event that was suppressed while the filament was moving.
+    if gate._scan_found_event is not None:
+        event_type, g, uid, spool = gate._scan_found_event
+        gate._scan_found_event = None
+        gate._klipper.dispatch(event_type, g, uid, spool)
     gate._resume_poll_after_rewind()
 ```
 
@@ -232,14 +244,10 @@ def rewind_and_exit(gate):
 ```python
 def run_jog(gate, mm):
     gcode = gate.printer.lookup_object('gcode')
-    if gate._scan_mm_total == 0.0:
-        gcode.run_script("MMU_SELECT GATE=%d\nMMU_TEST_MOVE MOVE=%.2f QUIET=1"
-                         % (gate._gate, mm))
-    else:
-        gcode.run_script("MMU_TEST_MOVE MOVE=%.2f QUIET=1" % mm)
+    gcode.run_script("MMU_TEST_MOVE MOVE=%.2f QUIET=1" % mm)
 ```
 
-`MMU_SELECT GATE=N` is issued only on the first jog of a scan sequence. Subsequent chunks use `MMU_TEST_MOVE` alone since the gate context is already active. `QUIET=1` suppresses HH console output.
+`MMU_SELECT GATE=N` is issued once in `start()` before the scan timer fires. `run_jog` issues only `MMU_TEST_MOVE` since the gate context is already set. `QUIET=1` suppresses HH console output.
 
 ### `run_rewind(gate)` — rewind primitive
 
@@ -261,7 +269,7 @@ Rewind is dead-reckoning: a negative `MMU_TEST_MOVE` of exactly `scan_mm_total`.
 | Timer | Created | Destroyed | Interval |
 |---|---|---|---|
 | `_poll_timer` | `__init__` (parked at NEVER) | `_handle_disconnect` | `poll_interval` (default 10 s) |
-| `_scan_timer` | `start()` | `step_event()` returns NEVER | `scan_next_chunk_time` |
+| `_scan_timer` | `start()` | `step_event()` returns NEVER | `scan_poll_interval` |
 
 The scan timer is created anew on each scan entry. Returning `reactor.NEVER` from `step_event` parks it permanently. `_scan_mode = False` is the canonical in-flight abort flag.
 
@@ -269,7 +277,9 @@ The scan timer is created anew on each scan entry. Returning `reactor.NEVER` fro
 
 ## GateState Interaction
 
-`step_event` calls `gate._poll()` directly — the same method the poll timer fires. `_poll()` runs the full state machine including Spoolman lookup, `GateState.process_read`, seed suppression, Spoolman location update, and `KlipperInterface.dispatch`. When `_poll()` returns `True` (tag found), `step_event` calls `finish()` immediately.
+`step_event` calls `gate._poll()` directly — the same method the poll timer fires. `_poll()` runs the full state machine including Spoolman lookup and `GateState.process_read`. When `_poll()` returns `True` (tag found), `step_event` calls `finish()` immediately.
+
+**Event dispatch is deferred during scan.** If a spool-changed event fires while `_scan_mode` is True (filament is still moving), `NFC_manager` caches it in `_scan_found_event` instead of dispatching immediately. `finish()` dispatches the cached event after `run_rewind()` returns, so HH and Spoolman receive the notification only after the filament is back at the parked position.
 
 `GateState.miss_count` does **not** increment during scan ticks. `process_read()` receives `scan_mode=True` when called from within scan mode — the miss path is skipped for no-read results. A missed NFC read during a deliberate spool rotation is not an absence event.
 
@@ -277,7 +287,7 @@ The scan timer is created anew on each scan entry. Returning `reactor.NEVER` fro
 
 ## Interaction with `_hh_load_paused`
 
-When `_poll()` identifies a tag during a scan step, the full normal path runs: `GateState.process_read` sets `current_uid` and `current_spool`; `KlipperInterface.dispatch` fires `_NFC_SPOOL_CHANGED`; HH sets `gate_spool_id[N] > 0`. After `finish()` rewinds and resumes the poll timer, the first poll tick sees `_hh_gate_matches_current_spool()` returning True and enters the normal suspended state.
+When `_poll()` identifies a tag during a scan step, `GateState.process_read` sets `current_uid` and `current_spool` but `KlipperInterface.dispatch` is suppressed — the event is cached in `_scan_found_event`. After the rewind completes, `finish()` dispatches `_NFC_SPOOL_CHANGED`; HH sets `gate_spool_id[N] > 0`. When the poll timer resumes, the first tick sees `_hh_gate_matches_current_spool()` returning True and enters the normal suspended state.
 
 ---
 

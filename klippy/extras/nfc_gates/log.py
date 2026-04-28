@@ -370,7 +370,7 @@ def configure_console(printer=None, enabled=None, level=None):
 
 # Thin wrappers kept for call-site compatibility.
 # WARNING and ERROR automatically reach klippy.log via _KlippyForwardHandler.
-# INFO stays in nfc_reader.log only.
+# INFO stays in nfc_reader.log only unless a call site uses info_both().
 
 def log_both(level, msg, *args, **kwargs):
     getattr(logger, level)(msg, *args, **kwargs)
@@ -390,3 +390,16 @@ def error(msg, *args, **kwargs):
 
 # Module-level singleton — imported by every nfc_gate* module.
 logger = _build_logger()
+
+
+def info_both(msg, *args):
+    """Log an INFO event to nfc_reader.log and klippy.log."""
+    logger.info(msg, *args)
+    try:
+        if args:
+            msg = msg % args
+        record = logger.makeRecord(_LOGGER_NAME, logging.INFO, __file__, 0,
+                                   msg, (), None)
+        logging.getLogger().handle(record)
+    except Exception:
+        pass
