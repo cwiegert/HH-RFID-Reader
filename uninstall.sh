@@ -80,6 +80,9 @@ if [ -d "${NFC_CONFIG_DIR}" ]; then
     echo "  Saved: ${BACKUP_DIR}"
     echo "  Delete the backup when you no longer need it:"
     echo "    rm -rf ${BACKUP_DIR}"
+elif [ -e "${NFC_CONFIG_DIR}" ]; then
+    rmdir "${NFC_CONFIG_DIR}" 2>/dev/null && echo "  Removed empty ${NFC_CONFIG_DIR}" \
+        || echo "  WARNING: ${NFC_CONFIG_DIR} exists but is not a directory — remove manually"
 else
     echo "NFC config directory not found — nothing to back up."
 fi
