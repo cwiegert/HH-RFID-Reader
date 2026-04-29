@@ -9,12 +9,14 @@
 Three files, included in this order from `printer.cfg`:
 
 ```ini
-[include NFC/nfc_reader.cfg]    ; base settings — edit this
-[include NFC/nfc_macros.cfg]  ; Happy Hare event macros — edit only if needed
-[include NFC/nfc_reader_hw.cfg]   ; one section per physical gate — edit this
+[include nfc/nfc_reader.cfg]    ; base settings — edit this
+[include nfc/nfc_macros.cfg]    ; Happy Hare event macros — edit only if needed
+[include nfc/nfc_reader_hw.cfg] ; one section per physical gate — edit this
 ```
 
 **How inheritance works:** `nfc_reader.cfg` defines the base `[nfc_gate]` section with all defaults. Each `[nfc_gate laneN]` in `nfc_reader_hw.cfg` inherits every key automatically. Override a key in a lane section only when that lane needs a different value.
+
+This includes hardware keys. `i2c_address` and `i2c_bus` set in the base `[nfc_gate]` section are inherited by all lanes — you only need to specify them per lane if a particular reader uses different hardware.
 
 ---
 
@@ -45,7 +47,7 @@ spoolman_cache_ttl: 300
 [nfc_gate]
 startup_polling:    -1
 startup_poll_delay: 0.0
-poll_interval:      30
+poll_interval:      10
 absent_threshold:   3
 ```
 
@@ -53,8 +55,8 @@ absent_threshold:   3
 |---|---|---|
 | `startup_polling` | `-1` | `-1` = manual start only. `1` = start polling automatically after PN532 init. `0` = explicitly disabled (useful as a lane override). |
 | `startup_poll_delay` | `0.0` | Seconds to wait before the first automatic poll. Stagger this across lanes to avoid simultaneous reads. |
-| `poll_interval` | `30` | Seconds between polls while background polling is active. |
-| `absent_threshold` | `3` | Consecutive missed reads before `_NFC_SPOOL_REMOVED` fires. At 30s interval, default = ~90s before removal. |
+| `poll_interval` | `10` | Seconds between polls while background polling is active. |
+| `absent_threshold` | `3` | Consecutive missed reads before `_NFC_SPOOL_REMOVED` fires. At 10s interval, default = ~30s before removal. |
 
 > [!TIP]
 > For bench testing, use `poll_interval: 5` and `absent_threshold: 1` so state changes fire quickly. Restore production values before a real print run.
@@ -62,19 +64,34 @@ absent_threshold:   3
 **Effective removal time:**
 ```
 poll_interval × absent_threshold = seconds before removal fires
-30 × 3 = 90 seconds  (default)
+10 × 3 = 30 seconds  (default)
 ```
 
 ---
 
-### PN532 I2C Address
+### PN532 I2C Hardware
 
 ```ini
 [nfc_gate]
 i2c_address: 36
+i2c_bus:     i2c3_PB3_PB4
 ```
 
-Decimal address of the PN532 module. Default `0x24` = decimal `36`. Only change this if you set the PN532 address pads (A0/A1). For the per-lane design, every PN532 is on its own bus so all can stay at the default.
+These keys in the base `[nfc_gate]` section are inherited by every `[nfc_gate laneN]`. Set them once here; lane sections only need to specify them if a particular reader differs from the rest.
+
+| Setting | Default | Description |
+|---|---|---|
+| `i2c_address` | `36` (`0x24`) | PN532 I2C address as a decimal integer. Only change if you moved the PN532 address pads (A0/A1). All readers on separate buses can stay at the default. |
+| `i2c_bus` | _(none)_ | Hardware I2C bus identifier on the lane MCU. Must be set in the base section or overridden per lane. |
+
+**Common bus names:**
+
+| Board / wiring | `i2c_bus` value |
+|---|---|
+| EBB42 v1.x (PB3/PB4) | `i2c3_PB3_PB4` |
+| SLB (PB10/PB11) | `i2c2_PB10_PB11` |
+
+**I2C address pad table** (change only if using multiple readers on one bus with a multiplexer):
 
 | Pad setting (A1/A0) | Decimal | Hex |
 |---|:---:|:---:|
@@ -152,31 +169,31 @@ See [Commands & Macros](klipper-functions.md#expert-low-level-debug-commands) an
 
 ## `nfc_reader_hw.cfg` — Lane Hardware
 
-One `[nfc_gate laneN]` section per physical gate:
+One `[nfc_gate laneN]` section per physical gate. Most lanes only need two lines:
 
 ```ini
 [nfc_gate lane0]
-mmu_gate:   0
-i2c_mcu:    lane0
-i2c_bus:    i2c3_PB3_PB4
+mmu_gate:  0
+i2c_mcu:   lane0
 ```
+
+`i2c_address` and `i2c_bus` are inherited from the base `[nfc_gate]` section in `nfc_reader.cfg` and do not need to be repeated here unless a specific lane uses different hardware.
 
 | Key | Required | Description |
 |---|:---:|---|
 | `mmu_gate` | Yes | Happy Hare gate number (0-based integer). Gate 0 = first MMU gate. |
 | `i2c_mcu` | Yes | Klipper MCU name. Must exactly match an `[mcu laneN]` section in your config. |
-| `i2c_bus` | Yes | Hardware I2C bus on that MCU. For PB3/PB4 on EBB42: `i2c3_PB3_PB4`. |
+| `i2c_bus` | — | Override the base `[nfc_gate]` bus for this lane only. Omit when all readers share the same bus pin. |
+| `i2c_address` | — | Override the base address for this lane only. Omit when all readers are at the default `0x24`. |
 
-Any `nfc_reader.cfg` key can be overridden per lane. Example — verbose logging and auto-polling on one lane only:
+Any other `nfc_reader.cfg` key can also be overridden per lane. Example — delayed startup and extra logging on one lane only:
 
 ```ini
 [nfc_gate lane2]
 mmu_gate:           2
 i2c_mcu:            lane2
-i2c_bus:            i2c3_PB3_PB4
-debug:              2
-startup_polling:    1
 startup_poll_delay: 4.0
+debug:              3
 ```
 
 ---
