@@ -46,11 +46,6 @@ The UID prints in the console.
 **From a phone:**
 Any NFC reader app on Android or iOS can read the UID. The UID is factory-programmed and identical regardless of which reader reads it.
 
-**From the standalone Pi scanner:**
-```bash
-python3 ~/pn532_scan.py
-```
-
 ---
 
 ## Step 3 — Register the Tag in Spoolman

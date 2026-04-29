@@ -20,7 +20,6 @@ The installer creates **symlinks** — it does not copy Python files into the Kl
 ~/printer_data/config/NFC/nfc_vars.cfg
 ~/printer_data/config/NFC/nfc_macros.cfg
 ~/printer_data/config/NFC/pn532_i2C.cfg
-~/pn532_scan.py                        →  standalone tag scanner tool
 ```
 
 Config files use a non-destructive merge: if a section already exists in your file, it is left alone. Only missing sections are appended.
@@ -175,7 +174,7 @@ The uninstaller:
 
 1. Removes the `nfc_gate.py` symlink from Klipper extras
 2. Removes the `nfc_gates/` symlink from Klipper extras
-3. Removes `~/pn532_scan.py`
+3. Removes legacy `~/pn532_scan.py` if an older installer placed it there
 4. Moves `~/printer_data/config/NFC/` to `NFC_removed_<timestamp>/` (your config is preserved, not deleted)
 5. Restarts Klipper
 
@@ -197,19 +196,6 @@ Delete the config backup when you no longer need it:
 ```bash
 rm -rf ~/printer_data/config/NFC_removed_*
 ```
-
----
-
-## Standalone PN532 Scanner
-
-The installer places `~/pn532_scan.py` on the Pi — a host-side tool for testing a PN532 wired directly to the Pi's GPIO I2C pins. Klipper does not need to be running.
-
-```bash
-python3 ~/pn532_scan.py --scan-bus    # find a PN532 on any I2C bus
-python3 ~/pn532_scan.py               # read tags continuously
-```
-
-Useful for confirming a PN532 is alive before wiring it to a lane MCU.
 
 ---
 
