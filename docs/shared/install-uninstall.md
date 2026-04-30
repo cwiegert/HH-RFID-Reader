@@ -61,9 +61,9 @@ The installer prints what it creates. If it cannot find the Klipper extras direc
 Open `~/printer_data/config/printer.cfg` and add these three lines **in this exact order**:
 
 ```ini
-[include NFC/nfc_reader.cfg]
-[include NFC/nfc_macros.cfg]
-[include NFC/nfc_reader_hw.cfg]
+[include nfc/nfc_reader.cfg]
+[include nfc/nfc_macros.cfg]
+[include nfc/nfc_reader_hw.cfg]
 ```
 
 Order is required. `nfc_reader.cfg` defines the base `[nfc_gate]` section that each lane section inherits from. Including the lane file first causes a Klipper startup error.
