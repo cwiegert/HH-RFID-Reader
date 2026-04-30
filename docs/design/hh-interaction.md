@@ -38,7 +38,7 @@ class HHGateStatus:
     @property idle:       action == 'idle'
 ```
 
-Usage in `NFC_manager.py`:
+Usage in `nfc_manager.py`:
 
 ```python
 def _read_hh_status(self, eventtime=None):
@@ -156,11 +156,11 @@ if hh.assigned:
             self._hh_confirmed_spool  = hh.spool
 ```
 
-When the Spoolman reverse-lookup succeeds: the gate goes directly to the "suspended" state on the first `_poll()` cycle. `NFC_GATE_STATUS` shows the correct UID immediately, before any physical scan.
+When the Spoolman reverse-lookup succeeds: the gate goes directly to the "suspended" state on the first `_poll()` cycle. `NFC_STATUS` shows the correct UID immediately, before any physical scan.
 
 When the Spoolman lookup fails (no UID in Spoolman, or Spoolman not configured): only `_hh_seed_spool_id` is set. Polling proceeds normally. On the first physical scan that resolves to the seeded spool, the dispatch is suppressed (HH already knows).
 
-**`NFC_HH_SYNC_CACHE` macro** is a user-callable re-sync path — it calls `NFC_GATE GATE=n HH_SYNC=1 SPOOL_ID=<n>` for each lane, which sets `_hh_seed_spool_id` only (no Spoolman reverse-lookup, no state pre-population). Its comment says: "startup seeding happens automatically in Python (`_delayed_init`). This macro exists for user-triggered re-sync and for cases where the Python seed failed."
+**`NFC_HH_SYNC_CACHE` macro** is a user-callable re-sync path — it calls `NFC GATE=n HH_SYNC=1 SPOOL_ID=<n>` for each lane, which sets `_hh_seed_spool_id` only (no Spoolman reverse-lookup, no state pre-population). Its comment says: "startup seeding happens automatically in Python (`_delayed_init`). This macro exists for user-triggered re-sync and for cases where the Python seed failed."
 
 ---
 

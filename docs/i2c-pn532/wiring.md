@@ -85,7 +85,7 @@ If your breakout board has address selection pads (usually labeled A0/A1, separa
 | 1 | 0 | `0x26` |
 | 1 | 1 | `0x27` |
 
-The address is set in `nfc_vars.cfg`:
+The address is set in `nfc_reader.cfg`:
 
 ```ini
 [nfc_gate]
@@ -142,11 +142,11 @@ Follow this sequence to avoid chasing phantom failures:
 4. Connect VCC and GND
 5. Connect SDA and SCL
 6. Restart Klipper
-7. Run `NFC_GATE GATE=0 INIT=1`
-8. If INIT passes, run `NFC_GATE GATE=0 SCAN=1` with a tag nearby
+7. Run `NFC GATE=0 INIT=1`
+8. If INIT passes, run `NFC GATE=0 SCAN=1` with a tag nearby
 
 If the BME280 breaks only after the PN532 is connected, the fault is physical — mode selection, swapped SDA/SCL, or pull-up interaction. It is not a Spoolman or Happy Hare issue.
 
 ---
 
-*Copyright (C) 2026 WoodWorker. Licensed under [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/) — see [LICENSE](../../LICENSE).*
+*Copyright (C) 2026 WoodWorker. Licensed under [GPL-3.0-or-later](https://www.gnu.org/licenses/gpl-3.0.html) — see [LICENSE](../../LICENSE).*

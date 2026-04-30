@@ -9,12 +9,12 @@
 Three config files, included in this order from `printer.cfg`:
 
 ```
-[include NFC/nfc_vars.cfg]    → NFCGateDefaults  — base [nfc_gate] section
+[include NFC/nfc_reader.cfg]    → NFCGateDefaults  — base [nfc_gate] section
 [include NFC/nfc_macros.cfg]  → GCode macros only (no Python objects)
-[include NFC/pn532_i2C.cfg]   → NFCGate × N     — one [nfc_gate laneN] per lane
+[include NFC/nfc_reader_hw.cfg]   → NFCGate × N     — one [nfc_gate laneN] per lane
 ```
 
-Klipper processes `[include]` directives in order. By the time `pn532_i2C.cfg` is parsed, the `NFCGateDefaults` object for `[nfc_gate]` already exists and is retrievable via `printer.lookup_object('nfc_gate')`.
+Klipper processes `[include]` directives in order. By the time `nfc_reader_hw.cfg` is parsed, the `NFCGateDefaults` object for `[nfc_gate]` already exists and is retrievable via `printer.lookup_object('nfc_gate')`.
 
 ---
 
@@ -52,7 +52,7 @@ def load_config_prefix(config):
     return gate
 ```
 
-`load_config` fires for exactly the bare `[nfc_gate]` section. `load_config_prefix` fires for every `[nfc_gate <anything>]` section. `_lane_instances` is a module-level list shared across all lanes; it powers `NFC_GATE_STATUS`.
+`load_config` fires for exactly the bare `[nfc_gate]` section. `load_config_prefix` fires for every `[nfc_gate <anything>]` section. `_lane_instances` is a module-level list shared across all lanes; it powers `NFC_STATUS`.
 
 `_current_printer` tracks which Printer object owns the current `_lane_instances` contents. A new Printer is created on every Klipper RESTART, so when `printer is not _current_printer`, stale entries from the previous session are cleared.
 
@@ -85,7 +85,7 @@ All parameters are defined in `NFCGateDefaults` (from `[nfc_gate]`) and overrida
 
 ### Spoolman
 
-| Parameter | Python fallback | Shipped `nfc_vars.cfg` | Type | Bounds |
+| Parameter | Python fallback | Shipped `nfc_reader.cfg` | Type | Bounds |
 |---|---|---|---|---|
 | `spoolman_url` | `''` | `auto` | str | — |
 | `moonraker_url` | `http://127.0.0.1:7125` | _(not set)_ | str | — |
@@ -93,7 +93,7 @@ All parameters are defined in `NFCGateDefaults` (from `[nfc_gate]`) and overrida
 | `spoolman_timeout` | `5.0` | `5.0` | float | 0.5–30.0 |
 | `spoolman_cache_ttl` | `300.0` | `300` | float | 0–3600 |
 
-`spoolman_rfid_key`: The Python fallback is `'rfid'` but the shipped `nfc_vars.cfg` explicitly sets `rfid_tag`. The field name in Spoolman **must match exactly** — case-sensitive.
+`spoolman_rfid_key`: The Python fallback is `'rfid'` but the shipped `nfc_reader.cfg` explicitly sets `rfid_tag`. The field name in Spoolman **must match exactly** — case-sensitive.
 
 `spoolman_url: auto` causes `SpoolmanClient` to query Moonraker's `/server/config` endpoint the first time a tag lookup is needed. The discovered URL is cached after the first successful query.
 
@@ -101,14 +101,14 @@ If `spoolman_url` is left empty, `self._spoolman = None`. Tags are still read; e
 
 ### Polling
 
-| Parameter | Python fallback | Shipped `nfc_vars.cfg` | Type | Bounds |
+| Parameter | Python fallback | Shipped `nfc_reader.cfg` | Type | Bounds |
 |---|---|---|---|---|
 | `startup_polling` | `-1` | `1` | int | -1, 0, 1 |
 | `startup_poll_delay` | `0.0` | `0.0` | float | 0–3600 |
 | `poll_interval` | `30.0` | `10` | float | 1–3600 |
 | `absent_threshold` | `3` | `3` | int | 1–255 |
 
-`startup_polling = -1`: polling only starts when `NFC_GATE GATE=n READ=1` is issued manually.
+`startup_polling = -1`: polling only starts when `NFC GATE=n READ=1` is issued manually.
 `startup_polling = 1`: `_delayed_init` arms the poll timer after PN532 init succeeds, delayed by `startup_poll_delay`.
 `startup_poll_delay`: stagger per-lane startup. With 4 lanes and delays of 0, 2, 4, 6 seconds, init and first polls spread across 6 seconds rather than all firing simultaneously.
 
@@ -140,19 +140,20 @@ Both integer and string spellings are accepted for `console_log_level` (e.g. `co
 
 ### Scan-and-Jog
 
-| Parameter | Python fallback | Shipped `nfc_vars.cfg` | Type | Bounds |
+| Parameter | Python fallback | Shipped `nfc_reader.cfg` | Type | Bounds |
 |---|---|---|---|---|
 | `scan_enabled` | `True` | `True` | bool | — |
 | `scan_jog_mm` | `50.0` | `25.0` | float | 1.0–500.0 |
-| `scan_max_mm` | `600.0` | `600` | float | 10.0–5000.0 |
 | `scan_poll_interval` | `0.1` | `0.1` | float | 0.1–5.0 |
-| `scan_settle_time` | `0.02` | `0.02` | float | 0.0–1.0 |
+
+The scan max distance is derived at scan start from Happy Hare's saved
+`mmu_calibration_bowden_lengths` value in `mmu_vars.cfg`, indexed by MMU gate.
 
 ---
 
 ## Per-Lane Override Example
 
-Any key from `nfc_vars.cfg` can be overridden in a lane section:
+Any key from `nfc_reader.cfg` can be overridden in a lane section:
 
 ```ini
 [nfc_gate lane2]
@@ -172,7 +173,7 @@ Only keys explicitly listed in the lane section take effect. All others inherit 
 
 ### Shared instance (base `[nfc_gate]` section present)
 
-When `nfc_vars.cfg` includes a base `[nfc_gate]` section, `NFCGateDefaults.__init__` creates the single `SpoolmanClient` and stores it on `self._spoolman`. Each `NFCGate` then receives this shared instance:
+When `nfc_reader.cfg` includes a base `[nfc_gate]` section, `NFCGateDefaults.__init__` creates the single `SpoolmanClient` and stores it on `self._spoolman`. Each `NFCGate` then receives this shared instance:
 
 ```python
 # NFCGate.__init__ when defaults is not None:

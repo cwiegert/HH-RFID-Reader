@@ -27,7 +27,7 @@ Before registering any tags, Spoolman needs to know the `rfid_tag` field exists.
 5. Save
 
 > [!IMPORTANT]
-> The field name must exactly match `spoolman_rfid_key` in `nfc_vars.cfg`. Both default to `rfid_tag`. If you use a different name, change both places.
+> The field name must exactly match `spoolman_rfid_key` in `nfc_reader.cfg`. Both default to `rfid_tag`. If you use a different name, change both places.
 
 ---
 
@@ -39,17 +39,12 @@ You need the UID of each NFC tag before you can register it. There are a few way
 
 Hold the tag near the reader and run:
 ```gcode
-NFC_GATE GATE=0 SCAN=1
+NFC GATE=0 SCAN=1
 ```
 The UID prints in the console.
 
 **From a phone:**
 Any NFC reader app on Android or iOS can read the UID. The UID is factory-programmed and identical regardless of which reader reads it.
-
-**From the standalone Pi scanner:**
-```bash
-python3 ~/pn532_scan.py
-```
 
 ---
 
@@ -77,7 +72,7 @@ The system normalizes everything to uppercase hex before comparing.
 With the registered spool loaded on a gate, run a full poll:
 
 ```gcode
-NFC_GATE GATE=0 POLL=1
+NFC GATE=0 POLL=1
 ```
 
 **Success:**
@@ -150,8 +145,8 @@ console_output:    True
 console_log_level: info
 ```
 
-Restart Klipper, then run `NFC_GATE GATE=0 POLL=1`.
+Restart Klipper, then run `NFC GATE=0 POLL=1`.
 
 ---
 
-*Copyright (C) 2026 WoodWorker. Licensed under [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/) — see [LICENSE](../../LICENSE).*
+*Copyright (C) 2026 WoodWorker. Licensed under [GPL-3.0-or-later](https://www.gnu.org/licenses/gpl-3.0.html) — see [LICENSE](../../LICENSE).*

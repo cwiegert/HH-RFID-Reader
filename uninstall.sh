@@ -7,7 +7,7 @@
 #   2. Removes ~/klipper/klippy/extras/nfc_gates    (symlink to package dir)
 #   3. Removes ~/klipper/klippy/extras/nfc_gates.py (flat file, if present
 #      from a previous install)
-#   4. Backs up ~/printer_data/config/NFC/ to NFC_removed_<timestamp>/
+#   4. Backs up ~/printer_data/config/nfc/ to NFC_removed_<timestamp>/
 #   5. Restarts Klipper
 #
 # What you must do manually afterward:
@@ -25,7 +25,7 @@ set -e
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 KLIPPER_EXTRAS="${HOME}/klipper/klippy/extras"
 PRINTER_CONFIG="${HOME}/printer_data/config"
-NFC_CONFIG_DIR="${PRINTER_CONFIG}/NFC"
+NFC_CONFIG_DIR="${PRINTER_CONFIG}/nfc"
 TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
 
 echo ""
@@ -80,6 +80,9 @@ if [ -d "${NFC_CONFIG_DIR}" ]; then
     echo "  Saved: ${BACKUP_DIR}"
     echo "  Delete the backup when you no longer need it:"
     echo "    rm -rf ${BACKUP_DIR}"
+elif [ -e "${NFC_CONFIG_DIR}" ]; then
+    rmdir "${NFC_CONFIG_DIR}" 2>/dev/null && echo "  Removed empty ${NFC_CONFIG_DIR}" \
+        || echo "  WARNING: ${NFC_CONFIG_DIR} exists but is not a directory — remove manually"
 else
     echo "NFC config directory not found — nothing to back up."
 fi
@@ -99,9 +102,9 @@ echo ""
 echo "Done. Two manual steps remain:"
 echo ""
 echo "  1. Remove the NFC include lines from printer.cfg:"
-echo "       [include NFC/nfc_vars.cfg]"
+echo "       [include NFC/nfc_reader.cfg]"
 echo "       [include NFC/nfc_macros.cfg]"
-echo "       [include NFC/pn532_i2C.cfg]"
+echo "       [include NFC/nfc_reader_hw.cfg]"
 echo "     If you have older experimental SPI/Pico include lines, remove those too."
 echo ""
 echo "  2. Remove the update manager block from moonraker.conf:"

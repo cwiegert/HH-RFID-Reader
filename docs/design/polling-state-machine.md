@@ -265,7 +265,7 @@ if hh.assigned:
             self._hh_confirmed_spool  = hh.spool
 ```
 
-**Path 1: Spoolman configured and returns a UID** — `current_uid`, `current_spool`, and `_hh_confirmed_spool` are all pre-populated. On the first `_poll()`, both suspend conditions are immediately met. `NFC_GATE_STATUS` shows the correct UID before any physical scan.
+**Path 1: Spoolman configured and returns a UID** — `current_uid`, `current_spool`, and `_hh_confirmed_spool` are all pre-populated. On the first `_poll()`, both suspend conditions are immediately met. `NFC_STATUS` shows the correct UID before any physical scan.
 
 **Path 2: Spoolman returns no UID, or Spoolman not configured** — only `_hh_seed_spool_id` and `_hh_seed_available` are set. Polling proceeds normally. On the first physical scan that resolves to the seeded spool:
 - `_hh_seed_available == True` → suppress `EVENT_CHANGED` dispatch (HH already knows)
@@ -273,13 +273,13 @@ if hh.assigned:
 
 The seed (`_hh_seed_spool_id`) is always cleared after the first `EVENT_CHANGED` poll regardless of match — one-shot.
 
-**`NFC_HH_SYNC_CACHE` macro** is a user-callable re-sync path. It issues `NFC_GATE GATE=n HH_SYNC=1 SPOOL_ID=<n>` for each lane, which sets `_hh_seed_spool_id` only. No Spoolman reverse-lookup, no state pre-population. Useful when the automatic seed failed because HH wasn't initialized yet at `_delayed_init` time.
+**`NFC_HH_SYNC_CACHE` macro** is a user-callable re-sync path. It issues `NFC GATE=n HH_SYNC=1 SPOOL_ID=<n>` for each lane, which sets `_hh_seed_spool_id` only. No Spoolman reverse-lookup, no state pre-population. Useful when the automatic seed failed because HH wasn't initialized yet at `_delayed_init` time.
 
 ---
 
 ## CLEAR_CACHE Behavior
 
-`NFC_GATE GATE=n CLEAR_CACHE=1` clears the Spoolman TTL cache and resets `current_spool` to force a fresh lookup on the next poll.
+`NFC GATE=n CLEAR_CACHE=1` clears the Spoolman TTL cache and resets `current_spool` to force a fresh lookup on the next poll.
 
 What it does:
 1. Sets `_state.current_spool = None` (keeps `current_uid`)

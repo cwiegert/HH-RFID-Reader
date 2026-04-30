@@ -428,11 +428,11 @@ def read_config_value(paths, section_name, key):
 
 
 def spoolman_config_paths():
-    """Return likely nfc_vars.cfg locations for repo and installed use."""
+    """Return likely nfc_reader.cfg locations for repo and installed use."""
     script_path = Path(__file__).resolve()
     return [
-        script_path.parents[1] / 'config' / 'nfc_vars.cfg',
-        Path.home() / 'printer_data' / 'config' / 'NFC' / 'nfc_vars.cfg',
+        script_path.parents[1] / 'config' / 'nfc_reader.cfg',
+        Path.home() / 'printer_data' / 'config' / 'NFC' / 'nfc_reader.cfg',
     ]
 
 
@@ -547,7 +547,7 @@ def main():
     parser.add_argument('--once',     action='store_true',
                         help='Exit after first tag read')
     parser.add_argument('--spoolman-url', default=default_spoolman_url,
-                        help='Spoolman base URL (default: value from config/nfc_vars.cfg)')
+                        help='Spoolman base URL (default: value from config/nfc_reader.cfg)')
     parser.add_argument('--rfid-key', default=default_rfid_key,
                         help='Spoolman extra-field key containing the UID')
     parser.add_argument('--spoolman-timeout', type=float, default=5.0,

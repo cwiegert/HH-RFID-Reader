@@ -9,7 +9,7 @@
 #        nfc_gate.py   — entry point for [nfc_gate laneN]
 #        nfc_gates/    — shared implementation package
 #
-#   2. Installs config files into ~/printer_data/config/NFC/ using a
+#   2. Installs config files into ~/printer_data/config/nfc/ using a
 #      non-destructive merge strategy:
 #        - If a file does not exist yet, it is copied from the repo template.
 #        - If a file already exists, only sections that are present in the
@@ -27,7 +27,7 @@ set -e
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 KLIPPER_EXTRAS="${HOME}/klipper/klippy/extras"
 PRINTER_CONFIG="${HOME}/printer_data/config"
-NFC_CONFIG_DIR="${PRINTER_CONFIG}/NFC"
+NFC_CONFIG_DIR="${PRINTER_CONFIG}/nfc"
 
 # ── Verify Klipper is present ─────────────────────────────────────────────────
 if [ ! -d "${KLIPPER_EXTRAS}" ]; then
@@ -67,6 +67,11 @@ echo "Linking nfc_gates/ package..."
 ln -sfn "${REPO_DIR}/klippy/extras/nfc_gates" "${KLIPPER_EXTRAS}/nfc_gates"
 
 # ── Create NFC config directory if it does not exist ─────────────────────────
+if [ -e "${NFC_CONFIG_DIR}" ] && [ ! -d "${NFC_CONFIG_DIR}" ]; then
+    echo "ERROR: ${NFC_CONFIG_DIR} exists but is not a directory."
+    echo "       Remove or rename it, then re-run install.sh."
+    exit 1
+fi
 mkdir -p "${NFC_CONFIG_DIR}"
 
 # ── Merge helper — copy file or append missing sections ──────────────────────
@@ -166,11 +171,11 @@ if not appended:
 PYEOF
 }
 
-# ── nfc_vars.cfg migrations ──────────────────────────────────────────────────
+# ── nfc_reader.cfg migrations ──────────────────────────────────────────────────
 #
 # merge_config intentionally does not overwrite existing sections.  When a key
 # is removed or added inside [nfc_gate], handle that as a small migration here.
-migrate_nfc_vars() {
+migrate_nfc_reader() {
     local dst="$1"
     local name
     name="$(basename "${dst}")"
@@ -192,10 +197,10 @@ with open(path) as f:
 changed = False
 out = []
 removed_scan_interval = False
+removed_scan_max_mm = False
+removed_scan_settle_time = False
 has_scan_poll_interval = any(
     re.match(r'^\s*scan_poll_interval\s*:', line) for line in lines)
-has_scan_settle_time = any(
-    re.match(r'^\s*scan_settle_time\s*:', line) for line in lines)
 
 old_scan_interval_comment = (
     'Seconds between NFC read attempts during scan mode',
@@ -215,6 +220,23 @@ for line in lines:
         removed_scan_interval = True
         changed = True
         continue
+    if re.match(r'^\s*scan_max_mm\s*:', line):
+        while out and out[-1].lstrip().startswith('#') and (
+                'Maximum total advance' in out[-1]
+                or 'one full spool rotation' in out[-1]):
+            out.pop()
+        removed_scan_max_mm = True
+        changed = True
+        continue
+    if re.match(r'^\s*scan_settle_time\s*:', line):
+        while out and out[-1].lstrip().startswith('#') and (
+                'Extra seconds to wait' in out[-1]
+                or 'Lower values reduce time between jogs' in out[-1]
+                or 'MCU needs more time to settle' in out[-1]):
+            out.pop()
+        removed_scan_settle_time = True
+        changed = True
+        continue
     out.append(line)
 
 if not has_scan_poll_interval:
@@ -222,31 +244,12 @@ if not has_scan_poll_interval:
         '\n',
         '# Seconds between NFC read attempts while scan-jog is active.  Jog chunk cadence\n',
         '# is calculated automatically from scan_jog_mm / Happy Hare gear_short_move_speed\n',
-        '# plus scan_settle_time, so there is no manual move interval to tune.\n',
+        '# so there is no manual move interval to tune.\n',
         'scan_poll_interval:  0.1\n',
     ]
     inserted = False
     for i, line in enumerate(out):
-        if re.match(r'^\s*scan_max_mm\s*:', line):
-            out[i + 1:i + 1] = insert
-            inserted = True
-            changed = True
-            break
-    if not inserted:
-        out.extend(insert)
-        changed = True
-
-if not has_scan_settle_time:
-    insert = [
-        '\n',
-        '# Extra seconds to wait after each scan jog chunk before reading NFC and issuing\n',
-        '# the next chunk.  Lower values reduce time between jogs; raise only if the lane\n',
-        '# MCU needs more time to settle after motion.\n',
-        'scan_settle_time:    0.02\n',
-    ]
-    inserted = False
-    for i, line in enumerate(out):
-        if re.match(r'^\s*scan_poll_interval\s*:', line):
+        if re.match(r'^\s*scan_jog_mm\s*:', line):
             out[i + 1:i + 1] = insert
             inserted = True
             changed = True
@@ -260,10 +263,12 @@ if changed:
         f.writelines(out)
     if removed_scan_interval:
         print('    [migrate] removed deprecated scan_interval from {}'.format(path))
+    if removed_scan_max_mm:
+        print('    [migrate] removed scan_max_mm from {}'.format(path))
+    if removed_scan_settle_time:
+        print('    [migrate] removed scan_settle_time from {}'.format(path))
     if not has_scan_poll_interval:
         print('    [migrate] added scan_poll_interval to {}'.format(path))
-    if not has_scan_settle_time:
-        print('    [migrate] added scan_settle_time to {}'.format(path))
 PYEOF
 }
 
@@ -272,17 +277,38 @@ echo ""
 echo "Installing config files to ${NFC_CONFIG_DIR}/..."
 echo ""
 
-merge_config "${REPO_DIR}/config/nfc_vars.cfg"   "${NFC_CONFIG_DIR}/nfc_vars.cfg"
-migrate_nfc_vars "${NFC_CONFIG_DIR}/nfc_vars.cfg"
+merge_config "${REPO_DIR}/config/nfc_reader.cfg"   "${NFC_CONFIG_DIR}/nfc_reader.cfg"
+migrate_nfc_reader "${NFC_CONFIG_DIR}/nfc_reader.cfg"
 merge_config "${REPO_DIR}/config/nfc_macros.cfg" "${NFC_CONFIG_DIR}/nfc_macros.cfg"
-merge_config "${REPO_DIR}/config/pn532_i2C.cfg"  "${NFC_CONFIG_DIR}/pn532_i2C.cfg"
+merge_config "${REPO_DIR}/config/nfc_reader_hw.cfg"  "${NFC_CONFIG_DIR}/nfc_reader_hw.cfg"
 
-# ── Install standalone scanner ────────────────────────────────────────────────
-TOOLS_DST="${HOME}/pn532_scan.py"
-echo "Installing standalone scanner to ${TOOLS_DST}..."
-cp "${REPO_DIR}/tools/pn532_scan.py" "${TOOLS_DST}"
-chmod +x "${TOOLS_DST}"
-echo "  [copied]   pn532_scan.py"
+# ── Moonraker update_manager ──────────────────────────────────────────────────
+#
+# Append [update_manager emu_nfc_reader] to moonraker.conf if not already present.
+# The section is identical every install so idempotency is a simple grep check.
+#
+MOONRAKER_CONF="${PRINTER_CONFIG}/moonraker.conf"
+MOONRAKER_SECTION="[update_manager emu_nfc_reader]"
+
+if [ ! -f "${MOONRAKER_CONF}" ]; then
+    echo "  [skip]   moonraker.conf not found at ${MOONRAKER_CONF} — add update_manager manually"
+elif grep -qF "${MOONRAKER_SECTION}" "${MOONRAKER_CONF}"; then
+    echo "  [skip]   moonraker.conf already has ${MOONRAKER_SECTION}"
+else
+    ORIGIN="$(git -C "${REPO_DIR}" remote get-url origin 2>/dev/null || echo 'https://github.com/YOUR_USERNAME/NFC-Reader.git')"
+    cat >> "${MOONRAKER_CONF}" <<MOONRAKER
+
+${MOONRAKER_SECTION}
+type:             git_repo
+path:             ${REPO_DIR}
+origin:           ${ORIGIN}
+primary_branch:   main
+managed_services: klipper
+install_script:   install.sh
+info_tags:        desc=EMU NFC Gate Reader for Happy Hare
+MOONRAKER
+    echo "  [added]  ${MOONRAKER_SECTION} → ${MOONRAKER_CONF}"
+fi
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo ""
@@ -292,33 +318,26 @@ echo "  Python extras (symlinked — auto-updates with git pull):"
 echo "    ${KLIPPER_EXTRAS}/nfc_gate.py  ->  ${REPO_DIR}/klippy/extras/nfc_gate.py"
 echo "    ${KLIPPER_EXTRAS}/nfc_gates    ->  ${REPO_DIR}/klippy/extras/nfc_gates/"
 echo ""
-echo "  Standalone scanner:"
-echo "    ${TOOLS_DST}"
-echo ""
 echo "  Config files in ${NFC_CONFIG_DIR}/:"
-echo "    nfc_vars.cfg   ← user settings (Spoolman URL, poll interval, debug)"
+echo "    nfc_reader.cfg   ← user settings (Spoolman URL, poll interval, debug)"
 echo "    nfc_macros.cfg ← Happy Hare handoff macros"
-echo "    pn532_i2C.cfg  ← PN532 over I2C on lane boards"
+echo "    nfc_reader_hw.cfg  ← hardware layout (one [nfc_gate laneN] per physical reader)"
 echo ""
 echo "Next steps (first install only):"
 echo ""
-echo "  1. Edit ~/printer_data/config/NFC/nfc_vars.cfg"
+echo "  1. Edit ~/printer_data/config/nfc/nfc_reader.cfg"
 echo "     Set spoolman_url to auto or to your Spoolman instance URL."
 echo ""
 echo "  2. Add includes to printer.cfg:"
-echo "       [include NFC/nfc_vars.cfg]"
-echo "       [include NFC/nfc_macros.cfg]"
-echo "       [include NFC/pn532_i2C.cfg]"
+echo "       [include nfc/nfc_reader.cfg]"
+echo "       [include nfc/nfc_macros.cfg]"
+echo "       [include nfc/nfc_reader_hw.cfg]"
 echo ""
 echo "  3. Restart Klipper:"
 echo "     sudo systemctl restart klipper"
 echo ""
 echo "  4. Update and flash Klipper on each lane MCU / EBB42 board used by NFC."
 echo ""
-echo "  5. Add the Moonraker update manager entry to moonraker.conf"
-echo "     (see Readme.md for the block to paste in)"
-echo ""
-echo "  To test a PN532 wired directly to this Pi's GPIO I2C pins:"
-echo "     python3 ~/pn532_scan.py --scan-bus"
-echo "     python3 ~/pn532_scan.py"
+echo "  5. Moonraker update_manager — added automatically by this script."
+echo "     If moonraker.conf was not found, add [update_manager emu_nfc_reader] manually."
 echo ""

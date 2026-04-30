@@ -29,7 +29,7 @@ If the physical spool was swapped while Klipper was down, the resolved spool_id 
 
 ```
 ✅ NFC[lane0]: reader ready.  HH seed: spool_id=42  Startup polling is enabled; first poll in 0.0s.
-✅ NFC[lane1]: reader ready.  HH reports gate empty  Run NFC_GATE GATE=1 READ=1 to start polling.
+✅ NFC[lane1]: reader ready.  HH reports gate empty  Run NFC GATE=1 READ=1 to start polling.
 ```
 
 The seed is one-shot — it fires at most once per lane per boot, on the first `CHANGED` event. If Happy Hare wasn't ready when the NFC init ran, the seed step is skipped and a manual `NFC_HH_SYNC_CACHE` re-syncs all lanes.
@@ -96,9 +96,9 @@ _scan_step_event  (after each jog chunk completes)
             └─ dispatch spool to Happy Hare (already done inside _poll)
             └─ MMU_SELECT_GATE GATE=N + MMU_UNLOAD restore=0  (rewind to parked)
             └─ resume poll timer
-  └─ scan_mm_total >= scan_max_mm?  →  rewind and exit (no tag found)
+  └─ scan_mm_total >= lane Bowden length?  →  rewind and exit (no tag found)
   └─ MMU_SELECT_GATE GATE=N + MMU_TEST_MOVE MOVE=scan_jog_mm  (advance one step)
-  └─ reschedule after scan_jog_mm / gear_short_move_speed + scan_settle_time
+  └─ reschedule after scan_jog_mm / gear_short_move_speed
 ```
 
 `_poll()` during a scan step is identical to a normal poll — I2C read, Spoolman lookup, `GateState.process_read`, macro dispatch. The only difference is that `GateState.miss_count` does not increment on a no-read during scan (a blank read while the spool rotates is not an absence event).
@@ -117,7 +117,7 @@ Each layer owns one responsibility and must not reach across the boundary.
 |---|---|---|---|
 | **PN532Driver** | `pn532_driver.py` | PN532 wire protocol, I2C frames, UID extraction | Spoolman, gate policy, Happy Hare |
 | **SpoolmanClient** | `spoolman_client.py` | UID → spool record lookup and TTL cache | Gate state, lane assignment, MMU commands |
-| **NFC_Manager** | `NFC_manager.py` | Gate state machine, change/remove decisions, macro dispatch, HH seed | PN532 protocol details, Spoolman HTTP |
+| **NFC_Manager** | `nfc_manager.py` | Gate state machine, change/remove decisions, macro dispatch, HH seed | PN532 protocol details, Spoolman HTTP |
 | **nfc_macros.cfg** | config file | Happy Hare-facing GCode calls | NFC reads, Spoolman lookups |
 
 ---
@@ -142,4 +142,4 @@ You can edit `nfc_macros.cfg` to match your Happy Hare version without touching 
 
 ---
 
-*Copyright (C) 2026 WoodWorker. Licensed under [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/) — see [LICENSE](../../LICENSE).*
+*Copyright (C) 2026 WoodWorker. Licensed under [GPL-3.0-or-later](https://www.gnu.org/licenses/gpl-3.0.html) — see [LICENSE](../../LICENSE).*

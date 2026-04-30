@@ -48,7 +48,7 @@ self.printer.register_event_handler('klippy:disconnect', self._handle_disconnect
 
 Fires after all config sections are loaded and MCU connections are established. It does three things:
 
-1. Registers GCode commands (mux command for `NFC_GATE`, fallback for `NFC_GATE_STATUS` if no base section)
+1. Registers GCode commands (mux command for `NFC`, fallback for `NFC_STATUS` if no base section)
 2. Sends a console "connected" message: `📡 NFC Gate [laneN] connected`
 3. Schedules `_delayed_init` as a one-shot timer 2 seconds later
 
@@ -74,23 +74,23 @@ Parks the poll timer unconditionally. Prevents I2C traffic to a disconnected MCU
 
 ## GCode Command Registration: Mux Commands
 
-Each `NFCGate` registers itself under the shared `NFC_GATE` command using Klipper's **mux command** API:
+Each `NFCGate` registers itself under the shared `NFC` command using Klipper's **mux command** API:
 
 ```python
 self._gcode.register_mux_command(
-    cmd='NFC_GATE',
+    cmd='NFC',
     key='GATE',
     value=str(self._gate),
-    func=self.cmd_NFC_GATE,
+    func=self.cmd_NFC,
     desc="Control or test one configured NFC gate"
 )
 ```
 
-`register_mux_command` is a Klipper API that routes one GCode command to different handlers based on a parameter value. All lane instances register under the same `NFC_GATE` command name, but with different `GATE=` values. Klipper dispatches `NFC_GATE GATE=0 READ=1` to the lane-0 handler and `NFC_GATE GATE=2 SCAN=1` to the lane-2 handler automatically. This is different from `register_command`, which would register separate `NFC_GATE_LANE0`, etc. commands.
+`register_mux_command` is a Klipper API that routes one GCode command to different handlers based on a parameter value. All lane instances register under the same `NFC` command name, but with different `GATE=` values. Klipper dispatches `NFC GATE=0 READ=1` to the lane-0 handler and `NFC GATE=2 SCAN=1` to the lane-2 handler automatically. This is different from `register_command`, which would register separate `NFC_LANE0`, etc. commands.
 
-The `NFC_GATE_STATUS` command is registered as a plain `register_command` by `NFCGateDefaults` (the base `[nfc_gate]` section). If no base section exists, the first `NFCGate` registers it as a fallback.
+The `NFC_STATUS` command is registered as a plain `register_command` by `NFCGateDefaults` (the base `[nfc_gate]` section). If no base section exists, the first `NFCGate` registers it as a fallback.
 
-Sub-commands within `cmd_NFC_GATE` are parsed by checking parameters in a fixed priority order: `READ`, `STATUS`, `INIT`, `SCAN`, `JOG_SCAN`, `CLEAR_CACHE`, `CLEAR`, `POLL`, `APPLY`, `HH_SYNC`. Low-level debug commands are checked first and take priority over all others.
+Sub-commands within `cmd_NFC` are parsed by checking parameters in a fixed priority order: `READ`, `STATUS`, `INIT`, `SCAN`, `JOG_SCAN`, `CLEAR_CACHE`, `CLEAR`, `POLL`, `APPLY`, `HH_SYNC`. Low-level debug commands are checked first and take priority over all others.
 
 `JOG_SCAN=1` triggers the scan-and-jog sequence on demand, bypassing the automatic 0→1 edge-detection trigger. Calls `scan_jog.manual_jog_scan(self, gcmd)` after verifying the reader is healthy, HH is idle, and no other gate is scanning.
 

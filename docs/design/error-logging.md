@@ -128,10 +128,10 @@ def _delayed_init(self, eventtime):
 When `_failed` is True:
 - `_poll_timer_event` sets `_polling = False` and returns `NEVER` — timer parks, polling stops
 - `_set_reading(enabled=True)` refuses to start and prints a console message
-- `NFC_GATE_STATUS` shows `READER FAILED (check wiring, address 0x24)`
+- `NFC_STATUS` shows `READER FAILED (check wiring, address 0x24)`
 - `_seed_cache_from_hh()` is skipped (only called if `not self._failed`)
 
-Recovery: `NFC_GATE GATE=n INIT=1` calls `_manual_init()`, which clears `_failed` and re-runs `reader.init()` + `reader.is_alive()`. If the reader responds, the gate is back to normal and `READ=1` can start polling.
+Recovery: `NFC GATE=n INIT=1` calls `_manual_init()`, which clears `_failed` and re-runs `reader.init()` + `reader.is_alive()`. If the reader responds, the gate is back to normal and `READ=1` can start polling.
 
 `_failed` is not set by poll errors — only by explicit `init()` failure. A failed init indicates the hardware is absent or mis-wired (persistent). Poll errors may be transient.
 
