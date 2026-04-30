@@ -61,7 +61,8 @@ _stub('nfc_gates.pn532_driver',
       run_low_level_debug=lambda *a, **k: False)
 _stub('nfc_gates.spoolman_client', SpoolmanClient=object)
 
-from nfc_gates.nfc_manager import GateState, EVENT_CHANGED, EVENT_UID_ONLY, EVENT_REMOVED
+from nfc_gates.nfc_manager import (
+    CurrentTag, GateState, EVENT_CHANGED, EVENT_UID_ONLY, EVENT_REMOVED)
 
 
 def assert_event(event, expected_type, gate=0, uid=None, spool=None):
@@ -86,6 +87,14 @@ def test_spool_placed_emits_changed():
     event = gs.process_read('A3F200CC', 1042)
     assert_event(event, EVENT_CHANGED, gate=0, uid='A3F200CC', spool=1042)
 
+def test_current_tag_tracks_spool_placed():
+    gs = GateState(gate=0)
+    gs.process_read('A3F200CC', 1042)
+    assert isinstance(gs.current_tag, CurrentTag)
+    assert gs.current_tag.uid == 'A3F200CC'
+    assert gs.current_tag.spool_id == 1042
+    assert gs.current_tag.meta == {}
+
 def test_same_spool_stays_silent():
     gs = GateState(gate=0)
     gs.process_read('A3F200CC', 1042)
@@ -97,17 +106,23 @@ def test_different_spool_same_uid_emits_changed():
     gs.process_read('A3F200CC', 1042)
     event = gs.process_read('A3F200CC', 9999)
     assert_event(event, EVENT_CHANGED, spool=9999)
+    assert gs.current_tag.uid == 'A3F200CC'
+    assert gs.current_tag.spool_id == 9999
 
 def test_different_tag_emits_changed():
     gs = GateState(gate=0)
     gs.process_read('A3F200CC', 1042)
     event = gs.process_read('B1D4A209', 207)
     assert_event(event, EVENT_CHANGED, uid='B1D4A209', spool=207)
+    assert gs.current_tag.uid == 'B1D4A209'
+    assert gs.current_tag.spool_id == 207
 
 def test_tag_without_spool_emits_uid_only():
     gs = GateState(gate=0)
     event = gs.process_read('A3F200CC', None)
     assert_event(event, EVENT_UID_ONLY, uid='A3F200CC', spool=None)
+    assert gs.current_tag.uid == 'A3F200CC'
+    assert gs.current_tag.spool_id is None
 
 def test_debounce_suppresses_early_removal():
     gs = GateState(gate=0, absent_threshold=3)
@@ -127,8 +142,21 @@ def test_removal_clears_state():
     gs = GateState(gate=0, absent_threshold=1)
     gs.process_read('A3F200CC', 1042)
     gs.process_read(None, None)
+    assert gs.current_tag is None
     event = gs.process_read('B1D4A209', 207)
     assert_event(event, EVENT_CHANGED, uid='B1D4A209', spool=207)
+
+def test_direct_compatibility_fields_sync_current_tag():
+    gs = GateState(gate=0)
+    gs.current_uid = 'A3F200CC'
+    gs.current_spool = 1042
+    assert gs.current_tag.uid == 'A3F200CC'
+    assert gs.current_tag.spool_id == 1042
+    gs.current_spool = None
+    assert gs.current_tag.uid == 'A3F200CC'
+    assert gs.current_tag.spool_id is None
+    gs.current_uid = None
+    assert gs.current_tag is None
 
 def test_intermittent_miss_resets_counter():
     gs = GateState(gate=0, absent_threshold=3)

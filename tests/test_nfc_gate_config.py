@@ -126,12 +126,12 @@ class MockConfig:
 def test_defaults_built_in_values():
     d = NFCGateDefaults(MockConfig())
     assert d.spoolman_url       == ''
-    assert d.spoolman_rfid_key  == 'rfid'
+    assert d.spoolman_rfid_key  == 'rfid_tag'
     assert d.spoolman_timeout   == 5.0
     assert d.spoolman_cache_ttl == 300.0
     assert d.startup_polling    == -1
     assert d.startup_poll_delay == 0.0
-    assert d.poll_interval      == 30.0
+    assert d.poll_interval      == 10.0
     assert d.absent_threshold   == 3
     assert d.transceive_delay   == 0.250
     assert d.crc_delay          == 0.050
@@ -172,7 +172,7 @@ def test_defaults_partial_override():
     assert d.debug              == 0
     assert d.startup_polling    == -1
     assert d.startup_poll_delay == 0.0
-    assert d.poll_interval      == 30.0
+    assert d.poll_interval      == 10.0
     assert d.absent_threshold   == 3
 
 def test_defaults_poll_interval_below_min_raises():

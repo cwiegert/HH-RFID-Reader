@@ -3,11 +3,12 @@
 # EMU NFC Gate Reader — Klipper entry point
 # Version 1.0.0  |  2026-04-14
 # Copyright (C) 2026  WoodWorker
-# SPDX-License-Identifier: CC-BY-NC-SA-4.0
+# SPDX-License-Identifier: GPL-3.0-or-later
 #
-# Licensed under Creative Commons Attribution-NonCommercial-ShareAlike 4.0
-# International. You may not use this file except in compliance with the
-# License. Full terms: https://creativecommons.org/licenses/by-nc-sa/4.0/
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
 #
 # ─────────────────────────────────────────────────────────────────────────────
 # Klipper entry point for [nfc_gate] and [nfc_gate laneN] config sections.

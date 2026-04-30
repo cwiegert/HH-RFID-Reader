@@ -3,11 +3,12 @@
 # EMU NFC Gate Reader — gate manager
 # Version 1.0.0  |  2026-04-14
 # Copyright (C) 2026  WoodWorker
-# SPDX-License-Identifier: CC-BY-NC-SA-4.0
+# SPDX-License-Identifier: GPL-3.0-or-later
 #
-# Licensed under Creative Commons Attribution-NonCommercial-ShareAlike 4.0
-# International. You may not use this file except in compliance with the
-# License. Full terms: https://creativecommons.org/licenses/by-nc-sa/4.0/
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
 #
 # Gate coordination logic for the supported per-lane PN532/I2C path:
 #
@@ -49,6 +50,7 @@
 import ast
 import os
 import re
+from dataclasses import dataclass, field
 try:
     from .. import bus as bus_module
 except ImportError:
@@ -106,13 +108,53 @@ EVENT_UID_ONLY = 'uid_only'  # Tag present but UID not in Spoolman
 EVENT_REMOVED  = 'removed'   # Tag gone after absent_threshold misses
 
 
+@dataclass
+class CurrentTag:
+    uid: str
+    spool_id: object = None
+    target_info: object = None
+    raw_tag_data: object = None
+    meta: dict = field(default_factory=dict)
+    parse_error: object = None
+    resolution: object = None
+
+
 class GateState:
     def __init__(self, gate, absent_threshold=3):
         self.gate             = gate
-        self.current_uid      = None
-        self.current_spool    = None
+        self._current_uid     = None
+        self._current_spool   = None
+        self.current_tag      = None
         self.miss_count       = 0
         self.absent_threshold = absent_threshold
+
+    @property
+    def current_uid(self):
+        return self._current_uid
+
+    @current_uid.setter
+    def current_uid(self, uid_hex):
+        self._current_uid = uid_hex
+        self._sync_current_tag()
+
+    @property
+    def current_spool(self):
+        return self._current_spool
+
+    @current_spool.setter
+    def current_spool(self, spool_id):
+        self._current_spool = spool_id
+        self._sync_current_tag()
+
+    def _sync_current_tag(self):
+        if self._current_uid is None:
+            self.current_tag = None
+            return
+        if self.current_tag is None or self.current_tag.uid != self._current_uid:
+            self.current_tag = CurrentTag(uid=self._current_uid,
+                                          spool_id=self._current_spool)
+            return
+        self.current_tag.spool_id = self._current_spool
 
     def process_read(self, uid_hex, spool_id, scan_mode=False):
         if uid_hex is not None:

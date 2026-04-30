@@ -230,4 +230,4 @@ Default: prints the unknown UID to the console with instructions to register it.
 
 ---
 
-*Copyright (C) 2026 WoodWorker. Licensed under [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/) — see [LICENSE](../../LICENSE).*
+*Copyright (C) 2026 WoodWorker. Licensed under [GPL-3.0-or-later](https://www.gnu.org/licenses/gpl-3.0.html) — see [LICENSE](../../LICENSE).*

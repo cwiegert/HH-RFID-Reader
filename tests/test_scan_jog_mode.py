@@ -641,7 +641,7 @@ def test_run_rewind_gcode_content():
     g._run_rewind()
     scripts = g.printer.gcode_scripts
     assert len(scripts) == 2
-    assert 'MMU_TEST_MOVE MOVE=-110.00' in scripts[0]
+    assert 'MMU_TEST_MOVE MOVE=-90.00' in scripts[0]
     assert scripts[1] == 'mmu_check_gate'
     assert 'MMU_UNLOAD' not in scripts[0]
 
