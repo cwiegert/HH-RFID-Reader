@@ -286,17 +286,70 @@ MMU_GATE_MAP GATE={gate} APPLY=1
 
 ---
 
-## Embedded Library Adapter
+## Embedded Library — What We Use and How
 
-This integration embeds `lameandboard/rfid` rather than reimplementing its parser and Spoolman create logic. The embedded code remains the source for tag payload parsing, supported tag formats, SpoolmanDB/Bambu metadata handling, and Spoolman auto-create behavior.
+We embed two files from `lameandboard/rfid` verbatim (GPL-3.0-or-later, compatible with our license):
 
-Our code should add a thin adapter around that library. The adapter owns NFC-Gates-specific behavior:
+| Source file | Destination | Used for |
+|---|---|---|
+| `extras/rfid_tag_parser.py` | `klippy/extras/nfc_gates/rfid_tag_parser.py` | Tag payload parsing, all 11 formats |
+| `extras/spoolman_client.py` | `klippy/extras/nfc_gates/lameandboard_spoolman.py` | Vendor/filament/spool CRUD building blocks |
 
-- converting `lameandboard/rfid` parser dictionaries into optional metadata fields on the existing gate/tag state
-- preserving our configured Spoolman UID field, defaulting to `rfid_tag`
-- translating parser/client errors into our logging and console-message style
-- keeping all enhanced behavior behind `tag_parsing` and `spoolman_auto_create`
-- keeping the current UID-only path unchanged when feature flags are disabled
+### `rfid_tag_parser.py` — drop-in, no adaptation needed
+
+Standard library only (+ optional `pycryptodome` for Bambu, `cbor2` for OpenPrintTag). No Klipper dependencies. Entry point:
+
+```python
+from .rfid_tag_parser import parse_tag, is_parse_error
+
+info = parse_tag(raw_bytes_or_blocks, uid_hex=uid)
+```
+
+`raw_bytes_or_blocks` is either raw NTAG user-memory bytes or an authenticated MIFARE Classic block dict. Returns a metadata dict or `None`. Logger name `rfid.rfid_tag_parser` routes through standard Python logging — no change needed.
+
+### `lameandboard_spoolman.py` — use building blocks, not the top-level `auto_create_spool()`
+
+Their `auto_create_spool()` hard-codes the `rfid_uid_N` multi-slot UID convention. We do not use it. Instead, our adapter calls their lower-level methods directly and controls the UID field name:
+
+```python
+from .lameandboard_spoolman import SpoolmanClient as LBSpoolmanClient
+
+lb = LBSpoolmanClient(base_url=our_resolved_url, timeout=self._timeout)
+
+vendor_id   = lb.find_or_create_vendor(vendor_name)
+filament_id = lb.find_or_create_filament(name=material, vendor_id=vendor_id, ...)
+spool       = lb.create_spool(
+    filament_id=filament_id,
+    remaining_weight=weight_g,
+    extra={self._rfid_key: uid}   # our rfid_tag convention, not their rfid_uid_N
+)
+```
+
+`our_resolved_url` comes from our existing `SpoolmanClient._resolve_base_url()` so Moonraker auto-discovery and URL normalization stay in one place.
+
+Their `build_openspool_payload(spool_dict)` is available for future tag write-back but is not called in this read-only phase.
+
+### What stays in our `spoolman_client.py`
+
+Our client keeps everything it already has:
+- Moonraker URL auto-discovery
+- Circuit breaker
+- In-memory UID cache with TTL
+- `lookup_spool_by_uid()` — UID-to-spool resolution
+- `lookup_spool_by_id()` — direct spool ID fetch (expose existing `_fetch_spool_detail` as public)
+- `update_spool_location()` / `clear_spool_location()`
+
+It does not gain vendor/filament/spool creation — those come from the embedded client.
+
+### Adapter responsibilities
+
+Our adapter code (in `nfc_manager.py` or a thin `tag_resolver.py`) owns NFC-Gates-specific behavior:
+
+- translating `parse_tag()` output into `current_tag.meta`
+- passing `our_resolved_url` to the embedded client so both clients share one URL-resolution result
+- enforcing `spoolman_rfid_key` / `rfid_tag` on every Spoolman write
+- translating embedded client errors into our debug/logging system
+- keeping all of this behind `tag_parsing` and `spoolman_auto_create` flags
 
 ### GateState Refactor
 
@@ -424,10 +477,21 @@ spoolman_auto_create: False   ; True = create filament/spool in Spoolman when
 
 ### `spoolman_client.py`
 
-- Embed or wrap the `lameandboard/rfid` Spoolman client for CRUD operations.
-- Existing `lookup_spool_by_uid()` remains the stable UID-resolution API.
-- Add adapter methods for direct spool ID lookup and auto-create, while preserving the configured `spoolman_rfid_key`/`rfid_tag` convention.
-- Do not expose lameandboard's `rfid_uid_N` storage convention as the default behavior.
+- No new CRUD methods added here. Creation is delegated to the embedded `lameandboard_spoolman.py`.
+- Expose `_fetch_spool_detail` as public `lookup_spool_by_id(spool_id)` — needed for Step 1 (embedded ID resolution).
+- Continue to own URL resolution, circuit breaker, cache, and UID lookup. The resolved base URL is shared with the embedded client at call time so both use the same discovered URL.
+
+### `lameandboard_spoolman.py` (new, embedded verbatim)
+
+- Copied from `lameandboard/rfid extras/spoolman_client.py` at a pinned source commit.
+- Used only for `find_or_create_vendor()`, `find_or_create_filament()`, and `create_spool()`.
+- `auto_create_spool()` is present in the file but **not called** — it encodes the `rfid_uid_N` convention we don't use.
+- Constructor receives `base_url` from our client's `_resolve_base_url()`.
+
+### `rfid_tag_parser.py` (new, embedded verbatim)
+
+- Copied from `lameandboard/rfid extras/rfid_tag_parser.py` at a pinned source commit.
+- No changes needed. `parse_tag(raw, uid_hex)` is called directly from the manager adapter.
 
 ---
 
@@ -453,7 +517,7 @@ spoolman_auto_create: False   ; True = create filament/spool in Spoolman when
 
 ## Implementation Order
 
-1. Vendor `lameandboard/rfid` with source commit and GPL license notes.
+1. Copy `rfid_tag_parser.py` and `spoolman_client.py` from `lameandboard/rfid` into `klippy/extras/nfc_gates/` as `rfid_tag_parser.py` and `lameandboard_spoolman.py`. Record the source commit SHA in a `VENDORED.md` at repo root. Both files carry their original GPLv3 headers.
 2. Extend `GateState` with `current_tag` and add the parser adapter around `lameandboard/rfid.parse_tag()`.
 3. Extend `pn532_driver.py` so the manager can request target identity and raw NTAG/Type 2 memory reads behind `tag_parsing`.
 4. Add conservative target classification in `nfc_manager.py`: NTAG/Type 2, MIFARE Classic, or UID-only fallback.
