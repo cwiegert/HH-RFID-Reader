@@ -114,6 +114,8 @@ PN532_COMMAND_INRELEASE = 0x52
 # MIFARE/NTAG commands, mirrored from HH_code/pn532.py.
 MIFARE_CMD_READ = 0x30
 MIFARE_ULTRALIGHT_CMD_WRITE = 0xA2
+MIFARE_CMD_AUTH_A = 0x60
+MIFARE_CMD_AUTH_B = 0x61
 
 PN532_ACK = [0x00, 0x00, 0xFF, 0x00, 0xFF, 0x00]
 
@@ -503,6 +505,90 @@ class _PN532Base:
             return user_data
         finally:
             self._release_current_target(reason="user_memory_complete")
+
+    def mifare_authenticate(self, block_addr, key, use_key_b=False):
+        """Authenticate a MIFARE Classic sector using InDataExchange.
+
+        block_addr is any block in the target sector (typically the sector trailer).
+        key is a 6-byte sequence (list or bytes).  Returns True on success.
+        """
+        if self.current_target is None:
+            return False
+        auth_cmd = MIFARE_CMD_AUTH_B if use_key_b else MIFARE_CMD_AUTH_A
+        uid = list(self.current_uid or [])[:4]
+        cmd = ([_CMD_INDATAEXCHANGE, self.current_target, auth_cmd,
+                block_addr & 0xFF]
+               + list(key)[:6] + uid)
+        payload = self._transceive(cmd, 0x41, read_len=12, timeout=1.0)
+        if not payload or payload[0] != 0x00:
+            if self._debug >= 3 and payload:
+                logger.info(
+                    "mifare_authenticate: gate %d (%s) block=%d key_%s "
+                    "status=0x%02X",
+                    self._gate, self._transport_name, block_addr,
+                    'B' if use_key_b else 'A', payload[0])
+            return False
+        return True
+
+    def mifare_read_block(self, block_addr):
+        """Read 16 bytes from a MIFARE Classic block (sector must be pre-authenticated).
+
+        Returns bytes of length 16, or None on error.
+        """
+        if self.current_target is None:
+            return None
+        cmd = [_CMD_INDATAEXCHANGE, self.current_target,
+               MIFARE_CMD_READ, block_addr & 0xFF]
+        payload = self._transceive(cmd, 0x41,
+                                   read_len=_MAX_RESPONSE_BYTES, timeout=1.0)
+        if not payload or payload[0] != 0x00 or len(payload) < 17:
+            return None
+        return bytes(payload[1:17])
+
+    def mifare_read_authenticated_blocks(self, sector_keys, sectors, uid_bytes=None):
+        """Authenticate and read data blocks from the given sectors.
+
+        sector_keys : list of 16 × 6-byte Key-A values (index = sector number).
+        sectors     : list of sector numbers to read (e.g. [0, 1, 2, 3, 4]).
+        uid_bytes   : tag UID bytes (4 bytes for MIFARE Classic 1K); stored in
+                      the returned dict for parse_tag().
+
+        Returns {"uid_bytes": bytes, "blocks": {abs_block_index: bytes}} where
+        abs_block_index is the absolute block number (0-63 for MIFARE Classic 1K).
+        Sector trailer blocks (4*s+3) are never included.  Failed sectors are
+        skipped.  Returns None when no blocks could be read at all.
+
+        Releases the target in a finally block (same pattern as ntag_read_user_memory).
+        """
+        blocks = {}
+        try:
+            for sector in sectors:
+                trailer = sector * 4 + 3
+                key = sector_keys[sector] if sector < len(sector_keys) else None
+                if key is None:
+                    continue
+                if not self.mifare_authenticate(trailer, key):
+                    if self._debug >= 3:
+                        logger.info(
+                            "mifare_read_authenticated_blocks: gate %d (%s) "
+                            "sector %d auth failed — skipping",
+                            self._gate, self._transport_name, sector)
+                    continue
+                for blk_offset in range(3):
+                    block_addr = sector * 4 + blk_offset
+                    data = self.mifare_read_block(block_addr)
+                    if data is not None:
+                        blocks[block_addr] = data
+                    elif self._debug >= 3:
+                        logger.info(
+                            "mifare_read_authenticated_blocks: gate %d (%s) "
+                            "block %d read failed",
+                            self._gate, self._transport_name, block_addr)
+            if not blocks:
+                return None
+            return {"uid_bytes": bytes(uid_bytes or []), "blocks": blocks}
+        finally:
+            self._release_current_target(reason="mifare_read_complete")
 
     # ─────────────────────────────────────────────────────────────────────────
     # Initialisation and lifecycle

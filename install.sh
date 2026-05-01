@@ -28,6 +28,280 @@ REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 KLIPPER_EXTRAS="${HOME}/klipper/klippy/extras"
 PRINTER_CONFIG="${HOME}/printer_data/config"
 NFC_CONFIG_DIR="${PRINTER_CONFIG}/nfc"
+NFC_READER_CFG="${NFC_CONFIG_DIR}/nfc_reader.cfg"
+NFC_READER_HW_CFG="${NFC_CONFIG_DIR}/nfc_reader_hw.cfg"
+
+print_banner() {
+    cat <<'EOF'
+███╗   ██╗███████╗ ██████╗
+████╗  ██║██╔════╝██╔════╝
+██╔██╗ ██║█████╗  ██║
+██║╚██╗██║██╔══╝  ██║
+██║ ╚████║██║     ╚██████╗
+╚═╝  ╚═══╝╚═╝      ╚═════╝
+
+██████╗ ███████╗ █████╗ ██████╗ ███████╗██████╗
+██╔══██╗██╔════╝██╔══██╗██╔══██╗██╔════╝██╔══██╗
+██████╔╝█████╗  ███████║██║  ██║█████╗  ██████╔╝
+██╔══██╗██╔══╝  ██╔══██║██║  ██║██╔══╝  ██╔══██╗
+██║  ██║███████╗██║  ██║██████╔╝███████╗██║  ██║
+╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝╚═════╝ ╚══════╝╚═╝  ╚═╝
+EOF
+    echo ""
+}
+
+prompt_with_default() {
+    local __var_name="$1"
+    local prompt_text="$2"
+    local default_value="$3"
+    local reply
+    read -r -p "${prompt_text} [${default_value}]: " reply
+    if [ -z "${reply}" ]; then
+        reply="${default_value}"
+    fi
+    printf -v "${__var_name}" '%s' "${reply}"
+}
+
+prompt_yes_no() {
+    local __var_name="$1"
+    local prompt_text="$2"
+    local default_value="$3"
+    local default_hint="y/N"
+    local reply
+
+    if [ "${default_value}" = "yes" ]; then
+        default_hint="Y/n"
+    fi
+
+    while true; do
+        read -r -p "${prompt_text} [${default_hint}]: " reply
+        if [ -z "${reply}" ]; then
+            reply="${default_value}"
+        fi
+        case "$(printf '%s' "${reply}" | tr '[:upper:]' '[:lower:]')" in
+            y|yes)
+                printf -v "${__var_name}" '%s' "yes"
+                return
+                ;;
+            n|no)
+                printf -v "${__var_name}" '%s' "no"
+                return
+                ;;
+        esac
+        echo "Please answer yes or no."
+    done
+}
+
+prompt_choice() {
+    local __var_name="$1"
+    local prompt_text="$2"
+    local default_value="$3"
+    shift 3
+    local choices="$*"
+    local reply
+
+    while true; do
+        read -r -p "${prompt_text} [${default_value}]: " reply
+        if [ -z "${reply}" ]; then
+            reply="${default_value}"
+        fi
+        reply="$(printf '%s' "${reply}" | tr '[:upper:]' '[:lower:]')"
+        for choice in "$@"; do
+            if [ "${reply}" = "${choice}" ]; then
+                printf -v "${__var_name}" '%s' "${reply}"
+                return
+            fi
+        done
+        echo "Please choose one of: ${choices}"
+    done
+}
+
+detect_klipper_python() {
+    local candidate
+    for candidate in \
+        "${HOME}/klippy-env/bin/python" \
+        "${HOME}/klippy-env/bin/python3"
+    do
+        if [ -x "${candidate}" ]; then
+            printf '%s\n' "${candidate}"
+            return 0
+        fi
+    done
+    command -v python3
+}
+
+ensure_python_module() {
+    local module_name="$1"
+    local package_name="$2"
+    local python_bin
+
+    python_bin="$(detect_klipper_python)"
+    if [ -z "${python_bin}" ] || [ ! -x "${python_bin}" ]; then
+        echo "WARNING: Could not find the Klipper Python environment."
+        echo "         Please install ${package_name} manually."
+        return 1
+    fi
+
+    if "${python_bin}" -c "import ${module_name}" >/dev/null 2>&1; then
+        echo "  [ok]     ${package_name} already available in ${python_bin}"
+        return 0
+    fi
+
+    echo "  [install] ${package_name} into ${python_bin}"
+    if ! "${python_bin}" -m pip install "${package_name}"; then
+        echo "WARNING: Failed to install ${package_name} automatically."
+        echo "         Install it manually in the Klipper environment with:"
+        echo "         ${python_bin} -m pip install ${package_name}"
+        return 1
+    fi
+}
+
+set_config_value() {
+    local file_path="$1"
+    local section_name="$2"
+    local key_name="$3"
+    local raw_value="$4"
+
+    python3 - "${file_path}" "${section_name}" "${key_name}" "${raw_value}" <<'PYEOF'
+import sys
+
+path, section, key, value = sys.argv[1:5]
+
+try:
+    with open(path, 'r') as f:
+        lines = f.readlines()
+except FileNotFoundError:
+    lines = []
+
+section_line = f'[{section}]'
+key_prefix = f'{key}:'
+target_start = None
+target_end = len(lines)
+
+for idx, line in enumerate(lines):
+    if line.strip() == section_line:
+        target_start = idx
+        break
+
+if target_start is None:
+    if lines and not lines[-1].endswith('\n'):
+        lines[-1] += '\n'
+    if lines and lines[-1].strip():
+        lines.append('\n')
+    lines.extend([section_line + '\n', f'{key_prefix:<20}{value}\n'])
+else:
+    for idx in range(target_start + 1, len(lines)):
+        stripped = lines[idx].strip()
+        if stripped.startswith('[') and stripped.endswith(']'):
+            target_end = idx
+            break
+
+    replaced = False
+    for idx in range(target_start + 1, target_end):
+        stripped = lines[idx].strip()
+        if stripped.startswith('#'):
+            continue
+        if stripped.startswith(key_prefix):
+            lines[idx] = f'{key_prefix:<20}{value}\n'
+            replaced = True
+            break
+
+    if not replaced:
+        insert_at = target_end
+        if insert_at > 0 and lines[insert_at - 1].strip():
+            lines.insert(insert_at, '\n')
+            insert_at += 1
+        lines.insert(insert_at, f'{key_prefix:<20}{value}\n')
+
+with open(path, 'w') as f:
+    f.writelines(lines)
+PYEOF
+}
+
+count_lane_sections() {
+    local file_path="$1"
+    python3 - "${file_path}" <<'PYEOF'
+import re
+import sys
+
+path = sys.argv[1]
+try:
+    text = open(path, 'r').read()
+except FileNotFoundError:
+    print(5)
+    raise SystemExit
+
+count = len(re.findall(r'^\[nfc_gate lane\d+\]\s*$', text, flags=re.M))
+print(count or 5)
+PYEOF
+}
+
+write_lane_config() {
+    local file_path="$1"
+    local lane_count="$2"
+
+    python3 - "${file_path}" "${lane_count}" <<'PYEOF'
+import re
+import sys
+
+path = sys.argv[1]
+lane_count = int(sys.argv[2])
+existing = {}
+current_lane = None
+
+try:
+    lines = open(path, 'r').read().splitlines()
+except FileNotFoundError:
+    lines = []
+
+for line in lines:
+    stripped = line.strip()
+    match = re.match(r'^\[nfc_gate lane(\d+)\]$', stripped)
+    if match:
+        current_lane = int(match.group(1))
+        continue
+    if current_lane is None or stripped.startswith('#'):
+        continue
+    if stripped.startswith('i2c_mcu:'):
+        existing[current_lane] = stripped.split(':', 1)[1].strip()
+
+with open(path, 'w') as f:
+    f.write("# =============================================================================\n")
+    f.write("# EMU NFC Gate Reader — PN532 I2C Lane Hardware\n")
+    f.write("# =============================================================================\n")
+    f.write("# Supported documented path:\n")
+    f.write("#   one PN532 module per lane MCU / EBB42 board.\n")
+    f.write("#\n")
+    f.write("# Include after nfc_reader.cfg and nfc_macros.cfg:\n")
+    f.write("#   [include nfc/nfc_reader.cfg]\n")
+    f.write("#   [include nfc/nfc_macros.cfg]\n")
+    f.write("#   [include nfc/nfc_reader_hw.cfg]\n")
+    f.write("#\n")
+    f.write("# Each [nfc_gate laneN] section maps:\n")
+    f.write("#   Happy Hare gate number -> Klipper lane MCU -> NFC reader hardware.\n")
+    f.write("#\n")
+    f.write("# i2c_mcu: is consumed by Klipper's I2C bus layer (MCU_I2C_from_config),\n")
+    f.write("# not read explicitly by the plugin.  The MCU name must already exist in\n")
+    f.write("# Klipper / Happy Hare config.  Example: [mcu lane0], [mcu lane1], etc.\n")
+    f.write("#\n")
+    f.write("# ⚠️ After updating Klipper, rebuild and flash the lane MCU / EBB42 firmware.\n")
+    f.write("# Updating the host alone is not enough for PN532 I2C troubleshooting.\n")
+    f.write("# =============================================================================\n\n")
+
+    for lane in range(lane_count):
+        mcu = existing.get(lane, f'mmu{lane}')
+        f.write(f"# ── Lane {lane} ────────────────────────────────────────────────────────────────────\n")
+        f.write(f"[nfc_gate lane{lane}]\n")
+        f.write(f"mmu_gate:                {lane}\n")
+        f.write(f"i2c_mcu:                 {mcu}\n\n")
+
+    example_lane = lane_count
+    f.write(f"# ── Lane {example_lane} example ───────────────────────────────────────────────────────\n")
+    f.write(f"# [nfc_gate lane{example_lane}]\n")
+    f.write(f"# mmu_gate:                {example_lane}\n")
+    f.write(f"# i2c_mcu:                 mmu{example_lane}\n")
+PYEOF
+}
 
 # ── Verify Klipper is present ─────────────────────────────────────────────────
 if [ ! -d "${KLIPPER_EXTRAS}" ]; then
@@ -41,6 +315,56 @@ if [ ! -d "${PRINTER_CONFIG}" ]; then
     echo "ERROR: Printer config directory not found at ${PRINTER_CONFIG}"
     echo "       Expected: ~/printer_data/config/"
     exit 1
+fi
+
+print_banner
+echo "Interactive setup"
+echo ""
+
+DEFAULT_LANE_COUNT="$(count_lane_sections "${NFC_READER_HW_CFG}")"
+prompt_with_default LANE_COUNT \
+    "1. How many NFC readers / lanes are you configuring?" \
+    "${DEFAULT_LANE_COUNT}"
+while ! printf '%s' "${LANE_COUNT}" | grep -Eq '^[1-9][0-9]*$'; do
+    echo "Please enter a whole number greater than zero."
+    prompt_with_default LANE_COUNT \
+        "1. How many NFC readers / lanes are you configuring?" \
+        "${DEFAULT_LANE_COUNT}"
+done
+
+prompt_choice SPOOLMAN_MODE \
+    "2. Spoolman resolution mode: auto or direct" \
+    "auto" \
+    "auto" "direct"
+SPOOLMAN_URL="auto"
+if [ "${SPOOLMAN_MODE}" = "direct" ]; then
+    prompt_with_default SPOOLMAN_URL \
+        "   Enter the direct Spoolman URL" \
+        "http://127.0.0.1:7912"
+fi
+
+prompt_yes_no STARTUP_POLLING \
+    "3. Start NFC polling automatically on Klipper startup?" \
+    "yes"
+
+prompt_yes_no SCAN_ENABLED \
+    "4. Enable scan-jog when a loaded tag is out of read range?" \
+    "yes"
+
+prompt_choice TAG_MODE \
+    "5. Do you want to resolve spool through Spoolman or enable RFID rich read?" \
+    "spoolman" \
+    "spoolman" "rich"
+
+BAMBU_READS="no"
+SPOOLMAN_AUTO_CREATE="no"
+if [ "${TAG_MODE}" = "rich" ]; then
+    prompt_yes_no BAMBU_READS \
+        "6. Will you be reading factory-tagged Bambu spools?" \
+        "no"
+    prompt_yes_no SPOOLMAN_AUTO_CREATE \
+        "7. Auto-create missing Spoolman spools from rich tag metadata?" \
+        "no"
 fi
 
 # ── Symlink Python extras into Klipper ───────────────────────────────────────
@@ -176,9 +500,30 @@ echo ""
 echo "Installing config files to ${NFC_CONFIG_DIR}/..."
 echo ""
 
-merge_config "${REPO_DIR}/config/nfc_reader.cfg"   "${NFC_CONFIG_DIR}/nfc_reader.cfg"
+merge_config "${REPO_DIR}/config/nfc_reader.cfg"   "${NFC_READER_CFG}"
 merge_config "${REPO_DIR}/config/nfc_macros.cfg" "${NFC_CONFIG_DIR}/nfc_macros.cfg"
-merge_config "${REPO_DIR}/config/nfc_reader_hw.cfg"  "${NFC_CONFIG_DIR}/nfc_reader_hw.cfg"
+merge_config "${REPO_DIR}/config/nfc_reader_hw.cfg"  "${NFC_READER_HW_CFG}"
+
+echo ""
+echo "Applying selected settings..."
+
+set_config_value "${NFC_READER_CFG}" "nfc_gate" "spoolman_url" "${SPOOLMAN_URL}"
+set_config_value "${NFC_READER_CFG}" "nfc_gate" "startup_polling" \
+    "$( [ "${STARTUP_POLLING}" = "yes" ] && echo "1" || echo "-1" )"
+set_config_value "${NFC_READER_CFG}" "nfc_gate" "scan_enabled" \
+    "$( [ "${SCAN_ENABLED}" = "yes" ] && echo "True" || echo "False" )"
+set_config_value "${NFC_READER_CFG}" "nfc_gate" "tag_parsing" \
+    "$( [ "${TAG_MODE}" = "rich" ] && echo "True" || echo "False" )"
+set_config_value "${NFC_READER_CFG}" "nfc_gate" "spoolman_auto_create" \
+    "$( [ "${SPOOLMAN_AUTO_CREATE}" = "yes" ] && echo "True" || echo "False" )"
+
+write_lane_config "${NFC_READER_HW_CFG}" "${LANE_COUNT}"
+
+if [ "${BAMBU_READS}" = "yes" ]; then
+    echo ""
+    echo "Checking optional Bambu dependency..."
+    ensure_python_module "Crypto.Protocol.KDF" "pycryptodome" || true
+fi
 
 # ── Moonraker update_manager ──────────────────────────────────────────────────
 #
@@ -212,6 +557,15 @@ fi
 echo ""
 echo "Install complete."
 echo ""
+echo "  Selected options:"
+echo "    lanes:              ${LANE_COUNT}"
+echo "    spoolman_url:       ${SPOOLMAN_URL}"
+echo "    startup_polling:    ${STARTUP_POLLING}"
+echo "    scan_jog:           ${SCAN_ENABLED}"
+echo "    tag_resolution:     ${TAG_MODE}"
+echo "    bambu_reads:        ${BAMBU_READS}"
+echo "    spool_auto_create:  ${SPOOLMAN_AUTO_CREATE}"
+echo ""
 echo "  Python extras (symlinked — auto-updates with git pull):"
 echo "    ${KLIPPER_EXTRAS}/nfc_gate.py  ->  ${REPO_DIR}/klippy/extras/nfc_gate.py"
 echo "    ${KLIPPER_EXTRAS}/nfc_gates    ->  ${REPO_DIR}/klippy/extras/nfc_gates/"
@@ -223,8 +577,10 @@ echo "    nfc_reader_hw.cfg  ← hardware layout (one [nfc_gate laneN] per physi
 echo ""
 echo "Next steps (first install only):"
 echo ""
-echo "  1. Edit ~/printer_data/config/nfc/nfc_reader.cfg"
-echo "     Set spoolman_url to auto or to your Spoolman instance URL."
+echo "  1. Review ~/printer_data/config/nfc/nfc_reader.cfg"
+echo "     The installer has applied your selected settings."
+echo "     Also review ~/printer_data/config/nfc/nfc_reader_hw.cfg"
+echo "     and confirm each lane's i2c_mcu name matches your Klipper config."
 echo ""
 echo "  2. Add includes to printer.cfg:"
 echo "       [include nfc/nfc_reader.cfg]"

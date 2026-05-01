@@ -32,6 +32,19 @@ class HHGateStatus:
     def idle(self):
         return self.action == 'idle'
 
+    def label(self):
+        """Return a short human-readable string describing this gate's HH assignment."""
+        if not self.present:
+            return "HH: n/a"
+        if self.gate < 0 or (self.gate_count > 0 and self.gate >= self.gate_count):
+            return "HH: unknown"
+        if self.active_gate == self.gate and self.filament_pos > 0:
+            return "HH: spool %d  loading (pos %d)" % (self.spool, self.filament_pos)
+        if self.assigned:
+            return "HH: spool %d  %s" % (
+                self.spool, "available" if self.available else "assigned")
+        return "HH: empty"
+
 
 class HHFullStatus:
     def __init__(self, present=False, action='', active_gate=-1,

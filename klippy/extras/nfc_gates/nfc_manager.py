@@ -16,7 +16,13 @@
 #   NFCGate          — per-lane manager for [nfc_gate laneN] (one PN532 per EBB42)
 #
 # Internal helpers (not imported externally):
-#   GateState        — per-gate debounce state machine
+#   GateState        — per-gate debounce state machine; owns process_read(),
+#                      removal debounce, and event generation
+#   CurrentTag       — dataclass holding the full tag observation for one read
+#                      window: UID, PN532 target identity, raw NTAG pages,
+#                      parsed metadata, parse errors, and resolution path;
+#                      stored on GateState.current_tag; populated by
+#                      _read_current_tag() and enriched by _resolve_spool()
 #   KlipperInterface — thread-safe GCode macro dispatcher
 #
 # Threading model
@@ -1079,7 +1085,10 @@ class NFCGate:
             return
         try:
             from .vendor.rfid_tag_parser import parse_tag
-            info = parse_tag(bytes(tag.raw_tag_data), uid_hex=uid_hex)
+            raw = (bytes(tag.raw_tag_data)
+                   if isinstance(tag.raw_tag_data, (bytes, bytearray))
+                   else tag.raw_tag_data)
+            info = parse_tag(raw, uid_hex=uid_hex)
             if isinstance(info, dict) and 'uid' not in info:
                 info = dict(info)
                 info['uid'] = uid_hex
@@ -1126,6 +1135,58 @@ class NFCGate:
             return
         self._parse_current_tag(tag)
 
+    def _resolve_auth_keys(self, tag):
+        """Derive MIFARE sector Key-A values for a Bambu tag via HKDF.
+
+        Returns (keys, None) on success where keys is a list of 16 × 6-byte
+        values.  Returns (None, reason_str) on failure so the caller can record
+        a clear parse_error without raising.
+        """
+        try:
+            from .vendor.rfid_tag_parser import _bambu_derive_keys
+            uid_bytes = bytes(
+                (tag.target_info or {}).get('uid_bytes') or [])
+            if len(uid_bytes) < 4:
+                return None, ('uid_bytes too short for Bambu key derivation '
+                              '(%d bytes)' % len(uid_bytes))
+            keys = _bambu_derive_keys(uid_bytes)
+            return keys, None
+        except ImportError as e:
+            return None, 'pycryptodome not installed: %s' % e
+        except Exception as e:
+            return None, 'key derivation failed: %s' % e
+
+    def _capture_mifare_metadata(self, tag, sector_keys):
+        """Authenticate and read MIFARE Classic sectors, then parse the blocks."""
+        uid_hex = tag.uid
+        uid_bytes = bytes(
+            (tag.target_info or {}).get('uid_bytes') or [])
+        try:
+            block_dict = self._reader.mifare_read_authenticated_blocks(
+                sector_keys, sectors=[0, 1, 2, 3, 4], uid_bytes=uid_bytes)
+        except Exception as e:
+            tag.parse_error = 'mifare read failed: %s' % e
+            tag.meta = {'uid': uid_hex}
+            logger.warning(
+                "nfc_gate: [%s] gate %d — uid=%s  MIFARE read failed: %s",
+                self._name, self._gate, uid_hex, e)
+            return
+        if not block_dict or not block_dict.get('blocks'):
+            tag.parse_error = 'mifare read returned no blocks'
+            tag.meta = {'uid': uid_hex}
+            logger.warning(
+                "nfc_gate: [%s] gate %d — uid=%s  MIFARE read returned no "
+                "blocks (auth failed on all sectors?)",
+                self._name, self._gate, uid_hex)
+            return
+        tag.raw_tag_data = block_dict
+        if self._debug >= 3:
+            logger.info(
+                "nfc_gate: [%s] gate %d — uid=%s  MIFARE read %d blocks",
+                self._name, self._gate, uid_hex,
+                len(block_dict['blocks']))
+        self._parse_current_tag(tag)
+
     def _capture_tag_metadata(self, uid_hex):
         tag = self._state.current_tag
         if tag is None or tag.uid != uid_hex:
@@ -1162,13 +1223,23 @@ class NFCGate:
         if strategy == 'ntag_type2':
             self._capture_ntag_metadata(tag)
         elif strategy == 'mifare_classic':
-            tag.parse_error = 'mifare_classic metadata read not implemented'
-            self._release_reader_target("mifare_uid_only_fallback")
-            if self._debug >= 3:
-                logger.info(
-                    "nfc_gate: [%s] gate %d — uid=%s  MIFARE Classic "
-                    "metadata read not implemented; UID-only fallback",
-                    self._name, self._gate, uid_hex)
+            keys, reason = self._resolve_auth_keys(tag)
+            if keys is None:
+                tag.parse_error = ('mifare auth key derivation failed: %s'
+                                   % reason)
+                self._release_reader_target("mifare_key_failure")
+                if self._debug >= 3:
+                    logger.info(
+                        "nfc_gate: [%s] gate %d — uid=%s  MIFARE key "
+                        "derivation failed: %s; UID-only fallback",
+                        self._name, self._gate, uid_hex, reason)
+            else:
+                if self._debug >= 3:
+                    logger.info(
+                        "nfc_gate: [%s] gate %d — uid=%s  MIFARE Classic "
+                        "Bambu keys derived; reading sectors 0-4",
+                        self._name, self._gate, uid_hex)
+                self._capture_mifare_metadata(tag, keys)
         else:
             tag.parse_error = 'unsupported target; uid-only fallback'
             self._release_reader_target("unsupported_uid_only_fallback")
@@ -1666,20 +1737,6 @@ class NFCGate:
     def _run_rewind(self):
         return scan_jog.run_rewind(self)
 
-    def _hh_filament_label(self):
-        """Return a short string describing this gate's HH spool assignment."""
-        hh = self._read_hh_status()
-        if not hh.present:
-            return "HH: n/a"
-        if self._gate >= hh.gate_count:
-            return "HH: unknown"
-        if hh.active_gate == self._gate and hh.filament_pos > 0:
-            return "HH: spool %d  loading (pos %d)" % (hh.spool, hh.filament_pos)
-        if hh.assigned:
-            return "HH: spool %d  %s" % (
-                hh.spool, "available" if hh.available else "assigned")
-        return "HH: empty"
-
     def status_line(self):
         if self._failed:
             return ("  Gate %d  [%s]:  READER FAILED (check wiring, address 0x24)"
@@ -1690,7 +1747,7 @@ class NFCGate:
             poll_state = "polling"
         else:
             poll_state = "not polling"
-        hh_label = self._hh_filament_label()
+        hh_label = self._read_hh_status().label()
         if self._state.current_spool is DIRECT_METADATA_SPOOL:
             meta = (self._state.current_tag.meta
                     if self._state.current_tag is not None else {})

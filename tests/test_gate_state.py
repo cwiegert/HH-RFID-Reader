@@ -60,6 +60,10 @@ _stub('nfc_gates.pn532_driver',
       low_level_debug_help_lines=lambda command_base: [],
       run_low_level_debug=lambda *a, **k: False)
 _stub('nfc_gates.spoolman_client', SpoolmanClient=object)
+_stub('nfc_gates.vendor',
+      __path__=[os.path.join(_EXTRAS, 'nfc_gates', 'vendor')],
+      __package__='nfc_gates.vendor')
+_stub('nfc_gates.vendor.rfid_tag_parser', parse_tag=lambda raw, uid_hex=None: None)
 
 from nfc_gates.nfc_manager import (
     CurrentTag, GateState, NFCGate, DIRECT_METADATA_SPOOL,
@@ -337,9 +341,11 @@ def test_read_current_tag_mifare_falls_back_without_ntag_read():
     assert 'read_target' in reader.calls
     assert not any(isinstance(call, tuple) and call[0] == 'ntag_read_user_memory'
                    for call in reader.calls)
-    assert ('release', 'mifare_uid_only_fallback') in reader.calls
-    assert gate._state.current_tag.parse_error == (
-        'mifare_classic metadata read not implemented')
+    # Key derivation fails in the test environment (no pycryptodome / _bambu_derive_keys),
+    # so the MIFARE path releases with 'mifare_key_failure' and records a derivation error.
+    assert ('release', 'mifare_key_failure') in reader.calls
+    assert gate._state.current_tag.parse_error is not None
+    assert gate._state.current_tag.parse_error.startswith('mifare auth key derivation failed:')
 
 
 def test_read_current_tag_unknown_falls_back_without_ntag_read():
@@ -352,6 +358,160 @@ def test_read_current_tag_unknown_falls_back_without_ntag_read():
     assert ('release', 'unsupported_uid_only_fallback') in reader.calls
     assert gate._state.current_tag.parse_error == (
         'unsupported target; uid-only fallback')
+
+# ── _read_current_tag: read_target failure cases ─────────────────────────────
+
+def test_read_target_none_returns_none():
+    """read_target() returning None means no tag is present; no CurrentTag created."""
+    reader = _ReaderForCurrentTag(target_info=None)
+    gate = _read_gate(reader, tag_parsing=True)
+    assert gate._read_current_tag() is None
+    assert reader.calls == ['read_target']
+    assert gate._state.current_tag is None
+
+
+def test_read_target_missing_uid_releases_and_returns_none():
+    """Target dict with no 'uid' key releases the target and returns None."""
+    target = {k: v for k, v in _target().items() if k != 'uid'}
+    reader = _ReaderForCurrentTag(target_info=target)
+    gate = _read_gate(reader, tag_parsing=True)
+    assert gate._read_current_tag() is None
+    assert ('release', 'missing_uid') in reader.calls
+    assert gate._state.current_tag is None
+
+
+def test_read_target_empty_uid_releases_and_returns_none():
+    """Target dict with uid='' is treated as missing; releases and returns None."""
+    reader = _ReaderForCurrentTag(target_info=_target(uid=''))
+    gate = _read_gate(reader, tag_parsing=True)
+    assert gate._read_current_tag() is None
+    assert ('release', 'missing_uid') in reader.calls
+    assert gate._state.current_tag is None
+
+
+# ── _read_current_tag: NTAG read failure cases ────────────────────────────────
+
+class _RaisingNtagReader(_ReaderForCurrentTag):
+    def ntag_read_user_memory(self, start_page=4, end_page=67):
+        self.calls.append(('ntag_read_user_memory', start_page, end_page))
+        raise OSError("I2C timeout")
+
+
+def test_ntag_read_exception_returns_uid_with_parse_error():
+    """I2C error during NTAG read records parse_error but still returns the UID."""
+    reader = _RaisingNtagReader(target_info=_target(sak=0x00))
+    gate = _read_gate(reader, tag_parsing=True)
+    assert gate._read_current_tag() == '04AABB'
+    tag = gate._state.current_tag
+    assert tag is not None
+    assert tag.parse_error.startswith('ntag read failed:')
+    assert tag.meta == {'uid': '04AABB'}
+    assert tag.raw_tag_data is None
+
+
+def test_ntag_read_empty_bytes_returns_uid_with_parse_error():
+    """NTAG read returning an empty bytearray records 'empty ntag read'."""
+    reader = _ReaderForCurrentTag(target_info=_target(sak=0x00), raw=bytearray())
+    gate = _read_gate(reader, tag_parsing=True)
+    assert gate._read_current_tag() == '04AABB'
+    tag = gate._state.current_tag
+    assert tag.parse_error == 'empty ntag read'
+    assert tag.meta == {'uid': '04AABB'}
+
+
+class _NoneNtagReader(_ReaderForCurrentTag):
+    def ntag_read_user_memory(self, start_page=4, end_page=67):
+        self.calls.append(('ntag_read_user_memory', start_page, end_page))
+        return None
+
+
+def test_ntag_read_none_returns_uid_with_parse_error():
+    """NTAG read returning None is treated the same as empty bytes."""
+    reader = _NoneNtagReader(target_info=_target(sak=0x00))
+    gate = _read_gate(reader, tag_parsing=True)
+    assert gate._read_current_tag() == '04AABB'
+    tag = gate._state.current_tag
+    assert tag.parse_error == 'empty ntag read'
+    assert tag.meta == {'uid': '04AABB'}
+
+
+# ── _parse_current_tag: parse_tag failure cases ───────────────────────────────
+#
+# Each test stubs nfc_gates.vendor.rfid_tag_parser.parse_tag to control the
+# outcome.  The stub installed at module level (returns None) is the default.
+
+_NON_EMPTY_RAW = bytearray([0x03, 0x0F, 0xD1, 0x01, 0x0B, 0x54, 0x02, 0x65]
+                            + [0x00] * 56)
+
+
+def _parse_gate(parse_tag_fn):
+    """Gate wired to a non-empty NTAG read and a controlled parse_tag."""
+    import sys
+    sys.modules['nfc_gates.vendor.rfid_tag_parser'].parse_tag = parse_tag_fn
+    reader = _ReaderForCurrentTag(target_info=_target(sak=0x00), raw=_NON_EMPTY_RAW)
+    return _read_gate(reader, tag_parsing=True)
+
+
+def test_parse_tag_raises_sets_parse_error():
+    """parse_tag() raising an exception records parse_error; UID is still returned."""
+    def _bad(raw, uid_hex=None):
+        raise ValueError("corrupt NDEF")
+    gate = _parse_gate(_bad)
+    assert gate._read_current_tag() == '04AABB'
+    assert gate._state.current_tag.parse_error.startswith('parse failed:')
+
+
+def test_parse_tag_returns_none_yields_uid_only_meta():
+    """parse_tag() returning None leaves meta as {uid: ...} with no parse_error."""
+    gate = _parse_gate(lambda raw, uid_hex=None: None)
+    assert gate._read_current_tag() == '04AABB'
+    tag = gate._state.current_tag
+    assert tag.meta == {'uid': '04AABB'}
+    assert tag.parse_error is None
+
+
+def test_parse_tag_error_dict_surfaces_parse_error():
+    """parse_tag() returning a dict with parse_error key surfaces that error."""
+    def _errored(raw, uid_hex=None):
+        return {'uid': uid_hex, 'parse_error': 'unrecognised tag format'}
+    gate = _parse_gate(_errored)
+    assert gate._read_current_tag() == '04AABB'
+    tag = gate._state.current_tag
+    assert tag.parse_error == 'unrecognised tag format'
+    assert tag.meta.get('uid') == '04AABB'
+
+
+# ── Metadata preserved through rewind ────────────────────────────────────────
+
+def test_metadata_preserved_when_tag_absent_on_second_read():
+    """current_tag.meta set by a successful deep read survives a subsequent miss.
+
+    During scan-jog rewind the spool moves away from the reader.  Subsequent
+    poll ticks return no tag.  The metadata captured on the first read must
+    still be on current_tag so _resolve_spool can use it from cache.
+    """
+    import sys
+    captured_meta = {'uid': '04AABB', 'material': 'PLA', 'color_hex': 'FF5500'}
+    sys.modules['nfc_gates.vendor.rfid_tag_parser'].parse_tag = (
+        lambda raw, uid_hex=None: dict(captured_meta))
+
+    reader = _ReaderForCurrentTag(target_info=_target(sak=0x00), raw=_NON_EMPTY_RAW)
+    gate = _read_gate(reader, tag_parsing=True)
+
+    uid = gate._read_current_tag()
+    assert uid == '04AABB'
+    tag_after_read = gate._state.current_tag
+    assert tag_after_read.meta.get('material') == 'PLA'
+
+    # Tag moves away — second read returns None
+    reader.target_info = None
+    assert gate._read_current_tag() is None
+
+    # current_tag must still hold the metadata from the first read
+    assert gate._state.current_tag is tag_after_read
+    assert gate._state.current_tag.meta.get('material') == 'PLA'
+    assert gate._state.current_tag.meta.get('color_hex') == 'FF5500'
+
 
 # ── scan_mode parameter ───────────────────────────────────────────────────────
 
