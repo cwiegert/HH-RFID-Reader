@@ -68,6 +68,11 @@ from .pn532_driver   import PN532Driver
 from .spoolman_client import SpoolmanClient
 
 
+def _spoolman_url_enabled(url):
+    value = str(url or '').strip().lower()
+    return value not in ('', 'disabled', 'disable', 'false', 'off', 'none', 'no')
+
+
 def _get_console_config(config, default_enabled=False, default_level='warning'):
     """
     Read UI/console logging settings.
@@ -82,10 +87,6 @@ def _get_console_config(config, default_enabled=False, default_level='warning'):
                        config.get('ui_log_level', default_level))
     return enabled, level
 
-
-def _spoolman_url_enabled(url):
-    value = str(url or '').strip().lower()
-    return value not in ('', 'disabled', 'disable', 'false', 'off', 'none', 'no')
 
 
 class _BusDefaultConfig:
@@ -243,15 +244,20 @@ class KlipperInterface:
                                  gate, spool_id, uid_hex)
                 else:
                     material = self._macro_value((meta or {}).get('material', ''))
-                    color = self._macro_value((meta or {}).get('color_hex', ''))
-                    vendor = self._macro_value((meta or {}).get('brand')
-                                               or (meta or {}).get('vendor', ''))
-                    script = ("_NFC_SPOOL_CHANGED GATE={} MATERIAL={} "
-                              "COLOR={} VENDOR={} UID={}").format(
-                                  gate, material, color, vendor, uid_hex)
+                    color    = self._macro_value((meta or {}).get('color_hex', ''))
+                    temp     = (meta or {}).get('min_temp')
+                    parts = ['_NFC_SPOOL_CHANGED', 'GATE={}'.format(gate)]
+                    if material:
+                        parts.append('MATERIAL={}'.format(material))
+                    if color:
+                        parts.append('COLOR={}'.format(color))
+                    if temp is not None:
+                        parts.append('TEMP={}'.format(int(temp)))
+                    parts.append('UID={}'.format(uid_hex))
+                    script = ' '.join(parts)
                     logger.info("nfc_gates: gate %d → tag %s metadata-only "
-                                "(material=%s color=%s)",
-                                gate, uid_hex, material, color)
+                                "(material=%s color=%s temp=%s)",
+                                gate, uid_hex, material, color, temp)
             elif event_type == EVENT_UID_ONLY:
                 script = "_NFC_TAG_NO_SPOOL GATE={} UID={}".format(gate, uid_hex)
                 logger.info("nfc_gates: gate %d → tag %s (no spool ID in Spoolman)",
@@ -360,8 +366,9 @@ class NFCGateDefaults:
                                                    minval=0.1, maxval=5.0)
         self.scan_enabled         = config.getboolean('scan_enabled', True)
         self.tag_parsing          = config.getboolean('tag_parsing', False)
-        self.tag_max_pages        = config.getint('tag_max_pages', 64,
+        self.tag_max_pages        = config.getint('tag_max_pages', 16,
                                                    minval=4, maxval=135)
+        self.bambu_reads          = config.getboolean('bambu_reads', False)
         self.spoolman_auto_create = config.getboolean('spoolman_auto_create', False)
 
         self._printer = config.get_printer()
@@ -519,8 +526,15 @@ class NFCGate:
         self._tag_parsing          = config.getboolean('tag_parsing',
                                                         d.tag_parsing if d else False)
         self._tag_max_pages        = config.getint('tag_max_pages',
-                                                    d.tag_max_pages if d else 64,
+                                                    d.tag_max_pages if d else 16,
                                                     minval=4, maxval=135)
+        self._bambu_reads          = config.getboolean('bambu_reads',
+                                                        d.bambu_reads if d else False)
+        if self._bambu_reads and not self._tag_parsing:
+            logger.warning(
+                "nfc_gate: [%s] bambu_reads=True has no effect when "
+                "tag_parsing=False — set tag_parsing: True to enable "
+                "Bambu/MIFARE reads", self._name)
         self._spoolman_auto_create = config.getboolean('spoolman_auto_create',
                                                         d.spoolman_auto_create if d else False)
         self._scan_timer           = None
@@ -1223,6 +1237,17 @@ class NFCGate:
         if strategy == 'ntag_type2':
             self._capture_ntag_metadata(tag)
         elif strategy == 'mifare_classic':
+            if not self._bambu_reads:
+                tag.parse_error = ('mifare_classic rich read disabled; '
+                                   'uid-only fallback')
+                self._release_reader_target("mifare_disabled")
+                if self._debug >= 3:
+                    logger.info(
+                        "nfc_gate: [%s] gate %d — uid=%s  MIFARE Classic "
+                        "target seen but bambu_reads is disabled; "
+                        "UID-only fallback",
+                        self._name, self._gate, uid_hex)
+                return uid_hex
             keys, reason = self._resolve_auth_keys(tag)
             if keys is None:
                 tag.parse_error = ('mifare auth key derivation failed: %s'
@@ -1344,29 +1369,38 @@ class NFCGate:
                         SpoolmanClient as LBSpoolmanClient)
                     lb = LBSpoolmanClient(base_url=base_url,
                                           timeout=self._spoolman._timeout)
-                    vendor_name = str(meta.get('brand')
-                                      or meta.get('vendor')
-                                      or 'Generic').strip() or 'Generic'
-                    vendor_id = lb.find_or_create_vendor(vendor_name)
-                    filament_name = material
-                    filament_id = lb.find_or_create_filament(
-                        name=filament_name,
-                        vendor_id=vendor_id,
-                        material=material,
-                        color_hex=color or None,
-                        diameter=meta.get('diameter_mm') or 1.75)
-                    weight_g = meta.get('weight_g')
-                    if weight_g is None:
-                        weight_g = meta.get('weight')
-                    spool = lb.create_spool(
-                        filament_id=filament_id,
-                        initial_weight=weight_g,
-                        remaining_weight=weight_g,
-                        spool_weight=meta.get('spool_weight_g'),
-                        lot_nr=meta.get('tray_uid'),
-                        extra={self._spoolman._rfid_key: uid_hex})
-                    if isinstance(spool, dict) and spool.get('id') is not None:
-                        new_spool_id = int(spool.get('id'))
+                    if self._debug >= 3:
+                        logger.info(
+                            "nfc_gate: [%s] gate %d — uid=%s  "
+                            "auto-create via lameandboard client "
+                            "(uid_hex=None; patching %s next)",
+                            self._name, self._gate, uid_hex,
+                            self._spoolman._rfid_key)
+                    new_spool_id = lb.auto_create_spool(meta, uid_hex=None)
+                    if new_spool_id is not None:
+                        new_spool_id = int(new_spool_id)
+                        if self._debug >= 3:
+                            logger.info(
+                                "nfc_gate: [%s] gate %d — uid=%s  "
+                                "auto-created Spoolman spool_id=%s; "
+                                "patching extra[%s]",
+                                self._name, self._gate, uid_hex, new_spool_id,
+                                self._spoolman._rfid_key)
+                        if not self._spoolman.set_spool_uid(new_spool_id, uid_hex):
+                            if tag is not None:
+                                tag.resolution = {
+                                    'path': 'auto_create_uid_patch_failed',
+                                    'spool_id': new_spool_id,
+                                }
+                            logger.warning(
+                                "nfc_gate: [%s] gate %d — uid=%s  "
+                                "auto-created Spoolman spool_id=%s but "
+                                "failed to patch extra[%s]; treating as "
+                                "unresolved so the next read does not lose "
+                                "the UID link",
+                                self._name, self._gate, uid_hex,
+                                new_spool_id, self._spoolman._rfid_key)
+                            return None
                         self._spoolman.clear_cache()
                         if tag is not None:
                             tag.resolution = {'path': 'auto_create',
@@ -1374,13 +1408,15 @@ class NFCGate:
                         if self._debug >= 3:
                             logger.info(
                                 "nfc_gate: [%s] gate %d — uid=%s  "
-                                "auto-created Spoolman spool_id=%s",
-                                self._name, self._gate, uid_hex, new_spool_id)
+                                "auto-created Spoolman spool_id=%s and "
+                                "patched extra[%s]",
+                                self._name, self._gate, uid_hex,
+                                new_spool_id, self._spoolman._rfid_key)
                         return new_spool_id
                     logger.warning(
                         "nfc_gate: [%s] gate %d — uid=%s  auto-create "
-                        "returned unexpected spool response: %r",
-                        self._name, self._gate, uid_hex, spool)
+                        "returned no spool_id",
+                        self._name, self._gate, uid_hex)
                 except Exception as e:
                     logger.warning(
                         "nfc_gate: [%s] gate %d — uid=%s  "
@@ -1768,11 +1804,21 @@ class NFCGate:
                 % (self._gate, poll_state, hh_label))
 
     def get_status(self, _eventtime=None):
+        tag = self._state.current_tag
+        is_meta_direct = self._state.current_spool is DIRECT_METADATA_SPOOL
+        tag_present = self._state.current_uid is not None
+        resolution = ''
+        if is_meta_direct:
+            resolution = 'metadata_direct'
+        elif tag is not None and isinstance(tag.resolution, dict):
+            resolution = tag.resolution.get('path', '')
         return {
-            'gate':     self._gate,
-            'spool_id': (-1 if self._state.current_spool is DIRECT_METADATA_SPOOL
-                         else self._state.current_spool
-                         if self._state.current_spool is not None else -1),
-            'uid':      self._state.current_uid or '',
-            'failed':   self._failed,
+            'gate':        self._gate,
+            'tag_present': tag_present,
+            'spool_id':    (-1 if is_meta_direct
+                            else self._state.current_spool
+                            if self._state.current_spool is not None else -1),
+            'uid':         self._state.current_uid or '',
+            'failed':      self._failed,
+            'resolution':  resolution,
         }

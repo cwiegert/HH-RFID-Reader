@@ -136,6 +136,9 @@ def test_defaults_built_in_values():
     assert d.transceive_delay   == 0.250
     assert d.crc_delay          == 0.050
     assert d.debug              == 2
+    assert d.tag_parsing        == False
+    assert d.bambu_reads        == False
+    assert d.spoolman_auto_create == False
 
 def test_defaults_all_keys_overridden():
     d = NFCGateDefaults(MockConfig({
@@ -150,6 +153,10 @@ def test_defaults_all_keys_overridden():
         'transceive_delay':   0.5,
         'crc_delay':          0.1,
         'debug':              2,
+        'tag_parsing':        True,
+        'tag_max_pages':      16,
+        'bambu_reads':        True,
+        'spoolman_auto_create': True,
     }))
     assert d.spoolman_url       == 'http://192.168.1.50:7912'
     assert d.spoolman_rfid_key  == 'nfc_uid'
@@ -162,6 +169,10 @@ def test_defaults_all_keys_overridden():
     assert d.transceive_delay   == 0.5
     assert d.crc_delay          == 0.1
     assert d.debug              == 2
+    assert d.tag_parsing        == True
+    assert d.tag_max_pages      == 16
+    assert d.bambu_reads        == True
+    assert d.spoolman_auto_create == True
 
 def test_defaults_partial_override():
     d = NFCGateDefaults(MockConfig({

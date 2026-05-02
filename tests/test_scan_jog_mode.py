@@ -692,6 +692,68 @@ def test_rewind_and_exit_clears_scan_mode():
     assert not g._scan_mode
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Item 8 — scan_jog finish: 5-tuple cached event with meta dispatches correctly
+# ─────────────────────────────────────────────────────────────────────────────
+
+class _DispatchCapture:
+    def __init__(self):
+        self.calls = []
+    def dispatch(self, event_type, gate, uid, spool, meta=None):
+        self.calls.append((event_type, gate, uid, spool, meta))
+
+def test_finish_scan_metadata_direct_dispatches_meta():
+    """5-tuple scan_found_event with meta=dict passes meta to klipper.dispatch."""
+    g = _make_gate()
+    g._klipper = _DispatchCapture()
+    g._start_scan_mode()
+    meta = {'material': 'PLA', 'color_hex': 'FF5500'}
+    g._scan_found_event = ('changed', 0, '04AABB', None, meta)
+
+    g._finish_scan()
+
+    assert len(g._klipper.calls) == 1
+    ev = g._klipper.calls[0]
+    assert ev[0] == 'changed'
+    assert ev[1] == 0
+    assert ev[2] == '04AABB'
+    assert ev[3] is None
+    assert ev[4] == meta
+
+def test_finish_scan_spool_id_dispatches_no_meta():
+    """Normal spool_id event dispatches with meta=None."""
+    g = _make_gate()
+    g._klipper = _DispatchCapture()
+    g._start_scan_mode()
+    g._scan_found_event = ('changed', 0, '04AABB', 42, None)
+
+    g._finish_scan()
+
+    assert g._klipper.calls == [('changed', 0, '04AABB', 42, None)]
+
+def test_finish_scan_no_event_does_not_dispatch():
+    """When scan_found_event is None, klipper.dispatch is never called."""
+    g = _make_gate()
+    g._klipper = _DispatchCapture()
+    g._start_scan_mode()
+    g._scan_found_event = None
+
+    g._finish_scan()
+
+    assert g._klipper.calls == []
+
+def test_finish_scan_uid_only_event_dispatches_without_meta():
+    """uid_only event (tag unregistered in Spoolman) dispatches correctly."""
+    g = _make_gate()
+    g._klipper = _DispatchCapture()
+    g._start_scan_mode()
+    g._scan_found_event = ('uid_only', 0, '04AABB', None, None)
+
+    g._finish_scan()
+
+    assert g._klipper.calls == [('uid_only', 0, '04AABB', None, None)]
+
+
 # ── Approx helper (avoids pytest dependency for float comparison) ─────────────
 
 def pytest_approx(val, rel=1e-6):

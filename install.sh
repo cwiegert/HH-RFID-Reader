@@ -117,7 +117,9 @@ prompt_choice() {
 }
 
 detect_klipper_python() {
-    local candidate
+    local candidate user home_dir
+    # Check the current user's home first, then every home directory on the
+    # system.  Kiauh installs the venv at ~/klippy-env regardless of username.
     for candidate in \
         "${HOME}/klippy-env/bin/python" \
         "${HOME}/klippy-env/bin/python3"
@@ -127,7 +129,21 @@ detect_klipper_python() {
             return 0
         fi
     done
-    command -v python3
+    # Scan all home directories for a klippy-env (covers non-pi usernames).
+    for home_dir in /home/*; do
+        for candidate in \
+            "${home_dir}/klippy-env/bin/python" \
+            "${home_dir}/klippy-env/bin/python3"
+        do
+            if [ -x "${candidate}" ]; then
+                printf '%s\n' "${candidate}"
+                return 0
+            fi
+        done
+    done
+    # No Klipper venv found — do not fall back to system Python.
+    # Packages installed there are invisible to Klipper.
+    return 1
 }
 
 ensure_python_module() {
@@ -148,11 +164,13 @@ ensure_python_module() {
     fi
 
     echo "  [install] ${package_name} into ${python_bin}"
-    if ! "${python_bin}" -m pip install "${package_name}"; then
-        echo "WARNING: Failed to install ${package_name} automatically."
-        echo "         Install it manually in the Klipper environment with:"
-        echo "         ${python_bin} -m pip install ${package_name}"
-        return 1
+    if ! "${python_bin}" -m pip install "${package_name}" 2>/dev/null; then
+        if ! "${python_bin}" -m pip install "${package_name}" --break-system-packages; then
+            echo "WARNING: Failed to install ${package_name} automatically."
+            echo "         Install it manually in the Klipper environment with:"
+            echo "         ${python_bin} -m pip install ${package_name} --break-system-packages"
+            return 1
+        fi
     fi
 }
 
@@ -188,7 +206,7 @@ if target_start is None:
         lines[-1] += '\n'
     if lines and lines[-1].strip():
         lines.append('\n')
-    lines.extend([section_line + '\n', f'{key_prefix:<20}{value}\n'])
+    lines.extend([section_line + '\n', f'{key_prefix:<24}{value}\n'])
 else:
     for idx in range(target_start + 1, len(lines)):
         stripped = lines[idx].strip()
@@ -202,7 +220,7 @@ else:
         if stripped.startswith('#'):
             continue
         if stripped.startswith(key_prefix):
-            lines[idx] = f'{key_prefix:<20}{value}\n'
+            lines[idx] = f'{key_prefix:<24}{value}\n'
             replaced = True
             break
 
@@ -211,7 +229,7 @@ else:
         if insert_at > 0 and lines[insert_at - 1].strip():
             lines.insert(insert_at, '\n')
             insert_at += 1
-        lines.insert(insert_at, f'{key_prefix:<20}{value}\n')
+        lines.insert(insert_at, f'{key_prefix:<24}{value}\n')
 
 with open(path, 'w') as f:
     f.writelines(lines)
@@ -352,15 +370,19 @@ prompt_yes_no SCAN_ENABLED \
     "yes"
 
 prompt_choice TAG_MODE \
-    "5. Do you want to resolve spool through Spoolman or enable RFID rich read?" \
+    "5. Tag read mode: Spoolman UID lookup or rich tag read" \
     "spoolman" \
     "spoolman" "rich"
 
 BAMBU_READS="no"
 SPOOLMAN_AUTO_CREATE="no"
 if [ "${TAG_MODE}" = "rich" ]; then
+    echo ""
+    echo "   Rich read supports NTAG/Type-2 metadata tags."
+    echo "   Factory-tagged Bambu spools are MIFARE Classic and require"
+    echo "   authenticated reads plus the pycryptodome HKDF dependency."
     prompt_yes_no BAMBU_READS \
-        "6. Will you be reading factory-tagged Bambu spools?" \
+        "6. Will you read factory-tagged Bambu spools with rich metadata?" \
         "no"
     prompt_yes_no SPOOLMAN_AUTO_CREATE \
         "7. Auto-create missing Spoolman spools from rich tag metadata?" \
@@ -514,6 +536,8 @@ set_config_value "${NFC_READER_CFG}" "nfc_gate" "scan_enabled" \
     "$( [ "${SCAN_ENABLED}" = "yes" ] && echo "True" || echo "False" )"
 set_config_value "${NFC_READER_CFG}" "nfc_gate" "tag_parsing" \
     "$( [ "${TAG_MODE}" = "rich" ] && echo "True" || echo "False" )"
+set_config_value "${NFC_READER_CFG}" "nfc_gate" "bambu_reads" \
+    "$( [ "${BAMBU_READS}" = "yes" ] && echo "True" || echo "False" )"
 set_config_value "${NFC_READER_CFG}" "nfc_gate" "spoolman_auto_create" \
     "$( [ "${SPOOLMAN_AUTO_CREATE}" = "yes" ] && echo "True" || echo "False" )"
 
@@ -521,8 +545,13 @@ write_lane_config "${NFC_READER_HW_CFG}" "${LANE_COUNT}"
 
 if [ "${BAMBU_READS}" = "yes" ]; then
     echo ""
-    echo "Checking optional Bambu dependency..."
-    ensure_python_module "Crypto.Protocol.KDF" "pycryptodome" || true
+    echo "Checking Bambu/MIFARE crypto dependency..."
+    if ! ensure_python_module "Crypto.Protocol.KDF" "pycryptodome"; then
+        echo ""
+        echo "ERROR: Bambu rich reads need pycryptodome in the Klipper Python environment."
+        echo "       Re-run this installer after installing it, or answer 'no' to Bambu reads."
+        exit 1
+    fi
 fi
 
 # ── Moonraker update_manager ──────────────────────────────────────────────────
@@ -562,8 +591,19 @@ echo "    lanes:              ${LANE_COUNT}"
 echo "    spoolman_url:       ${SPOOLMAN_URL}"
 echo "    startup_polling:    ${STARTUP_POLLING}"
 echo "    scan_jog:           ${SCAN_ENABLED}"
-echo "    tag_resolution:     ${TAG_MODE}"
-echo "    bambu_reads:        ${BAMBU_READS}"
+if [ "${TAG_MODE}" = "rich" ]; then
+    echo "    tag_resolution:     rich tag metadata"
+else
+    echo "    tag_resolution:     Spoolman UID lookup"
+fi
+if [ "${TAG_MODE}" != "rich" ]; then
+    echo "    bambu_mifare:       not active in UID-only mode"
+elif [ "${BAMBU_READS}" = "yes" ]; then
+    echo "    bambu_mifare:       enabled (authenticated rich read)"
+else
+    echo "    bambu_mifare:       installer did not add crypto; UID fallback if absent"
+fi
+echo "    bambu_dependency:   ${BAMBU_READS}"
 echo "    spool_auto_create:  ${SPOOLMAN_AUTO_CREATE}"
 echo ""
 echo "  Python extras (symlinked — auto-updates with git pull):"

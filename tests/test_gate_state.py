@@ -63,10 +63,13 @@ _stub('nfc_gates.spoolman_client', SpoolmanClient=object)
 _stub('nfc_gates.vendor',
       __path__=[os.path.join(_EXTRAS, 'nfc_gates', 'vendor')],
       __package__='nfc_gates.vendor')
-_stub('nfc_gates.vendor.rfid_tag_parser', parse_tag=lambda raw, uid_hex=None: None)
+_stub('nfc_gates.vendor.rfid_tag_parser',
+      parse_tag=lambda raw, uid_hex=None: None,
+      is_parse_error=lambda info: bool(
+          isinstance(info, dict) and (info.get('error') or info.get('parse_error'))))
 
 from nfc_gates.nfc_manager import (
-    CurrentTag, GateState, NFCGate, DIRECT_METADATA_SPOOL,
+    CurrentTag, GateState, NFCGate, KlipperInterface, DIRECT_METADATA_SPOOL,
     EVENT_CHANGED, EVENT_UID_ONLY, EVENT_REMOVED)
 
 
@@ -213,6 +216,13 @@ class _ResolverSpoolman:
     def _resolve_base_url(self):
         return self.base_url
 
+    def clear_cache(self):
+        self.calls.append(('clear_cache',))
+
+    def set_spool_uid(self, spool_id, uid_hex):
+        self.calls.append(('set_uid', spool_id, uid_hex, self._rfid_key))
+        return True
+
 
 def _resolver_gate(uid, meta=None, spoolman=None, tag_parsing=True):
     gate = NFCGate.__new__(NFCGate)
@@ -220,11 +230,61 @@ def _resolver_gate(uid, meta=None, spoolman=None, tag_parsing=True):
     gate._state.current_tag = CurrentTag(uid=uid, meta=meta or {})
     gate._spoolman = spoolman
     gate._spoolman_auto_create = False
+    gate._bambu_reads = False
     gate._tag_parsing = tag_parsing
     gate._debug = 0
     gate._name = 'lane0'
     gate._gate = 0
     return gate
+
+
+class _FakeLBSpoolmanClient:
+    instances = []
+
+    def __init__(self, base_url, timeout=5.0):
+        self.base_url = base_url
+        self.timeout = timeout
+        self.calls = []
+        self.vendor_id = 7
+        self.filament_id = 11
+        self.spool = {'id': 1234}
+        self.spool_id = 1234
+        self.raise_on = None
+        self.__class__.instances.append(self)
+
+    def auto_create_spool(self, filament_info, uid_hex=None):
+        self.calls.append(('auto_create_spool', filament_info, uid_hex))
+        if self.raise_on == 'auto_create_spool':
+            raise RuntimeError('auto-create failed')
+        return self.spool_id
+
+    def find_or_create_vendor(self, name):
+        self.calls.append(('vendor', name))
+        if self.raise_on == 'vendor':
+            raise RuntimeError('vendor failed')
+        return self.vendor_id
+
+    def find_or_create_filament(self, **kwargs):
+        self.calls.append(('filament', kwargs))
+        if self.raise_on == 'filament':
+            raise RuntimeError('filament failed')
+        return self.filament_id
+
+    def create_spool(self, **kwargs):
+        self.calls.append(('spool', kwargs))
+        if self.raise_on == 'spool':
+            raise RuntimeError('spool failed')
+        return self.spool
+
+
+def _install_fake_lb_client(monkeypatch, cls=_FakeLBSpoolmanClient):
+    import sys
+    cls.instances = []
+    module = types.ModuleType('nfc_gates.vendor.lameandboard_spoolman')
+    module.SpoolmanClient = cls
+    monkeypatch.setitem(sys.modules, 'nfc_gates.vendor.lameandboard_spoolman',
+                        module)
+    return cls
 
 
 def test_resolve_embedded_id_wins_before_uid_lookup():
@@ -264,6 +324,81 @@ def test_resolve_direct_metadata_requires_current_tag_and_parsing_enabled():
     assert gate._resolve_spool('04AABB') is None
 
 
+def test_resolve_auto_create_uses_vendor_top_level_then_patches_rfid_key(monkeypatch):
+    fake_cls = _install_fake_lb_client(monkeypatch)
+    spoolman = _ResolverSpoolman()
+    spoolman._rfid_key = 'custom_uid'
+    gate = _resolver_gate(
+        '04AABB',
+        {
+            'material': 'PLA',
+            'brand': 'Bambu Lab',
+            'color_hex': 'FF5500',
+            'diameter_mm': 1.75,
+            'weight_g': 1000,
+            'spool_weight_g': 250,
+            'tray_uid': 'ABC123',
+        },
+        spoolman)
+    gate._spoolman_auto_create = True
+
+    assert gate._resolve_spool('04AABB') == 1234
+    assert spoolman.calls == [
+        ('uid', '04AABB'),
+        ('set_uid', 1234, '04AABB', 'custom_uid'),
+        ('clear_cache',),
+    ]
+    client = fake_cls.instances[0]
+    assert client.base_url == 'http://spoolman'
+    assert client.timeout == 5.0
+    assert client.calls == [
+        ('auto_create_spool', gate._state.current_tag.meta, None),
+    ]
+    assert gate._state.current_tag.resolution == {
+        'path': 'auto_create',
+        'spool_id': 1234,
+    }
+
+
+def test_resolve_auto_create_failure_falls_back_unresolved(monkeypatch):
+    class _FailingLBSpoolmanClient(_FakeLBSpoolmanClient):
+        def __init__(self, base_url, timeout=5.0):
+            super().__init__(base_url, timeout)
+            self.raise_on = 'auto_create_spool'
+
+    _install_fake_lb_client(monkeypatch, _FailingLBSpoolmanClient)
+    spoolman = _ResolverSpoolman()
+    gate = _resolver_gate('04AABB', {'material': 'PLA'}, spoolman)
+    gate._spoolman_auto_create = True
+
+    assert gate._resolve_spool('04AABB') is None
+    assert spoolman.calls == [('uid', '04AABB')]
+    assert gate._state.current_tag.resolution == {'path': 'unresolved'}
+
+
+def test_resolve_auto_create_uid_patch_failure_is_unresolved(monkeypatch):
+    _install_fake_lb_client(monkeypatch)
+
+    class _PatchFailSpoolman(_ResolverSpoolman):
+        def set_spool_uid(self, spool_id, uid_hex):
+            self.calls.append(('set_uid', spool_id, uid_hex, self._rfid_key))
+            return False
+
+    spoolman = _PatchFailSpoolman()
+    gate = _resolver_gate('04AABB', {'material': 'PLA'}, spoolman)
+    gate._spoolman_auto_create = True
+
+    assert gate._resolve_spool('04AABB') is None
+    assert spoolman.calls == [
+        ('uid', '04AABB'),
+        ('set_uid', 1234, '04AABB', 'rfid_tag'),
+    ]
+    assert gate._state.current_tag.resolution == {
+        'path': 'auto_create_uid_patch_failed',
+        'spool_id': 1234,
+    }
+
+
 class _ReaderForCurrentTag:
     def __init__(self, target_info=None, uid='04AABB', raw=None):
         self.target_info = target_info
@@ -283,6 +418,11 @@ class _ReaderForCurrentTag:
         self.calls.append(('ntag_read_user_memory', start_page, end_page))
         return self.raw
 
+    def mifare_read_authenticated_blocks(self, sector_keys, sectors, uid_bytes=None):
+        self.calls.append(('mifare_read_authenticated_blocks',
+                           sector_keys, sectors, uid_bytes))
+        return self.raw
+
     def _release_current_target(self, reason='manual'):
         self.calls.append(('release', reason))
 
@@ -292,6 +432,7 @@ def _read_gate(reader, tag_parsing=True):
     gate._reader = reader
     gate._state = GateState(0)
     gate._tag_parsing = tag_parsing
+    gate._bambu_reads = False
     gate._tag_max_pages = 8
     gate._debug = 0
     gate._name = 'lane0'
@@ -333,7 +474,7 @@ def test_read_current_tag_deep_mode_reads_ntag_memory():
     assert gate._state.current_tag.raw_tag_data == reader.raw
 
 
-def test_read_current_tag_mifare_falls_back_without_ntag_read():
+def test_read_current_tag_mifare_respects_bambu_reads_disabled():
     reader = _ReaderForCurrentTag(target_info=_target(sak=0x08))
     gate = _read_gate(reader, tag_parsing=True)
 
@@ -341,11 +482,93 @@ def test_read_current_tag_mifare_falls_back_without_ntag_read():
     assert 'read_target' in reader.calls
     assert not any(isinstance(call, tuple) and call[0] == 'ntag_read_user_memory'
                    for call in reader.calls)
-    # Key derivation fails in the test environment (no pycryptodome / _bambu_derive_keys),
-    # so the MIFARE path releases with 'mifare_key_failure' and records a derivation error.
+    assert not any(isinstance(call, tuple)
+                   and call[0] == 'mifare_read_authenticated_blocks'
+                   for call in reader.calls)
+    assert ('release', 'mifare_disabled') in reader.calls
+    assert gate._state.current_tag.parse_error == (
+        'mifare_classic rich read disabled; uid-only fallback')
+
+
+def test_read_current_tag_mifare_key_failure_falls_back_without_ntag_read(monkeypatch):
+    import sys
+    monkeypatch.delattr(sys.modules['nfc_gates.vendor.rfid_tag_parser'],
+                        '_bambu_derive_keys', raising=False)
+    reader = _ReaderForCurrentTag(target_info=_target(sak=0x08))
+    gate = _read_gate(reader, tag_parsing=True)
+    gate._bambu_reads = True
+
+    assert gate._read_current_tag() == '04AABB'
+    assert not any(isinstance(call, tuple) and call[0] == 'ntag_read_user_memory'
+                   for call in reader.calls)
     assert ('release', 'mifare_key_failure') in reader.calls
-    assert gate._state.current_tag.parse_error is not None
-    assert gate._state.current_tag.parse_error.startswith('mifare auth key derivation failed:')
+    assert gate._state.current_tag.parse_error.startswith(
+        'mifare auth key derivation failed:')
+
+
+def test_read_current_tag_mifare_reads_authenticated_blocks_when_keys_exist(monkeypatch):
+    import sys
+    parser = sys.modules['nfc_gates.vendor.rfid_tag_parser']
+    keys = [bytes([idx]) * 6 for idx in range(16)]
+    block_dump = {'uid_bytes': bytes([0x04, 0xAA, 0xBB, 0xCC]),
+                  'blocks': {2: b'PLA\x00' + (b'\x00' * 12)}}
+    monkeypatch.setattr(parser, '_bambu_derive_keys', lambda uid_bytes: keys,
+                        raising=False)
+
+    def _parse(raw, uid_hex=None):
+        assert raw is block_dump
+        return {
+            'uid': uid_hex,
+            'material': 'PLA',
+            'brand': 'Bambu Lab',
+            'tag_format': 'bambu',
+        }
+    monkeypatch.setattr(parser, 'parse_tag', _parse)
+
+    target = _target(uid='04AABBCC', sak=0x08, uid_length=4)
+    target['uid_bytes'] = [0x04, 0xAA, 0xBB, 0xCC]
+    reader = _ReaderForCurrentTag(target_info=target, raw=block_dump)
+    gate = _read_gate(reader, tag_parsing=True)
+    gate._bambu_reads = True
+
+    assert gate._read_current_tag() == '04AABBCC'
+    assert not any(isinstance(call, tuple) and call[0] == 'ntag_read_user_memory'
+                   for call in reader.calls)
+    read_calls = [call for call in reader.calls
+                  if isinstance(call, tuple)
+                  and call[0] == 'mifare_read_authenticated_blocks']
+    assert len(read_calls) == 1
+    assert read_calls[0][1] is keys
+    assert read_calls[0][2] == [0, 1, 2, 3, 4]
+    assert read_calls[0][3] == bytes([0x04, 0xAA, 0xBB, 0xCC])
+    assert gate._state.current_tag.raw_tag_data is block_dump
+    assert gate._state.current_tag.meta['tag_format'] == 'bambu'
+    assert gate._state.current_tag.parse_error is None
+
+
+class _EmptyMifareReader(_ReaderForCurrentTag):
+    def mifare_read_authenticated_blocks(self, sector_keys, sectors, uid_bytes=None):
+        self.calls.append(('mifare_read_authenticated_blocks',
+                           sector_keys, sectors, uid_bytes))
+        return None
+
+
+def test_read_current_tag_mifare_empty_blocks_falls_back_to_uid_meta(monkeypatch):
+    import sys
+    parser = sys.modules['nfc_gates.vendor.rfid_tag_parser']
+    monkeypatch.setattr(parser, '_bambu_derive_keys',
+                        lambda uid_bytes: [b'\x00' * 6] * 16,
+                        raising=False)
+
+    target = _target(uid='04AABBCC', sak=0x08, uid_length=4)
+    target['uid_bytes'] = [0x04, 0xAA, 0xBB, 0xCC]
+    reader = _EmptyMifareReader(target_info=target)
+    gate = _read_gate(reader, tag_parsing=True)
+    gate._bambu_reads = True
+
+    assert gate._read_current_tag() == '04AABBCC'
+    assert gate._state.current_tag.meta == {'uid': '04AABBCC'}
+    assert gate._state.current_tag.parse_error == 'mifare read returned no blocks'
 
 
 def test_read_current_tag_unknown_falls_back_without_ntag_read():
@@ -540,6 +763,191 @@ def test_scan_mode_off_resumes_miss_count():
     assert_silent(gs.process_read(None, None))
     event = gs.process_read(None, None)
     assert_event(event, EVENT_REMOVED)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Item 7 — KlipperInterface._run_gcode() metadata branch
+# ─────────────────────────────────────────────────────────────────────────────
+
+class _ImmediateReactor:
+    """Executes register_callback payloads synchronously so tests can inspect GCode."""
+    def register_callback(self, cb):
+        cb(0.0)
+
+class _GCodeCapture:
+    def __init__(self):
+        self.scripts = []
+    def run_script(self, script):
+        self.scripts.append(script)
+
+class _MockPrinterKI:
+    def __init__(self):
+        self._gcode = _GCodeCapture()
+    def lookup_object(self, name, default=None):
+        return self._gcode if name == 'gcode' else default
+
+def _make_ki():
+    p = _MockPrinterKI()
+    ki = KlipperInterface(p, _ImmediateReactor(), debug=0)
+    return ki, p._gcode
+
+def test_klipper_interface_changed_with_spool_id():
+    ki, gcode = _make_ki()
+    ki.dispatch(EVENT_CHANGED, gate=0, uid_hex='04AABB', spool_id=42)
+    assert gcode.scripts == ['_NFC_SPOOL_CHANGED GATE=0 SPOOL_ID=42 UID=04AABB']
+
+def test_klipper_interface_changed_metadata_only_full_meta():
+    ki, gcode = _make_ki()
+    ki.dispatch(EVENT_CHANGED, gate=1, uid_hex='04AABB', spool_id=None,
+                meta={'material': 'PLA', 'color_hex': 'FF5500', 'brand': 'eSUN'})
+    assert len(gcode.scripts) == 1
+    s = gcode.scripts[0]
+    assert s.startswith('_NFC_SPOOL_CHANGED ')
+    assert 'GATE=1' in s
+    assert 'MATERIAL=PLA' in s
+    assert 'COLOR=FF5500' in s
+    assert 'VENDOR' not in s   # VENDOR dropped — MMU_GATE_MAP has no such param
+    assert 'UID=04AABB' in s
+    assert 'SPOOL_ID' not in s
+
+def test_klipper_interface_changed_metadata_only_partial_meta():
+    ki, gcode = _make_ki()
+    ki.dispatch(EVENT_CHANGED, gate=0, uid_hex='04CCDD', spool_id=None,
+                meta={'material': 'PETG'})
+    s = gcode.scripts[0]
+    assert 'MATERIAL=PETG' in s
+    assert 'COLOR' not in s    # empty color omitted entirely
+    assert 'VENDOR' not in s
+
+def test_klipper_interface_changed_metadata_only_none_meta():
+    ki, gcode = _make_ki()
+    ki.dispatch(EVENT_CHANGED, gate=0, uid_hex='04CCDD', spool_id=None, meta=None)
+    s = gcode.scripts[0]
+    assert 'MATERIAL' not in s  # no meta → no MATERIAL or COLOR params
+    assert 'SPOOL_ID' not in s
+
+def test_klipper_interface_uid_only():
+    ki, gcode = _make_ki()
+    ki.dispatch(EVENT_UID_ONLY, gate=2, uid_hex='04CCDD', spool_id=None)
+    assert gcode.scripts == ['_NFC_TAG_NO_SPOOL GATE=2 UID=04CCDD']
+
+def test_klipper_interface_removed():
+    ki, gcode = _make_ki()
+    ki.dispatch(EVENT_REMOVED, gate=3, uid_hex=None, spool_id=7)
+    assert gcode.scripts == ['_NFC_SPOOL_REMOVED GATE=3']
+
+def test_klipper_interface_macro_value_sanitises_special_chars():
+    ki, gcode = _make_ki()
+    # Spaces → underscores, special chars stripped, hash and dot kept
+    ki.dispatch(EVENT_CHANGED, gate=0, uid_hex='04AABB', spool_id=None,
+                meta={'material': 'ABS & CF', 'color_hex': '#FF5500'})
+    s = gcode.scripts[0]
+    assert 'MATERIAL=ABS__CF' in s  # space→_ on each side of stripped &
+    assert 'COLOR=#FF5500' in s
+    assert 'VENDOR' not in s
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Item 9 — auto-create re-poll: second scan uses UID lookup, not auto-create
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_resolve_auto_create_second_poll_uses_uid_lookup(monkeypatch):
+    """After auto-create + UID patch, the next _resolve_spool call must
+    reach the UID lookup path (not re-run auto_create_spool)."""
+    fake_cls = _install_fake_lb_client(monkeypatch)
+
+    class _StatefulSpoolman(_ResolverSpoolman):
+        def __init__(self):
+            super().__init__()
+            self._registered_uid = None
+
+        def lookup_spool_by_uid(self, uid_hex):
+            self.calls.append(('uid', uid_hex))
+            return 1234 if self._registered_uid == uid_hex else None
+
+        def set_spool_uid(self, spool_id, uid_hex):
+            self.calls.append(('set_uid', spool_id, uid_hex, self._rfid_key))
+            self._registered_uid = uid_hex
+            return True
+
+        def clear_cache(self):
+            self.calls.append(('clear_cache',))
+
+    spoolman = _StatefulSpoolman()
+    gate = _resolver_gate('04AABB', {'material': 'PLA'}, spoolman)
+    gate._spoolman_auto_create = True
+
+    # First poll: UID unknown → triggers auto-create
+    result1 = gate._resolve_spool('04AABB')
+    assert result1 == 1234
+    assert gate._state.current_tag.resolution == {'path': 'auto_create', 'spool_id': 1234}
+    assert ('clear_cache',) in spoolman.calls
+
+    # Second poll: same tag — UID is now registered, should resolve via UID lookup
+    result2 = gate._resolve_spool('04AABB')
+    assert result2 == 1234
+    assert gate._state.current_tag.resolution == {'path': 'uid_lookup', 'spool_id': 1234}
+
+    # auto_create_spool must have been called exactly once across both polls
+    auto_create_calls = [c for inst in fake_cls.instances
+                         for c in inst.calls if c[0] == 'auto_create_spool']
+    assert len(auto_create_calls) == 1
+
+
+# ---------------------------------------------------------------------------
+# get_status tag_present field
+# ---------------------------------------------------------------------------
+
+def _status_gate():
+    gate = NFCGate.__new__(NFCGate)
+    gate._state = GateState(0)
+    gate._gate = 0
+    gate._failed = False
+    return gate
+
+
+def test_get_status_empty_gate():
+    gate = _status_gate()
+    s = gate.get_status()
+    assert s['tag_present'] is False
+    assert s['spool_id'] == -1
+    assert s['uid'] == ''
+    assert s['resolution'] == ''
+
+
+def test_get_status_spool_present():
+    gate = _status_gate()
+    gate._state.current_uid = '04AABBCC'
+    gate._state.current_spool = 42
+    gate._state.current_tag = CurrentTag(uid='04AABBCC', meta={})
+    gate._state.current_tag.resolution = {'path': 'uid_lookup', 'spool_id': 42}
+    s = gate.get_status()
+    assert s['tag_present'] is True
+    assert s['spool_id'] == 42
+    assert s['uid'] == '04AABBCC'
+    assert s['resolution'] == 'uid_lookup'
+
+
+def test_get_status_metadata_direct():
+    gate = _status_gate()
+    gate._state.current_uid = '04AABBCC'
+    gate._state.current_spool = DIRECT_METADATA_SPOOL
+    s = gate.get_status()
+    assert s['tag_present'] is True
+    assert s['spool_id'] == -1
+    assert s['resolution'] == 'metadata_direct'
+
+
+def test_get_status_uid_only():
+    gate = _status_gate()
+    gate._state.current_uid = '04AABBCC'
+    gate._state.current_spool = None
+    gate._state.current_tag = CurrentTag(uid='04AABBCC', meta={})
+    gate._state.current_tag.resolution = {'path': 'unresolved'}
+    s = gate.get_status()
+    assert s['tag_present'] is True
+    assert s['spool_id'] == -1
+    assert s['resolution'] == 'unresolved'
 
 
 if __name__ == '__main__':

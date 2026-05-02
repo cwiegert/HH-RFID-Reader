@@ -23,6 +23,31 @@
 set -e
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+detect_klipper_python() {
+    local candidate home_dir
+    for candidate in \
+        "${HOME}/klippy-env/bin/python" \
+        "${HOME}/klippy-env/bin/python3"
+    do
+        if [ -x "${candidate}" ]; then
+            printf '%s\n' "${candidate}"
+            return 0
+        fi
+    done
+    for home_dir in /home/*; do
+        for candidate in \
+            "${home_dir}/klippy-env/bin/python" \
+            "${home_dir}/klippy-env/bin/python3"
+        do
+            if [ -x "${candidate}" ]; then
+                printf '%s\n' "${candidate}"
+                return 0
+            fi
+        done
+    done
+    return 1
+}
 KLIPPER_EXTRAS="${HOME}/klipper/klippy/extras"
 PRINTER_CONFIG="${HOME}/printer_data/config"
 NFC_CONFIG_DIR="${PRINTER_CONFIG}/nfc"
@@ -85,6 +110,33 @@ elif [ -e "${NFC_CONFIG_DIR}" ]; then
         || echo "  WARNING: ${NFC_CONFIG_DIR} exists but is not a directory — remove manually"
 else
     echo "NFC config directory not found — nothing to back up."
+fi
+
+# ── Optional: remove pycryptodome ────────────────────────────────────────────
+echo ""
+KLIPPER_PYTHON="$(detect_klipper_python || true)"
+if [ -n "${KLIPPER_PYTHON}" ] && \
+   "${KLIPPER_PYTHON}" -c "import Crypto.Protocol.KDF" >/dev/null 2>&1; then
+    read -r -p "pycryptodome is installed in the Klipper env (used for Bambu tag reads). Remove it? [y/N] " rm_crypto
+    case "$rm_crypto" in
+        [yY][eE][sS]|[yY])
+            if "${KLIPPER_PYTHON}" -m pip uninstall -y pycryptodome 2>/dev/null || \
+               "${KLIPPER_PYTHON}" -m pip uninstall -y pycryptodome --break-system-packages; then
+                echo "  pycryptodome removed."
+            else
+                echo "  WARNING: uninstall failed — remove manually:"
+                echo "    ${KLIPPER_PYTHON} -m pip uninstall -y pycryptodome --break-system-packages"
+            fi
+            ;;
+        *)
+            echo "  pycryptodome kept."
+            ;;
+    esac
+elif [ -z "${KLIPPER_PYTHON}" ]; then
+    echo "Klipper Python env not found — skipping pycryptodome check."
+    echo "  Remove manually if needed: ~/klippy-env/bin/python -m pip uninstall pycryptodome"
+else
+    echo "pycryptodome not present in Klipper env — nothing to remove."
 fi
 
 # ── Restart Klipper ───────────────────────────────────────────────────────────

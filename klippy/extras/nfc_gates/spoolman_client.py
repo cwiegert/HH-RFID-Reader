@@ -409,6 +409,53 @@ class SpoolmanClient:
                 logger.info("spoolman: spool_id=%s location cleared", spool_id)
         return ok
 
+    def set_spool_uid(self, spool_id, uid_hex):
+        """
+        Write this integration's configured UID extra field onto a spool.
+
+        Spoolman stores extra-field values as JSON-encoded strings.  This method
+        intentionally writes self._rfid_key (default: rfid_tag), not the
+        vendored rfid_uid_N slot convention.
+        """
+        if spool_id is None or not uid_hex:
+            logger.warning(
+                "spoolman: cannot set uid extra field %s on spool_id=%s uid=%s",
+                self._rfid_key, spool_id, uid_hex)
+            return False
+        payload = {"extra": {self._rfid_key: json.dumps(str(uid_hex))}}
+        try:
+            ok = self._patch_spool(spool_id, payload, plural=False)
+        except HTTPError as e:
+            if e.code not in (404, 405):
+                logger.warning(
+                    "spoolman: uid extra patch failed for spool_id=%s "
+                    "key=%s uid=%s: %s",
+                    spool_id, self._rfid_key, uid_hex, e)
+                return False
+            try:
+                ok = self._patch_spool(spool_id, payload, plural=True)
+            except Exception as fallback_error:
+                logger.warning(
+                    "spoolman: uid extra patch fallback failed for "
+                    "spool_id=%s key=%s uid=%s: %s",
+                    spool_id, self._rfid_key, uid_hex, fallback_error)
+                return False
+        except Exception as e:
+            logger.warning(
+                "spoolman: uid extra patch failed for spool_id=%s "
+                "key=%s uid=%s: %s",
+                spool_id, self._rfid_key, uid_hex, e)
+            return False
+
+        if ok:
+            uid_norm = self._normalise_uid(str(uid_hex))
+            self._cache.pop(uid_norm, None)
+            if self._debug >= 3:
+                logger.info(
+                    "spoolman: spool_id=%s extra[%s]=%s",
+                    spool_id, self._rfid_key, uid_hex)
+        return ok
+
     def lookup_spool_record_by_uid(self, uid_hex):
         """
         Return the Spoolman spool record whose extra[rfid_key] matches uid_hex,
