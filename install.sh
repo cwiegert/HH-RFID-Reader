@@ -117,23 +117,46 @@ prompt_choice() {
 }
 
 detect_klipper_python() {
-    local candidate user home_dir
-    # Check the current user's home first, then every home directory on the
-    # system.  Kiauh installs the venv at ~/klippy-env regardless of username.
+    local candidate home_dir
+
+    # 1. Explicit override — highest confidence, check first.
+    if [ -n "${KLIPPER_VENV:-}" ]; then
+        for candidate in \
+            "${KLIPPER_VENV}/bin/python3" \
+            "${KLIPPER_VENV}/bin/python"
+        do
+            if [ -x "${candidate}" ]; then
+                printf '%s\n' "${candidate}"
+                return 0
+            fi
+        done
+    fi
+
+    # 2. Current user's home — installer is almost always run as the printer
+    #    user, so this hits the majority of installs on the first try.
+    #    Both venv names are checked: klippy-env (Kiauh v3/KIAUH default) and
+    #    klipper-env (KIAUH v4 / some distro packages).
     for candidate in \
-        "${HOME}/klippy-env/bin/python" \
-        "${HOME}/klippy-env/bin/python3"
+        "${HOME}/klippy-env/bin/python3" \
+        "${HOME}/klippy-env/bin/python"  \
+        "${HOME}/klipper-env/bin/python3" \
+        "${HOME}/klipper-env/bin/python"
     do
         if [ -x "${candidate}" ]; then
             printf '%s\n' "${candidate}"
             return 0
         fi
     done
-    # Scan all home directories for a klippy-env (covers non-pi usernames).
+
+    # 3. All /home/* directories — covers non-standard usernames and the case
+    #    where the script is run under a different user (e.g. via sudo).
     for home_dir in /home/*; do
+        [ -d "${home_dir}" ] || continue
         for candidate in \
-            "${home_dir}/klippy-env/bin/python" \
-            "${home_dir}/klippy-env/bin/python3"
+            "${home_dir}/klippy-env/bin/python3" \
+            "${home_dir}/klippy-env/bin/python"  \
+            "${home_dir}/klipper-env/bin/python3" \
+            "${home_dir}/klipper-env/bin/python"
         do
             if [ -x "${candidate}" ]; then
                 printf '%s\n' "${candidate}"
@@ -141,6 +164,21 @@ detect_klipper_python() {
             fi
         done
     done
+
+    # 4. /root — Docker/container installs and su-based setups where HOME may
+    #    not be /root despite running as root.
+    for candidate in \
+        /root/klippy-env/bin/python3 \
+        /root/klippy-env/bin/python  \
+        /root/klipper-env/bin/python3 \
+        /root/klipper-env/bin/python
+    do
+        if [ -x "${candidate}" ]; then
+            printf '%s\n' "${candidate}"
+            return 0
+        fi
+    done
+
     # No Klipper venv found — do not fall back to system Python.
     # Packages installed there are invisible to Klipper.
     return 1
@@ -543,6 +581,17 @@ set_config_value "${NFC_READER_CFG}" "nfc_gate" "spoolman_auto_create" \
 
 write_lane_config "${NFC_READER_HW_CFG}" "${LANE_COUNT}"
 
+if [ "${TAG_MODE}" = "rich" ]; then
+    echo ""
+    echo "Checking OpenPrintTag CBOR dependency..."
+    if ! ensure_python_module "cbor2" "cbor2"; then
+        echo ""
+        echo "WARNING: cbor2 not installed — complex OpenPrintTag CBOR payloads will fall back"
+        echo "         to the built-in minimal decoder. Most tags work fine without it."
+        echo "         To add it later: \$(detect_klipper_python) -m pip install cbor2"
+    fi
+fi
+
 if [ "${BAMBU_READS}" = "yes" ]; then
     echo ""
     echo "Checking Bambu/MIFARE crypto dependency..."
@@ -598,10 +647,13 @@ else
 fi
 if [ "${TAG_MODE}" != "rich" ]; then
     echo "    bambu_mifare:       not active in UID-only mode"
+    echo "    cbor2:              not needed in UID-only mode"
 elif [ "${BAMBU_READS}" = "yes" ]; then
     echo "    bambu_mifare:       enabled (authenticated rich read)"
+    echo "    cbor2:              installed (OpenPrintTag support; minimal fallback if install failed)"
 else
     echo "    bambu_mifare:       installer did not add crypto; UID fallback if absent"
+    echo "    cbor2:              installed (OpenPrintTag support; minimal fallback if install failed)"
 fi
 echo "    bambu_dependency:   ${BAMBU_READS}"
 echo "    spool_auto_create:  ${SPOOLMAN_AUTO_CREATE}"

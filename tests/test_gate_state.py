@@ -68,9 +68,11 @@ _stub('nfc_gates.vendor.rfid_tag_parser',
       is_parse_error=lambda info: bool(
           isinstance(info, dict) and (info.get('error') or info.get('parse_error'))))
 
-from nfc_gates.nfc_manager import (
-    CurrentTag, GateState, NFCGate, KlipperInterface, DIRECT_METADATA_SPOOL,
+from nfc_gates.gate_state import (
+    CurrentTag, GateState, DIRECT_METADATA_SPOOL,
     EVENT_CHANGED, EVENT_UID_ONLY, EVENT_REMOVED)
+from nfc_gates.klipper_interface import KlipperInterface
+from nfc_gates.nfc_manager import NFCGate
 
 
 def assert_event(event, expected_type, gate=0, uid=None, spool=None):
@@ -397,6 +399,50 @@ def test_resolve_auto_create_uid_patch_failure_is_unresolved(monkeypatch):
         'path': 'auto_create_uid_patch_failed',
         'spool_id': 1234,
     }
+
+
+def test_auto_create_full_chain_re_poll_finds_spool_via_uid(monkeypatch):
+    """Poll 1: UID unknown → auto-create fires, UID patched into Spoolman, cache cleared.
+    Poll 2: UID now registered → UID lookup resolves without a second auto-create,
+    and process_read returns None (no re-dispatch)."""
+
+    class _LiveSpoolman(_ResolverSpoolman):
+        def set_spool_uid(self, spool_id, uid_hex):
+            self.calls.append(('set_uid', spool_id, uid_hex, self._rfid_key))
+            self.by_uid[uid_hex] = spool_id  # simulate Spoolman persisting the UID
+            return True
+
+    _install_fake_lb_client(monkeypatch)
+    spoolman = _LiveSpoolman()
+    meta = {'material': 'PLA', 'color_hex': 'FF5500'}
+    gate = _resolver_gate('04AABB', meta, spoolman)
+    gate._spoolman_auto_create = True
+
+    # ── Poll 1: UID unknown → auto-create ────────────────────────────────────
+    spool_id = gate._resolve_spool('04AABB')
+    assert spool_id == 1234
+    assert gate._state.current_tag.resolution == {'path': 'auto_create', 'spool_id': 1234}
+    assert spoolman.calls == [
+        ('uid', '04AABB'),
+        ('set_uid', 1234, '04AABB', 'rfid_tag'),
+        ('clear_cache',),
+    ]
+    event = gate._state.process_read('04AABB', 1234)
+    assert event == (EVENT_CHANGED, 0, '04AABB', 1234)
+
+    # ── Poll 2: fresh CurrentTag (as _read_current_tag would produce), cache cleared ─
+    gate._state.current_tag = CurrentTag(uid='04AABB', meta=meta)
+    spoolman.calls.clear()
+
+    spool_id2 = gate._resolve_spool('04AABB')
+    assert spool_id2 == 1234
+    # Resolved via UID lookup, not auto-create
+    assert gate._state.current_tag.resolution == {'path': 'uid_lookup', 'spool_id': 1234}
+    assert spoolman.calls == [('uid', '04AABB')]
+
+    # Same uid + same spool → quiet, no second dispatch
+    event2 = gate._state.process_read('04AABB', 1234)
+    assert event2 is None
 
 
 class _ReaderForCurrentTag:

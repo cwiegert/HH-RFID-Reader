@@ -115,9 +115,12 @@ Each layer owns one responsibility and must not reach across the boundary.
 
 | Layer | File | Owns | Does not own |
 |---|---|---|---|
-| **PN532Driver** | `pn532_driver.py` | PN532 wire protocol, I2C frames, UID extraction | Spoolman, gate policy, Happy Hare |
-| **SpoolmanClient** | `spoolman_client.py` | UID → spool record lookup and TTL cache | Gate state, lane assignment, MMU commands |
-| **NFC_Manager** | `nfc_manager.py` | Gate state machine, change/remove decisions, macro dispatch, HH seed | PN532 protocol details, Spoolman HTTP |
+| **PN532Driver** | `pn532_driver.py` | PN532 wire protocol, I2C frames, UID/page/block reads | Spoolman, gate policy, Happy Hare |
+| **SpoolmanClient** | `spoolman_client.py` | UID → spool record lookup, TTL cache, URL discovery | Gate state, lane assignment, MMU commands |
+| **TagHandler** | `tag_handler.py` | Tag classification, NTAG/MIFARE capture, metadata parsing, spool resolution ladder | Gate lifecycle, polling timers, GCode dispatch |
+| **GateState** | `gate_state.py` | Per-gate debounce state machine, event generation, `CurrentTag` observation | Hardware reads, Spoolman, GCode |
+| **KlipperInterface** | `klipper_interface.py` | GCode macro dispatch (reactor-thread safe), macro string building | Gate state, hardware, Spoolman |
+| **NFCGate / NFCGateDefaults** | `nfc_manager.py` | Config, polling lifecycle, HH seed, scan-jog coordination | PN532 protocol, Spoolman HTTP |
 | **nfc_macros.cfg** | config file | Happy Hare-facing GCode calls | NFC reads, Spoolman lookups |
 
 ---
@@ -128,13 +131,20 @@ NFC_Manager fires exactly one of these on a state change. They live in `nfc_macr
 
 | Macro | When | Parameters |
 |---|---|---|
-| `_NFC_SPOOL_CHANGED` | New tag UID resolves to a Spoolman spool | `GATE`, `SPOOL_ID`, `UID` |
+| `_NFC_SPOOL_CHANGED` | Tag resolved to a spool (Spoolman or metadata-direct) | `GATE`, `UID`; plus `SPOOL_ID` (Spoolman path) or `MATERIAL`/`COLOR`/`TEMP` (metadata path, each optional); `AUTO_CREATED=1` when spool was just created |
 | `_NFC_SPOOL_REMOVED` | Tag absent for `absent_threshold` consecutive polls | `GATE` |
 | `_NFC_TAG_NO_SPOOL` | Tag read but UID not registered in Spoolman | `GATE`, `UID` |
 
-The default macro body for `_NFC_SPOOL_CHANGED`:
+The default macro body for `_NFC_SPOOL_CHANGED` handles both paths:
 ```gcode
-MMU_GATE_MAP GATE={gate} SPOOLID={spool_id} AVAILABLE=1 SYNC=1 QUIET=1
+{% if params.SPOOL_ID is defined %}
+    {% if params.AUTO_CREATED is defined %}
+    MMU_SPOOLMAN REFRESH=1 QUIET=1
+    {% endif %}
+    MMU_GATE_MAP GATE={gate} SPOOLID={spool_id} AVAILABLE=1 SYNC=1 QUIET=1
+{% else %}
+    MMU_GATE_MAP GATE={gate} [MATERIAL=..] [COLOR=..] [TEMP=..] AVAILABLE=1 QUIET=1
+{% endif %}
 MMU_GATE_MAP GATE={gate} APPLY=1
 ```
 

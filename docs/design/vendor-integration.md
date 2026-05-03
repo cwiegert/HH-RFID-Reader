@@ -23,7 +23,7 @@ Both files carry their original GPLv3 headers. Neither is modified. The source c
 
 ## How the library is loaded
 
-Imports are lazy and wrapped in `try/except` inside `nfc_manager.py`. The vendor package is on `sys.path` via a path fix applied at module import time so Klipper's sandboxed extras loader can find it.
+Imports are lazy and wrapped in `try/except` inside `tag_handler.py`. The vendor package is on `sys.path` via a path fix applied at module import time so Klipper's sandboxed extras loader can find it.
 
 ```
 klippy/extras/nfc_gates/
@@ -31,11 +31,14 @@ klippy/extras/nfc_gates/
 │   ├── __init__.py
 │   ├── rfid_tag_parser.py       ← vendored, parse_tag() entry point
 │   └── lameandboard_spoolman.py ← vendored, Spoolman CRUD entry points
-├── nfc_manager.py               ← adapter layer lives here
-└── spoolman_client.py           ← our UID cache/circuit-breaker client (unchanged)
+├── tag_handler.py               ← adapter layer: tag classification, hardware capture, resolution ladder
+├── gate_state.py                ← per-gate debounce state machine, CurrentTag, DIRECT_METADATA_SPOOL
+├── klipper_interface.py         ← reactor-thread GCode macro dispatcher
+├── nfc_manager.py               ← config, polling lifecycle, get_status()
+└── spoolman_client.py           ← our UID cache/circuit-breaker client
 ```
 
-Import pattern in `nfc_manager.py`:
+Import pattern in `tag_handler.py`:
 
 ```python
 try:
@@ -98,7 +101,7 @@ parse_tag(current_tag.raw_tag_data, uid_hex=uid)
 Parser runs from cached data — hardware no longer required.
 ```
 
-The metadata dict field names are the vendor library's output names. The adapter in `nfc_manager.py` reads them by key and does not transform them before storing on `current_tag.meta`.
+The metadata dict field names are the vendor library's output names. The adapter in `tag_handler.py` reads them by key and does not transform them before storing on `current_tag.meta`.
 
 ---
 
@@ -243,7 +246,7 @@ The three meaningful states a consumer should branch on:
 
 ## pycryptodome dependency
 
-Bambu MIFARE reads use HKDF key derivation, which requires `pycryptodome`. `install.sh` targets the Klipper Python venv (`~/klippy-env/` or `/home/*/klippy-env/`) so the library is available in the same environment where `nfc_manager.py` runs. `uninstall.sh` removes it from the same venv.
+Bambu MIFARE reads use HKDF key derivation, which requires `pycryptodome`. `install.sh` targets the Klipper Python venv (`~/klippy-env/` or `/home/*/klippy-env/`) so the library is available in the same environment where `tag_handler.py` runs. `uninstall.sh` removes it from the same venv.
 
 `bambu_reads: False` (default) skips all MIFARE authentication. `pycryptodome` is not required when Bambu reads are disabled.
 
@@ -251,7 +254,7 @@ Bambu MIFARE reads use HKDF key derivation, which requires `pycryptodome`. `inst
 
 ## Updating the vendored library
 
-See `VENDORED.md` for the pinned source commit and manual update instructions. A GitHub Action runs weekly and opens a PR automatically when upstream changes either vendored file. Review any diff against `nfc_manager.py` adapter code before merging — the adapter keys into specific field names from the parser output.
+See `VENDORED.md` for the pinned source commit and manual update instructions. A GitHub Action runs weekly and opens a PR automatically when upstream changes either vendored file. Review any diff against `tag_handler.py` adapter code before merging — the adapter keys into specific field names from the parser output.
 
 ---
 

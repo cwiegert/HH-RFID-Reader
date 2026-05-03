@@ -331,24 +331,41 @@ These macros live in `nfc_macros.cfg` and are called automatically by NFC_Manage
 
 ### `_NFC_SPOOL_CHANGED`
 
-Fires when a tag UID resolves to a Spoolman spool and the gate state changed.
+Fires when a tag resolves to a spool and the gate state changed. Two dispatch paths depending on tag type and Spoolman availability.
 
+**Spoolman path** — tag UID matched a Spoolman record:
 ```gcode
-_NFC_SPOOL_CHANGED GATE=<gate> SPOOL_ID=<id> UID=<uid>
+_NFC_SPOOL_CHANGED GATE=<gate> SPOOL_ID=<id> UID=<uid> [AUTO_CREATED=1]
+```
+
+**Metadata path** — tag carries embedded filament data (Spoolman disabled or no match):
+```gcode
+_NFC_SPOOL_CHANGED GATE=<gate> UID=<uid> [MATERIAL=<str>] [COLOR=<hex>] [TEMP=<int>]
 ```
 
 Parameters:
 - `GATE` — Happy Hare gate number (integer, matches `mmu_gate` in config)
-- `SPOOL_ID` — Spoolman spool ID (integer)
-- `UID` — NFC tag UID (hex string)
+- `SPOOL_ID` — Spoolman spool ID (integer); present on Spoolman path only
+- `UID` — NFC tag UID (hex string); always present
+- `AUTO_CREATED` — `1` when `spoolman_auto_create` just created the spool record; absent otherwise
+- `MATERIAL` — filament material string from tag metadata (e.g. `PLA`, `ABS`); metadata path only
+- `COLOR` — color hex string from tag metadata (e.g. `FF0000`); metadata path only
+- `TEMP` — recommended extruder temperature (integer °C) from tag `min_temp` field; metadata path only
 
 Default behavior:
 ```gcode
-MMU_GATE_MAP GATE={gate} SPOOLID={spool_id} AVAILABLE=1 SYNC=1 QUIET=1
+{% if params.SPOOL_ID is defined %}
+    {% if auto_created %}
+    MMU_SPOOLMAN REFRESH=1 QUIET=1
+    {% endif %}
+    MMU_GATE_MAP GATE={gate} SPOOLID={spool_id} AVAILABLE=1 SYNC=1 QUIET=1
+{% else %}
+    MMU_GATE_MAP GATE={gate} [MATERIAL=..] [COLOR=..] [TEMP=..] AVAILABLE=1 QUIET=1
+{% endif %}
 MMU_GATE_MAP GATE={gate} APPLY=1
 ```
 
-This calls Happy Hare's `MMU_GATE_MAP` to update the gate map. `AVAILABLE=1` marks the gate as having filament loaded and ready. `SYNC=1` lets Happy Hare push the update to Spoolman. `APPLY=1` applies the updated map immediately.
+On the Spoolman path, `AVAILABLE=1` marks the gate as loaded and `SYNC=1` lets Happy Hare push the update to Spoolman. When `AUTO_CREATED=1`, `MMU_SPOOLMAN REFRESH=1 QUIET=1` runs first so Happy Hare's Spoolman cache includes the new spool before the gate assignment is sent. On the metadata path, whatever fields are present on the tag are forwarded to `MMU_GATE_MAP`. `APPLY=1` applies the updated map immediately on both paths.
 
 ---
 
@@ -401,18 +418,20 @@ MMU_GATE_MAP GATE={gate} SPOOLID=-1 SYNC=1 QUIET=1
 You can test whether the macro-to-Happy-Hare pipeline works by calling the event macros directly:
 
 ```gcode
+; Spoolman path
 _NFC_SPOOL_CHANGED GATE=0 SPOOL_ID=42 UID=04AABBCCDD
+
+; Metadata path
+_NFC_SPOOL_CHANGED GATE=0 UID=04AABBCCDD MATERIAL=PLA COLOR=FF0000 TEMP=215
+
+_NFC_SPOOL_REMOVED GATE=0
+_NFC_TAG_NO_SPOOL GATE=0 UID=04AABBCCDD
 ```
 
 If Happy Hare updates correctly, the pipeline from macro inward is working. If it doesn't, check:
 - The macro body in `nfc_macros.cfg`
 - Whether `MMU_GATE_MAP GATE=... SPOOLID=... AVAILABLE=1 SYNC=1 QUIET=1` is the right syntax for your Happy Hare version
 - Whether Happy Hare is in a state that accepts gate map changes (e.g. not mid-print with locks active)
-
-```gcode
-_NFC_SPOOL_REMOVED GATE=0
-_NFC_TAG_NO_SPOOL GATE=0 UID=04AABBCCDD
-```
 
 ---
 
@@ -429,6 +448,8 @@ The event macros are in `~/printer_data/config/nfc/nfc_macros.cfg`. Edit them to
 | `MMU_GATE_MAP GATE=<n> SPOOLID=<id> AVAILABLE=1 SYNC=1 QUIET=1` | Assign a spool to a gate, mark it available, and sync to Spoolman |
 | `MMU_GATE_MAP GATE=<n> APPLY=1` | Apply the current gate map immediately |
 | `MMU_GATE_MAP GATE=<n> SPOOLID=-1 AVAILABLE=0 SYNC=1 QUIET=1` | Clear a gate, mark it empty, and sync to Spoolman |
+| `MMU_GATE_MAP GATE=<n> [MATERIAL=..] [COLOR=..] [TEMP=..] AVAILABLE=1 QUIET=1` | Assign metadata (no Spoolman spool ID) — metadata path only |
+| `MMU_SPOOLMAN REFRESH=1 QUIET=1` | Force Happy Hare to re-sync its Spoolman cache — called before gate assignment when a new spool was auto-created |
 
 The default macros are designed for Happy Hare with `spoolman_support: push`. `SYNC=1` tells Happy Hare to push the local gate map change to Spoolman. If your Happy Hare version uses different command names or parameters, update the macro body.
 

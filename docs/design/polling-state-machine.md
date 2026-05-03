@@ -188,7 +188,7 @@ When `_hh_gate_matches_current_spool()` returns False after the gate was suspend
 
 ## GateState — Debounce State Machine
 
-`GateState` is the per-gate single source of truth for what the NFC reader currently sees.
+`GateState` (`gate_state.py`) is the per-gate single source of truth for what the NFC reader currently sees.
 
 ```python
 class GateState:

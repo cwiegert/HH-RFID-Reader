@@ -41,6 +41,28 @@ spoolman_cache_ttl: 300
 
 ---
 
+### Tag Data Parsing
+
+```ini
+[nfc_gate]
+tag_parsing:          False
+bambu_reads:          False
+spoolman_auto_create: False
+#tag_max_pages:       16
+```
+
+| Setting | Default | Description |
+|---|---|---|
+| `tag_parsing` | `False` | `False` = UID-only (default — no tag content reads). `True` = read NTAG user pages or MIFARE authenticated blocks and parse filament metadata from the tag payload. |
+| `bambu_reads` | `False` | Allow authenticated MIFARE reads for Bambu factory spools when `tag_parsing: True`. Requires `pycryptodome` in the Klipper Python venv. Leave `False` unless pycryptodome is installed. |
+| `spoolman_auto_create` | `False` | When `tag_parsing: True` and no existing Spoolman spool matches the tag, automatically create a new vendor/filament/spool record from tag metadata. Only activates when the tag carries at least a material type. |
+| `tag_max_pages` | `16` | Maximum NTAG user pages to read when `tag_parsing: True`. Default `16` covers NTAG213 (pages 4–15, 45 bytes), NTAG215, and NTAG216. Increase to `135` only for large-payload tags (NTAG226, NTAG424). Higher values add I2C round-trips with no benefit for most tags. |
+
+> [!NOTE]
+> `bambu_reads: True` with `tag_parsing: False` logs a warning at startup and has no effect — the MIFARE path is never reached when tag parsing is disabled.
+
+---
+
 ### Polling
 
 ```ini
@@ -204,13 +226,34 @@ These macros are called by NFC_Manager when gate state changes. Edit them to adj
 
 ### `_NFC_SPOOL_CHANGED`
 
-Called when a new tag UID resolves to a Spoolman spool. Parameters: `GATE`, `SPOOL_ID`, `UID`.
+Called when a tag resolves to a spool (either via Spoolman or from tag metadata directly).
+
+Two dispatch paths depending on tag type and Spoolman availability:
+
+**Spoolman path** — tag UID matched a Spoolman record:
+```
+GATE  SPOOL_ID  UID  [AUTO_CREATED=1]
+```
+
+**Metadata path** — tag carries embedded filament data, Spoolman disabled or no match:
+```
+GATE  UID  [MATERIAL=...]  [COLOR=...]  [TEMP=...]
+```
 
 Default:
 ```gcode
-MMU_GATE_MAP GATE={gate} SPOOLID={spool_id} AVAILABLE=1 SYNC=1 QUIET=1
+{% if params.SPOOL_ID is defined %}
+    {% if auto_created %}
+    MMU_SPOOLMAN REFRESH=1 QUIET=1
+    {% endif %}
+    MMU_GATE_MAP GATE={gate} SPOOLID={spool_id} AVAILABLE=1 SYNC=1 QUIET=1
+{% else %}
+    MMU_GATE_MAP GATE={gate} [MATERIAL=..] [COLOR=..] [TEMP=..] AVAILABLE=1 QUIET=1
+{% endif %}
 MMU_GATE_MAP GATE={gate} APPLY=1
 ```
+
+`AUTO_CREATED=1` is set when the spool record was just created by `spoolman_auto_create`. The macro runs `MMU_SPOOLMAN REFRESH=1 QUIET=1` first so Happy Hare's Spoolman cache includes the new spool before the gate assignment is sent.
 
 ### `_NFC_SPOOL_REMOVED`
 
