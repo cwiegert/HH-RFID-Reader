@@ -110,7 +110,7 @@ If `spoolman_url` is left empty, `self._spoolman = None`. Tags are still read; e
 
 `startup_polling = -1`: polling only starts when `NFC GATE=n READ=1` is issued manually.
 `startup_polling = 1`: `_delayed_init` arms the poll timer after PN532 init succeeds, delayed by `startup_poll_delay`.
-`startup_poll_delay`: stagger per-lane startup. With 4 lanes and delays of 0, 2, 4, 6 seconds, init and first polls spread across 6 seconds rather than all firing simultaneously.
+`startup_poll_delay`: stagger per-lane startup. With 4 lanes and delays of 0.0, 0.5, 1.0, 1.5 seconds, first polls spread across the lanes instead of firing simultaneously.
 
 `absent_threshold` × `poll_interval` = seconds before `EVENT_REMOVED` fires. Default: 3 × 10 = 30 seconds.
 
@@ -161,7 +161,7 @@ mmu_gate:           2
 i2c_mcu:            lane2
 i2c_bus:            i2c3_PB3_PB4
 debug:              3             ; verbose logging on this lane only
-startup_poll_delay: 4.0           ; 4 s after lane0's 0 s, lane1's 2 s
+startup_poll_delay: 1.0           ; 1 s after lane0's 0 s, lane1's 0.5 s
 poll_interval:      10            ; faster for bench testing
 ```
 

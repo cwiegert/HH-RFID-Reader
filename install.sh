@@ -318,8 +318,12 @@ for line in lines:
         continue
     if current_lane is None or stripped.startswith('#'):
         continue
+    if current_lane not in existing:
+        existing[current_lane] = {}
     if stripped.startswith('i2c_mcu:'):
-        existing[current_lane] = stripped.split(':', 1)[1].strip()
+        existing[current_lane]['i2c_mcu'] = stripped.split(':', 1)[1].strip()
+    elif stripped.startswith('startup_poll_delay:'):
+        existing[current_lane]['startup_poll_delay'] = stripped.split(':', 1)[1].strip()
 
 with open(path, 'w') as f:
     f.write("# =============================================================================\n")
@@ -345,17 +349,22 @@ with open(path, 'w') as f:
     f.write("# =============================================================================\n\n")
 
     for lane in range(lane_count):
-        mcu = existing.get(lane, f'mmu{lane}')
+        lane_existing = existing.get(lane, {})
+        mcu = lane_existing.get('i2c_mcu', f'mmu{lane}')
+        startup_delay = lane_existing.get('startup_poll_delay',
+                                          f'{lane * 0.5:.1f}')
         f.write(f"# ── Lane {lane} ────────────────────────────────────────────────────────────────────\n")
         f.write(f"[nfc_gate lane{lane}]\n")
         f.write(f"mmu_gate:                {lane}\n")
-        f.write(f"i2c_mcu:                 {mcu}\n\n")
+        f.write(f"i2c_mcu:                 {mcu}\n")
+        f.write(f"startup_poll_delay:      {startup_delay}\n\n")
 
     example_lane = lane_count
     f.write(f"# ── Lane {example_lane} example ───────────────────────────────────────────────────────\n")
     f.write(f"# [nfc_gate lane{example_lane}]\n")
     f.write(f"# mmu_gate:                {example_lane}\n")
     f.write(f"# i2c_mcu:                 mmu{example_lane}\n")
+    f.write(f"# startup_poll_delay:      {example_lane * 0.5:.1f}\n")
 PYEOF
 }
 

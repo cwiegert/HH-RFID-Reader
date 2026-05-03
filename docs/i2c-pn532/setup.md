@@ -196,15 +196,15 @@ startup_poll_delay: 0.0
 
 [nfc_gate lane1]
 startup_polling:    1
-startup_poll_delay: 2.0
+startup_poll_delay: 0.5
 
 [nfc_gate lane2]
 startup_polling:    1
-startup_poll_delay: 4.0
+startup_poll_delay: 1.0
 
 [nfc_gate lane3]
 startup_polling:    1
-startup_poll_delay: 6.0
+startup_poll_delay: 1.5
 ```
 
 ---
