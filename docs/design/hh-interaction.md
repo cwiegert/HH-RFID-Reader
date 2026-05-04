@@ -109,7 +109,7 @@ MMU_GATE_MAP GATE={gate} [MATERIAL={material}] [COLOR={color}] [TEMP={temp}] AVA
 MMU_GATE_MAP GATE={gate} APPLY=1
 ```
 
-`SYNC=1` tells HH to synchronize the assignment to Spoolman. `AVAILABLE=1` marks the gate as having filament loaded. `APPLY=1` pushes the updated map into the active print state. `MMU_SPOOLMAN REFRESH=1` is called before `MMU_GATE_MAP` when `AUTO_CREATED=1` so HH's Spoolman cache includes the newly created spool before the assignment is made. NFC also calls `_spoolman.update_spool_location(spool_id, gate)` directly before dispatching, setting the Spoolman `location` field to `MMU_GATE_<n>`. Both the Spoolman PATCH and this macro call are skipped when the print guard is active.
+`SYNC=1` tells HH to synchronize the assignment to Spoolman. `AVAILABLE=1` marks the gate as having filament loaded. `APPLY=1` pushes the updated map into the active print state. `MMU_SPOOLMAN REFRESH=1` is called before `MMU_GATE_MAP` when `AUTO_CREATED=1` so HH's Spoolman cache includes the newly created spool before the assignment is made. NFC does not PATCH Spoolman `location` directly; Happy Hare owns that synchronization through `MMU_SPOOLMAN SYNC=1 QUIET=1`.
 
 ### `_NFC_SPOOL_REMOVED`
 
@@ -125,7 +125,7 @@ MMU_GATE_MAP GATE={gate} APPLY=1
 
 **MMU action guard:** before clearing the gate, the macro reads `printer.mmu.action`. If the MMU is loading, unloading, or homing, the removal event is silently ignored. This prevents a tag momentarily leaving read range during filament movement from triggering a spurious gate clear. The removal will be retried on the next poll cycle if the tag is still absent.
 
-NFC also calls `_spoolman.clear_spool_location(spool_id)` to clear the `location` field in Spoolman.
+The macro calls `MMU_SPOOLMAN SYNC=1 QUIET=1` after the gate map update so Happy Hare synchronizes the cleared assignment to Spoolman.
 
 ### `_NFC_TAG_NO_SPOOL`
 
@@ -197,7 +197,7 @@ When the Spoolman lookup fails (no UID in Spoolman, or Spoolman not configured):
    GateState: uid="A3F200CC" spool=42 misses=0
 
 5. Not suppressed (no matching seed, no CLEAR_CACHE pending).
-   _spoolman.update_spool_location(42, gate=0)   → Spoolman: location = "MMU_GATE_0"
+   NFC does not PATCH Spoolman location directly; HH will synchronize it.
    KlipperInterface.dispatch(EVENT_CHANGED, 0, "A3F200CC", 42)
    _hh_confirmed_spool = 42   (set optimistically when callback is SCHEDULED)
 

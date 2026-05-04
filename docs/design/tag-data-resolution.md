@@ -340,7 +340,7 @@ Our client keeps everything it already has:
 - In-memory UID cache with TTL
 - `lookup_spool_by_uid()` — UID-to-spool resolution
 - `lookup_spool_by_id()` — direct spool ID fetch (expose existing `_fetch_spool_detail` as public)
-- `update_spool_location()` / `clear_spool_location()`
+- `set_spool_uid()` — patches this integration's configured RFID extra field after auto-create
 
 It does not gain vendor/filament/spool creation — those come from the embedded client.
 

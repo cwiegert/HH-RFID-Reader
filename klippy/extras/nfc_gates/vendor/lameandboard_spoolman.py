@@ -23,6 +23,10 @@ from urllib import parse as url_parse
 from urllib import request
 
 LOG = logging.getLogger("rfid.spoolman_client")
+try:
+    from ..log import logger as NFC_LOG
+except Exception:
+    NFC_LOG = LOG
 
 # ---------------------------------------------------------------------------
 # SpoolmanDB fetch caches — populated at most once per process.
@@ -198,15 +202,24 @@ def _fetch_spoolmandb_bambu() -> list:
 
 
 class SpoolmanClient:
-    def __init__(self, base_url, api_key=None, timeout=5.0):
+    def __init__(self, base_url, api_key=None, timeout=5.0, debug=2):
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
+        self.debug = debug
         self.headers = {
             "Content-Type": "application/json",
             "Accept": "application/json",
         }
         if api_key:
             self.headers["Authorization"] = f"Bearer {api_key}"
+
+    def _nfc_info3(self, msg, *args):
+        if self.debug >= 3:
+            NFC_LOG.info(msg, *args)
+
+    def _nfc_debug4(self, msg, *args):
+        if self.debug >= 4:
+            NFC_LOG.debug(msg, *args)
 
     def _req(self, method, path, body=None):
         url = f"{self.base_url}{path}"
@@ -232,6 +245,9 @@ class SpoolmanClient:
                 f"  body={body_str[:800]}{'...' if len(body_str) > 800 else ''}"
                 if body_str else "")
         LOG.debug("spoolman:   %s", curl_cmd)
+        self._nfc_debug4("auto_create_spool: Spoolman request %s %s%s",
+                         method, url,
+                         " body=%s" % body_str[:800] if body_str else "")
 
         req = request.Request(url, data=data, headers=self.headers, method=method)
         t0 = time.monotonic()
@@ -248,6 +264,10 @@ class SpoolmanClient:
                     f"  resp={resp_str[:400]}{'...' if len(resp_str) > 400 else ''}"
                     if resp_str else "",
                 )
+                self._nfc_debug4(
+                    "auto_create_spool: Spoolman response HTTP %s %s %.0fms%s",
+                    resp.status, resp.reason, elapsed_ms,
+                    " resp=%s" % resp_str[:400] if resp_str else "")
                 if not raw:
                     return None
                 return json.loads(resp_str)
@@ -935,6 +955,9 @@ class SpoolmanClient:
         material = str(filament_info.get("material") or "").strip()
         if not material:
             LOG.debug("auto_create_spool: skipped — no material in tag data")
+            self._nfc_info3(
+                "auto_create_spool: skipped — tag metadata has no material "
+                "(keys=%s)", sorted(filament_info.keys()))
             return None
 
         color_hex = str(filament_info.get("color_hex") or "").strip().lstrip("#").upper()
@@ -942,6 +965,8 @@ class SpoolmanClient:
             LOG.debug(
                 "auto_create_spool: no color_hex in tag data — proceeding without color"
             )
+            self._nfc_info3(
+                "auto_create_spool: no color_hex in tag data — proceeding without color")
 
         weight_g = filament_info.get("weight_g")
         if weight_g is None:
@@ -968,6 +993,9 @@ class SpoolmanClient:
                 "auto_create_spool: brand not in tag data, deduced %r from tag_format=%r",
                 brand, tag_fmt,
             )
+            self._nfc_info3(
+                "auto_create_spool: brand not in tag data; deduced %r "
+                "from tag_format=%r", brand, tag_fmt)
 
         diameter_mm = filament_info.get("diameter_mm") or 1.75
         is_bambu = bool(filament_info.get("is_bambu")) or "bambu" in brand.lower()
@@ -975,6 +1003,11 @@ class SpoolmanClient:
         # material_id (e.g. "GFA50", "GFG02") is the Bambu external filament DB id.
         # Used as Spoolman external_id to look up an existing matching filament entry.
         material_id = str(filament_info.get("material_id") or "").strip() or None
+        self._nfc_info3(
+            "auto_create_spool: begin material=%r brand=%r color=%r "
+            "material_id=%r weight_g=%s diameter_mm=%s uid_hex=%s",
+            material, brand, color_hex or None, material_id, weight_g,
+            diameter_mm, uid_hex)
         _raw_tray_uid = str(filament_info.get("tray_uid") or "").strip()
         # Validate tray_uid: must be a non-empty even-length hex string (e.g. 32 hex chars
         # for a 16-byte Bambu Tray UID).  If bytes slipped through, convert; if garbled, discard.
@@ -1007,6 +1040,10 @@ class SpoolmanClient:
 
         if is_bambu:
             bambu_filaments = _fetch_spoolmandb_bambu()
+            self._nfc_info3(
+                "auto_create_spool: Bambu metadata detected; searching "
+                "SpoolmanDB Bambu data by material_id=%r then material/color",
+                material_id)
 
             # 1a. Try to match by Bambu SKU (material_id) via colours[].id — most
             #     precise, uniquely identifies brand + material + colour variant.
@@ -1029,9 +1066,17 @@ class SpoolmanClient:
                         " material_id=%s color=%r",
                         material_id, bambu_color_match.get("name") if bambu_color_match else None,
                     )
+                    self._nfc_info3(
+                        "auto_create_spool: SpoolmanDB Bambu match by "
+                        "material_id=%s name=%r color=%r",
+                        material_id, bambu_match.get("name"),
+                        bambu_color_match.get("name") if bambu_color_match else None)
 
             # 1b. Fall back to material-type + color_hex matching when no SKU match.
             if bambu_match is None:
+                self._nfc_info3(
+                    "auto_create_spool: no Bambu SKU match; trying "
+                    "material=%r color_hex=%r", material, color_hex or None)
                 for entry in bambu_filaments:
                     if str(entry.get("material") or "").lower().strip() == material_lower:
                         bambu_match = entry
@@ -1051,9 +1096,19 @@ class SpoolmanClient:
                         "auto_create_spool: density=%s from SpoolmanDB Bambu material=%s",
                         density, material,
                     )
+                    self._nfc_info3(
+                        "auto_create_spool: using density=%s from "
+                        "SpoolmanDB Bambu match name=%r",
+                        density, bambu_match.get("name"))
                 except (KeyError, TypeError, ValueError):
+                    self._nfc_info3(
+                        "auto_create_spool: Bambu match had no usable density; "
+                        "falling back to generic material density")
                     is_bambu = False
             else:
+                self._nfc_info3(
+                    "auto_create_spool: no SpoolmanDB Bambu match; "
+                    "falling back to generic material density")
                 is_bambu = False
 
         if not is_bambu:
@@ -1068,6 +1123,11 @@ class SpoolmanClient:
                     "auto_create_spool: density=%s from SpoolmanDB materials material=%s",
                     density, material,
                 )
+                self._nfc_info3(
+                    "auto_create_spool: using density=%s for material=%r "
+                    "(source=%s)",
+                    density, material,
+                    "SpoolmanDB materials" if db_density is not None else "fallback table")
             else:
                 density = _DENSITY_FALLBACK.get(material_lower, _DENSITY_DEFAULT)
                 LOG.debug(
@@ -1075,6 +1135,10 @@ class SpoolmanClient:
                     " (SpoolmanDB materials unavailable) material=%s",
                     density, material,
                 )
+                self._nfc_info3(
+                    "auto_create_spool: using density=%s for material=%r "
+                    "(SpoolmanDB materials unavailable; fallback table)",
+                    density, material)
 
         # ------------------------------------------------------------------
         # 2. Resolve or create vendor — try brand first, then Generic fallback.
@@ -1099,19 +1163,31 @@ class SpoolmanClient:
         elif brand and brand.lower() != "generic":
             _vendor_candidates.append(brand)
         _vendor_candidates.append("Generic")
+        self._nfc_info3(
+            "auto_create_spool: resolving vendor; candidates=%s",
+            _vendor_candidates)
 
         for _vname in _vendor_candidates:
             try:
+                self._nfc_info3(
+                    "auto_create_spool: vendor step: find_or_create_vendor(%r)",
+                    _vname)
                 vendor_id = self.find_or_create_vendor(_vname)
                 resolved_vendor_name = _vname
                 LOG.debug(
                     "auto_create_spool: resolved vendor id=%s name=%r", vendor_id, _vname
                 )
+                self._nfc_info3(
+                    "auto_create_spool: resolved vendor id=%s name=%r",
+                    vendor_id, _vname)
                 break
             except Exception as exc:
                 LOG.debug(
                     "auto_create_spool: vendor find/create failed for %r: %s", _vname, exc
                 )
+                self._nfc_info3(
+                    "auto_create_spool: vendor candidate %r failed: %s",
+                    _vname, exc)
                 if _vname != "Generic":
                     LOG.debug(
                         "auto_create_spool: vendor resolution failed for %r,"
@@ -1123,6 +1199,9 @@ class SpoolmanClient:
                 "auto_create_spool: vendor resolution failed"
                 " — proceeding without vendor_id"
             )
+            self._nfc_info3(
+                "auto_create_spool: vendor resolution failed; "
+                "continuing without vendor_id")
 
         # ------------------------------------------------------------------
         # 3. Search for an existing matching filament.
@@ -1134,6 +1213,9 @@ class SpoolmanClient:
         try:
             # 3a. Search by external_id when a Bambu material_id is available.
             if material_id:
+                self._nfc_info3(
+                    "auto_create_spool: filament step: searching by external_id=%s",
+                    material_id)
                 ext_results = self._req(
                     "GET",
                     "/api/v1/filament?" + url_parse.urlencode({"external_id": material_id}),
@@ -1144,16 +1226,30 @@ class SpoolmanClient:
                         "auto_create_spool: found filament id=%s by external_id=%s",
                         filament_id, material_id,
                     )
+                    self._nfc_info3(
+                        "auto_create_spool: found filament id=%s by external_id=%s",
+                        filament_id, material_id)
+                else:
+                    self._nfc_info3(
+                        "auto_create_spool: no filament found by external_id=%s",
+                        material_id)
 
             # 3b. Fall back to material + vendor search.
             if filament_id is None:
                 params: dict = {"material": material}
                 if vendor_id is not None:
                     params["vendor_name"] = resolved_vendor_name
+                self._nfc_info3(
+                    "auto_create_spool: filament step: searching by %s",
+                    params)
                 filaments = self._req(
                     "GET", "/api/v1/filament?" + url_parse.urlencode(params)
                 )
                 if isinstance(filaments, list) and filaments:
+                    self._nfc_info3(
+                        "auto_create_spool: filament search returned %d "
+                        "candidate(s); color preference=%r",
+                        len(filaments), color_hex or None)
                     if color_hex:
                         for f in filaments:
                             if str(f.get("color_hex") or "").upper() == color_hex:
@@ -1165,14 +1261,27 @@ class SpoolmanClient:
                         "auto_create_spool: found filament id=%s material=%s",
                         filament_id, material,
                     )
+                    self._nfc_info3(
+                        "auto_create_spool: using existing filament id=%s "
+                        "material=%r vendor=%r",
+                        filament_id, material, resolved_vendor_name)
+                else:
+                    self._nfc_info3(
+                        "auto_create_spool: no existing filament matched "
+                        "material=%r vendor=%r",
+                        material, resolved_vendor_name)
         except url_error.URLError as exc:
             LOG.debug("auto_create_spool: filament search failed: %s", exc)
+            self._nfc_info3("auto_create_spool: filament search failed: %s", exc)
             search_ok = False
         except Exception:
             LOG.exception("auto_create_spool: filament search error")
+            self._nfc_info3("auto_create_spool: filament search raised an error")
             search_ok = False
 
         if not search_ok:
+            self._nfc_info3(
+                "auto_create_spool: aborting because filament search did not complete")
             return None
 
         # ------------------------------------------------------------------
@@ -1182,6 +1291,9 @@ class SpoolmanClient:
         #    when the tag does not carry temperature or weight metadata.
         # ------------------------------------------------------------------
         if filament_id is None:
+            self._nfc_info3(
+                "auto_create_spool: no matching filament found; creating "
+                "filament from tag/SpoolmanDB metadata")
             # Build a descriptive name.  Prefer the SpoolmanDB filament name
             # (e.g. "PLA Basic", "PETG HF") over the generic "{brand} {material}"
             # fallback so the Spoolman UI shows a meaningful label.
@@ -1239,6 +1351,13 @@ class SpoolmanClient:
                     "auto_create_spool: creating filament — payload: %s",
                     json.dumps(filament_body, default=str),
                 )
+                self._nfc_info3(
+                    "auto_create_spool: creating filament name=%r material=%r "
+                    "vendor_id=%s color=%r density=%s",
+                    filament_name, material, vendor_id, color_hex or None, density)
+                self._nfc_debug4(
+                    "auto_create_spool: filament create payload: %s",
+                    json.dumps(filament_body, default=str))
                 created = self._req("POST", "/api/v1/filament", filament_body)
                 if not isinstance(created, dict) or created.get("id") is None:
                     LOG.warning(
@@ -1251,6 +1370,9 @@ class SpoolmanClient:
                     "auto_create_spool: created filament id=%s name=%r density=%s",
                     filament_id, filament_name, density,
                 )
+                self._nfc_info3(
+                    "auto_create_spool: created filament id=%s name=%r",
+                    filament_id, filament_name)
             except url_error.URLError as exc:
                 LOG.warning("auto_create_spool: filament create failed: %s", exc)
                 return None
@@ -1282,14 +1404,22 @@ class SpoolmanClient:
         spool_extra: Optional[dict] = None
         if uid_hex:
             try:
+                self._nfc_info3(
+                    "auto_create_spool: ensuring RFID UID extra field before spool create")
                 ok, _ = self.ensure_rfid_uid_fields(1)
                 if ok:
                     spool_extra = {self.uid_field_name(1): uid_hex}
+                    self._nfc_info3(
+                        "auto_create_spool: spool create will include extra %s=%s",
+                        self.uid_field_name(1), uid_hex)
             except Exception as exc:
                 LOG.debug(
                     "auto_create_spool: ensure_rfid_uid_fields failed: %s"
                     " — creating spool without extra UID field", exc
                 )
+                self._nfc_info3(
+                    "auto_create_spool: ensure_rfid_uid_fields failed: %s; "
+                    "creating spool without extra UID field", exc)
         try:
             _spool_log = {
                 "filament_id": filament_id,
@@ -1302,6 +1432,14 @@ class SpoolmanClient:
                 "auto_create_spool: creating spool — payload: %s",
                 json.dumps(_spool_log, default=str),
             )
+            self._nfc_info3(
+                "auto_create_spool: creating spool filament_id=%s "
+                "remaining_weight=%s spool_weight=%s lot_nr=%r extra_keys=%s",
+                filament_id, float(weight_g), spool_weight_g, tray_uid,
+                sorted((spool_extra or {}).keys()))
+            self._nfc_debug4(
+                "auto_create_spool: spool create payload: %s",
+                json.dumps(_spool_log, default=str))
             created_spool = self.create_spool(
                 filament_id,
                 remaining_weight=float(weight_g),
@@ -1317,6 +1455,7 @@ class SpoolmanClient:
                 return None
             new_spool_id = int(created_spool["id"])
             LOG.info("auto_create_spool: created spool id=%s", new_spool_id)
+            self._nfc_info3("auto_create_spool: created spool id=%s", new_spool_id)
             return new_spool_id
         except url_error.URLError as exc:
             LOG.warning("auto_create_spool: spool create failed: %s", exc)

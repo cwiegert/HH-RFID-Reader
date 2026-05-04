@@ -115,6 +115,65 @@ def _single_line_preview(text, limit=300):
     return text[:limit - 3] + '...'
 
 
+_META_SUMMARY_KEYS = (
+    'tag_format', 'brand', 'vendor', 'material', 'material_detail',
+    'material_id', 'material_variant_id', 'sku', 'color_hex',
+    'diameter_mm', 'weight_g', 'spool_weight_g', 'tray_uid',
+    'spoolman_id', 'parse_warning', 'parse_error', 'error',
+)
+
+
+def _summarize_meta(meta):
+    if not isinstance(meta, dict):
+        return {}
+    return {k: meta.get(k) for k in _META_SUMMARY_KEYS
+            if meta.get(k) not in (None, '')}
+
+
+def _raw_tag_summary(raw):
+    if isinstance(raw, dict):
+        blocks = raw.get('blocks') or {}
+        block_indexes = sorted(blocks.keys())
+        return {
+            'kind': 'mifare_blocks',
+            'block_count': len(block_indexes),
+            'blocks': block_indexes,
+            'uid_bytes_len': len(raw.get('uid_bytes') or b''),
+        }
+    try:
+        raw_bytes = bytes(raw)
+    except Exception:
+        return {'kind': type(raw).__name__}
+    return {'kind': 'bytes', 'length': len(raw_bytes)}
+
+
+def _raw_tag_preview(raw, limit=96):
+    if isinstance(raw, dict):
+        blocks = raw.get('blocks') or {}
+        preview = {}
+        for block_index in sorted(blocks.keys())[:8]:
+            data = blocks.get(block_index) or b''
+            try:
+                preview[block_index] = bytes(data).hex().upper()
+            except Exception:
+                preview[block_index] = repr(data)
+        return preview
+    try:
+        raw_bytes = bytes(raw)
+    except Exception:
+        return repr(raw)
+    suffix = '...' if len(raw_bytes) > limit else ''
+    return raw_bytes[:limit].hex().upper() + suffix
+
+
+def _parse_attempt_summary(raw):
+    if isinstance(raw, dict):
+        return ('authenticated MIFARE blocks: Bambu, Creality CFS, '
+                'then QIDI Box')
+    return ('raw bytes: ELEGOO, Anycubic ACE, NDEF MIME/Text/URI, '
+            'Creality CFS, QIDI Box, Bambu heuristic, then raw UTF-8 JSON/URL')
+
+
 # ── Tag classification ────────────────────────────────────────────────────────
 
 def classify_tag_target(gate, target_info):
@@ -157,12 +216,27 @@ def parse_current_tag(gate, tag):
     uid_hex = tag.uid
     if not tag.raw_tag_data:
         tag.meta = {'uid': uid_hex}
+        if gate._debug >= 3:
+            logger.info(
+                "nfc_gate: [%s] gate %d — uid=%s  parse_tag skipped: no raw tag data",
+                gate._name, gate._gate, uid_hex)
         return
     try:
         from .vendor.rfid_tag_parser import parse_tag
         raw = (bytes(tag.raw_tag_data)
                if isinstance(tag.raw_tag_data, (bytes, bytearray))
                else tag.raw_tag_data)
+        if gate._debug >= 3:
+            logger.info(
+                "nfc_gate: [%s] gate %d — uid=%s  parse_tag begin raw=%s",
+                gate._name, gate._gate, uid_hex, _raw_tag_summary(raw))
+        if gate._debug >= 4:
+            logger.debug(
+                "nfc_gate: [%s] gate %d — uid=%s  raw tag preview: %s",
+                gate._name, gate._gate, uid_hex, _raw_tag_preview(raw))
+            logger.debug(
+                "nfc_gate: [%s] gate %d — uid=%s  parse_tag attempt order: %s",
+                gate._name, gate._gate, uid_hex, _parse_attempt_summary(raw))
         info = parse_tag(raw, uid_hex=uid_hex)
         if isinstance(info, dict) and 'uid' not in info:
             info = dict(info)
@@ -170,15 +244,16 @@ def parse_current_tag(gate, tag):
         if info is None:
             tag.meta = {'uid': uid_hex}
             tag.parse_error = None
+            if gate._debug >= 3:
+                logger.info(
+                    "nfc_gate: [%s] gate %d — uid=%s  parse_tag result: unrecognised format",
+                    gate._name, gate._gate, uid_hex)
         else:
             tag.meta = info
             tag.parse_error = info.get('parse_error') or info.get('error')
         if gate._debug >= 3:
-            logger.info("nfc_gate: [%s] gate %d — uid=%s  parse_tag → %s",
-                        gate._name, gate._gate, uid_hex,
-                        {k: v for k, v in tag.meta.items()
-                         if k in ('material', 'vendor', 'color_hex',
-                                  'spoolman_id', 'parse_error')})
+            logger.info("nfc_gate: [%s] gate %d — uid=%s  parsed tag meta: %s",
+                        gate._name, gate._gate, uid_hex, _summarize_meta(tag.meta))
         if gate._debug >= 4:
             logger.debug("nfc_gate: [%s] gate %d — uid=%s  full meta: %s",
                          gate._name, gate._gate, uid_hex, tag.meta)
@@ -358,6 +433,13 @@ def resolve_spool(gate, uid_hex):
     material = str(meta.get('material') or meta.get('type') or '').strip()
     color    = str(meta.get('color_hex') or meta.get('color') or '').strip()
 
+    if gate._debug >= 3:
+        logger.info(
+            "nfc_gate: [%s] gate %d — uid=%s  resolve_spool begin "
+            "metadata=%s tag_parse_error=%s",
+            gate._name, gate._gate, uid_hex, _summarize_meta(meta),
+            getattr(tag, 'parse_error', None) if tag is not None else None)
+
     if gate._spoolman is None:
         if material or color:
             if tag is not None:
@@ -375,6 +457,11 @@ def resolve_spool(gate, uid_hex):
 
     spoolman_id = meta.get('spoolman_id')
     if spoolman_id not in (None, ''):
+        if gate._debug >= 3:
+            logger.info(
+                "nfc_gate: [%s] gate %d — uid=%s  resolution step: "
+                "checking embedded spoolman_id=%r",
+                gate._name, gate._gate, uid_hex, spoolman_id)
         try:
             spoolman_id = int(spoolman_id)
         except (TypeError, ValueError):
@@ -406,6 +493,11 @@ def resolve_spool(gate, uid_hex):
                     "embedded spoolman_id=%s not found; falling back",
                     gate._name, gate._gate, uid_hex, spoolman_id)
 
+    if gate._debug >= 3:
+        logger.info(
+            "nfc_gate: [%s] gate %d — uid=%s  resolution step: "
+            "checking Spoolman extra UID field %s",
+            gate._name, gate._gate, uid_hex, gate._spoolman._rfid_key)
     spool_id = gate._spoolman.lookup_spool_by_uid(uid_hex)
     if spool_id is not None:
         if tag is not None:
@@ -414,6 +506,12 @@ def resolve_spool(gate, uid_hex):
             logger.info("nfc_gate: [%s] gate %d — uid=%s  Spoolman→spool_id=%s",
                         gate._name, gate._gate, uid_hex, spool_id)
         return spool_id
+    if gate._debug >= 3:
+        logger.info(
+            "nfc_gate: [%s] gate %d — uid=%s  UID lookup found no spool; "
+            "checking whether metadata can create or directly represent a spool "
+            "(material=%r color=%r)",
+            gate._name, gate._gate, uid_hex, material, color)
 
     try:
         base_url = gate._spoolman._resolve_base_url()
@@ -438,14 +536,15 @@ def resolve_spool(gate, uid_hex):
                 from .vendor.lameandboard_spoolman import (
                     SpoolmanClient as LBSpoolmanClient)
                 lb = LBSpoolmanClient(base_url=base_url,
-                                      timeout=gate._spoolman._timeout)
+                                      timeout=gate._spoolman._timeout,
+                                      debug=gate._debug)
                 if gate._debug >= 3:
                     logger.info(
                         "nfc_gate: [%s] gate %d — uid=%s  "
                         "auto-create via lameandboard client "
-                        "(uid_hex=None; patching %s next)",
+                        "(uid_hex=None; patching %s next) metadata=%s",
                         gate._name, gate._gate, uid_hex,
-                        gate._spoolman._rfid_key)
+                        gate._spoolman._rfid_key, _summarize_meta(meta))
                 new_spool_id = lb.auto_create_spool(meta, uid_hex=None)
                 if new_spool_id is not None:
                     new_spool_id = int(new_spool_id)
@@ -497,6 +596,16 @@ def resolve_spool(gate, uid_hex):
                     "using tag metadata material=%s color=%s",
                     gate._name, gate._gate, uid_hex, material, color)
             return DIRECT_METADATA_SPOOL
+    elif gate._debug >= 3:
+        if not gate._spoolman_auto_create:
+            reason = 'spoolman_auto_create disabled'
+        elif not material:
+            reason = 'tag metadata has no material'
+        else:
+            reason = 'unknown'
+        logger.info(
+            "nfc_gate: [%s] gate %d — uid=%s  auto-create skipped: %s",
+            gate._name, gate._gate, uid_hex, reason)
 
     if tag is not None:
         tag.resolution = {'path': 'unresolved'}

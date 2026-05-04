@@ -43,11 +43,11 @@ The UID approach requires none of this. Any blank NFC sticker from any supplier 
 
 ## Decision: SpoolmanClient Is a Pure Lookup Client
 
-**What we decided:** SpoolmanClient resolves UID → spool record and caches results. After NFC_Manager has accepted a resolved gate read, SpoolmanClient can also PATCH the spool record's `location` field to `MMU_GATE_<gate>`. It does not call `MMU_GATE_MAP`, `MMU_SPOOLMAN`, or any Happy Hare command.
+**What we decided:** SpoolmanClient resolves UID → spool record and caches results. It does not PATCH Spoolman location, and it does not call `MMU_GATE_MAP`, `MMU_SPOOLMAN`, or any Happy Hare command.
 
 **Why:** The gate a spool belongs to is a *physical fact*, not a Spoolman record fact. Spoolman knows spool IDs and filament metadata. It does not know the MMU gate layout. The thing that knows both a spool ID and a gate number is NFC_Manager — and that is exactly where the gate assignment decision lives.
 
-Keeping Happy Hare commands out of SpoolmanClient means it can still be used from any context where you have a UID and need a spool ID. The only gate-aware Spoolman write is the explicit `location` update requested by NFC_Manager after a gate read resolves.
+Keeping Happy Hare commands and gate-aware Spoolman writes out of SpoolmanClient means it can still be used from any context where you have a UID and need a spool ID. Happy Hare owns gate map state and synchronizes that state to Spoolman via `MMU_SPOOLMAN SYNC=1 QUIET=1` in `nfc_macros.cfg`.
 
 ---
 

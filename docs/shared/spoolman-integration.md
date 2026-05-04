@@ -102,7 +102,7 @@ Each time a new UID appears at a gate:
 
 Cache lifetime is controlled by `spoolman_cache_ttl` (default: 300 seconds). Set to `0` to disable caching and re-query Spoolman on every poll.
 
-After a UID resolves, the spool's `location` field in Spoolman is updated to `MMU_GATE_<n>` — this is how the Spoolman UI shows which spool is in which gate.
+After a UID resolves, NFC dispatches `_NFC_SPOOL_CHANGED`; the default macro updates Happy Hare with `MMU_GATE_MAP ... SYNC=1` and then calls `MMU_SPOOLMAN SYNC=1 QUIET=1`. Happy Hare owns the Spoolman location synchronization.
 
 ---
 

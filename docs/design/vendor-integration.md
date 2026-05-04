@@ -214,7 +214,7 @@ There are two Spoolman HTTP clients in play:
 
 | Client | File | Owns |
 |---|---|---|
-| Our client | `spoolman_client.py` | URL auto-discovery (Moonraker), circuit breaker, UID cache, `lookup_spool_by_uid()`, `lookup_spool_by_id()`, `set_spool_uid()`, `update_spool_location()` |
+| Our client | `spoolman_client.py` | URL auto-discovery (Moonraker), circuit breaker, UID cache, `lookup_spool_by_uid()`, `lookup_spool_by_id()`, `set_spool_uid()` |
 | Vendor client | `lameandboard_spoolman.py` | `find_or_create_vendor()`, `find_or_create_filament()`, `create_spool()` |
 
 The vendor client is instantiated only during auto-create, receiving the URL that our client already resolved. Both clients therefore use the same Moonraker-discovered URL. Our client does not gain vendor/filament/spool creation logic; the vendor client does not know about our UID cache or circuit breaker.

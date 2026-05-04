@@ -1111,14 +1111,48 @@ def _try_opentag3d(mime_type: str, payload: bytes) -> Optional[dict]:
 
 # ---- OpenSpool -------------------------------------------------------------
 
+_SMART_JSON_QUOTES = {
+    "\u201c": '"',
+    "\u201d": '"',
+    "\u201e": '"',
+    "\u201f": '"',
+}
+
+
+def _loads_json_text(text: str) -> tuple[Optional[dict], bool]:
+    """Load JSON text, accepting common copy/paste punctuation from UIs."""
+    raw = text.strip()
+    try:
+        data = json.loads(raw)
+        return (data, False) if isinstance(data, dict) else (None, False)
+    except Exception:
+        pass
+
+    has_smart_quotes = any(ch in raw for ch in _SMART_JSON_QUOTES)
+    has_field_semicolon = re.search(r';\s*"\w+"\s*:', raw) is not None
+    if not has_smart_quotes and not has_field_semicolon:
+        return None, False
+
+    normalized = raw
+    for bad, good in _SMART_JSON_QUOTES.items():
+        normalized = normalized.replace(bad, good)
+    normalized = re.sub(r';\s*("\w+"\s*:)', r',\1', normalized)
+    try:
+        data = json.loads(normalized)
+        if isinstance(data, dict):
+            return data, True
+    except Exception as exc:
+        _log.debug("rfid: JSON parse failed after quote normalization: %s", exc)
+    return None, True
+
+
 def _try_openspool(text: str) -> Optional[dict]:
     """Parse an OpenSpool JSON payload.
 
     Detection: JSON dict with "protocol": "openspool".
     """
-    try:
-        data = json.loads(text)
-    except Exception:
+    data, normalized_quotes = _loads_json_text(text)
+    if data is None:
         return None
     if not isinstance(data, dict):
         return None
@@ -1134,6 +1168,8 @@ def _try_openspool(text: str) -> Optional[dict]:
         "brand": str(data.get("brand", "Generic")).strip(),
         "tag_format": "openspool",
     }
+    if normalized_quotes:
+        info["parse_warning"] = "normalized nonstandard JSON punctuation"
     ch = str(data.get("color_hex", "")).strip().lstrip("#")
     if ch:
         info["color_hex"] = ch.upper()
@@ -1321,9 +1357,8 @@ _GENERIC_JSON_FIELDS = {
 
 def _try_generic_ndef_json(text: str) -> Optional[dict]:
     """Parse a generic NDEF text record that contains JSON filament data."""
-    try:
-        data = json.loads(text.strip())
-    except Exception:
+    data, normalized_quotes = _loads_json_text(text)
+    if data is None:
         return None
     if not isinstance(data, dict):
         return None
@@ -1344,6 +1379,8 @@ def _try_generic_ndef_json(text: str) -> Optional[dict]:
         return None
 
     info: dict = {"material": material, "tag_format": "generic_ndef_json"}
+    if normalized_quotes:
+        info["parse_warning"] = "normalized nonstandard JSON punctuation"
 
     brand = str(data.get("brand", "") or "").strip()
     if brand:
@@ -1711,4 +1748,3 @@ def is_parse_error(info: Optional[dict]) -> bool:
     from a successful parse that contains actionable filament data.
     """
     return isinstance(info, dict) and bool(info.get("error"))
-

@@ -137,7 +137,7 @@ A print job can run for hours. During that entire window, with `state == 'printi
 What the guard allows vs suppresses:
 
 - **Allowed:** I2C tag read [D], Spoolman UID lookup [E], GateState update [F]. The tag is identified and state is tracked internally.
-- **Suppressed:** Spoolman location PATCH (`update_spool_location`, `clear_spool_location`) and HH GCode dispatch (`KlipperInterface.dispatch`). No external writes happen.
+- **Suppressed:** HH GCode dispatch (`KlipperInterface.dispatch`) and any Spoolman writes. No external assignment synchronization happens.
 
 At `debug >= 3`, a log line is written to `nfc_reader.log` noting the suppression:
 
