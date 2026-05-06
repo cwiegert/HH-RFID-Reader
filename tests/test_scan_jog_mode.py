@@ -343,6 +343,30 @@ def test_assigned_matching_spool_suspends_without_polling():
     assert result == pytest_approx(130.0)
     assert '[polling suspended]' in g.status_line()
 
+def test_status_line_hh_empty_overrides_stale_nfc_cache():
+    """After eject, HH gate_status=0 should display empty even with cache."""
+    g = _make_gate()
+    g.printer.set_mmu(MockMMU(gate_status=[0], gate_spool_id=[55]))
+    g._state.current_uid = '04C19F92D32A81'
+    g._state.current_spool = 55
+    g._hh_load_paused = True
+
+    line = g.status_line()
+
+    assert 'Gate 0:  empty' in line
+    assert 'spool 55       UID' not in line
+    assert '[HH: spool 55  assigned]' in line
+
+def test_status_line_collapses_hh_assigned_cache_empty_note():
+    """HH assigned with no NFC cache should be one compact status block."""
+    g = _make_gate()
+    g.printer.set_mmu(MockMMU(gate_status=[0], gate_spool_id=[55]))
+
+    line = g.status_line()
+
+    assert '[HH has spool 55; NFC cache empty]' not in line
+    assert '[HH: spool 55  assigned, NFC cache empty]' in line
+
 def test_hh_found_without_spool_does_not_clear_nfc_cache():
     g = _make_gate()
     g.printer.set_mmu(MockMMU(gate_status=[1], gate_spool_id=[-1]))
