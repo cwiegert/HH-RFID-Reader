@@ -119,6 +119,16 @@ class _BusDefaultConfig:
 _lane_instances = []
 
 
+def _status_html_words(text):
+    text = re.sub(r'\bavailable\b',
+                  '<span style="color:#90EE90">available</span>', text)
+    text = re.sub(r'\bempty\b',
+                  '<span style="color:#87CEEB">empty</span>', text)
+    text = re.sub(r'\bassigned\b',
+                  '<span style="color:#FFFF00">assigned</span>', text)
+    return text
+
+
 def _lane_status_lines(printer):
     """Build NFC_STATUS output lines cross-referenced against the MMU
     lane MCUs registered in Klipper (mirrors how HH reads [board_pins lane]).
@@ -1275,30 +1285,36 @@ class NFCGate:
             else:
                 sync_note = "  [NFC has spool %s; HH empty]" % nfc_spool
         if hh_empty:
-            return ("  Gate %d:  empty   [%s]%s  [%s]"
-                    % (self._gate, poll_state, sync_note, hh_label))
+            return _status_html_words(
+                "  Gate %d:  empty   [%s]%s  [%s]"
+                % (self._gate, poll_state, sync_note, hh_label))
         if self._state.current_spool is DIRECT_METADATA_SPOOL:
             meta = (self._state.current_tag.meta
                     if self._state.current_tag is not None else {})
             material = (meta or {}).get('material', '')
             color = (meta or {}).get('color_hex', '')
-            return ("  Gate %d:  tag %s  metadata material=%s color=%s   [%s]%s  [%s]"
-                    % (self._gate, self._state.current_uid,
-                       material, color, poll_state, sync_note, hh_label))
+            return _status_html_words(
+                "  Gate %d:  tag %s  metadata material=%s color=%s   [%s]%s  [%s]"
+                % (self._gate, self._state.current_uid,
+                   material, color, poll_state, sync_note, hh_label))
         if self._state.current_spool is not None:
-            return ("  Gate %d:  spool %-6d   UID %s   [%s]%s  [%s]"
-                    % (self._gate,
-                       self._state.current_spool, self._state.current_uid,
-                       poll_state, sync_note, hh_label))
+            return _status_html_words(
+                "  Gate %d:  spool %-2d  UID %s   [%s]%s   [%s]"
+                % (self._gate,
+                   self._state.current_spool, self._state.current_uid,
+                   poll_state, sync_note, hh_label))
         if self._state.current_uid is not None:
-            return ("  Gate %d:  tag %s  (UID not in Spoolman)   [%s]%s  [%s]"
-                    % (self._gate, self._state.current_uid, poll_state,
-                       sync_note, hh_label))
+            return _status_html_words(
+                "  Gate %d:  tag %s  (UID not in Spoolman)   [%s]%s  [%s]"
+                % (self._gate, self._state.current_uid, poll_state,
+                   sync_note, hh_label))
         if hh.present and hh.available:
-            return ("  Gate %d:  occupied   [%s]%s  [%s]"
-                    % (self._gate, poll_state, sync_note, hh_label))
-        return ("  Gate %d:  empty   [%s]%s  [%s]"
+            return _status_html_words(
+                "  Gate %d:  occupied   [%s]%s  [%s]"
                 % (self._gate, poll_state, sync_note, hh_label))
+        return _status_html_words(
+            "  Gate %d:  empty   [%s]%s  [%s]"
+            % (self._gate, poll_state, sync_note, hh_label))
 
     def get_status(self, _eventtime=None):
         tag = self._state.current_tag

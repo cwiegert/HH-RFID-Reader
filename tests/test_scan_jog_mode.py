@@ -20,6 +20,7 @@ or without pytest:
 
 import sys
 import os
+import re
 import types
 import tempfile
 
@@ -32,6 +33,11 @@ def _stub(name, **attrs):
         setattr(m, k, v)
     sys.modules[name] = m
     return m
+
+
+def _strip_html(text):
+    return re.sub(r'</?span[^>]*>', '', text)
+
 
 class _NullLogger:
     def debug(self, *a, **k): pass
@@ -352,10 +358,13 @@ def test_status_line_hh_empty_overrides_stale_nfc_cache():
     g._hh_load_paused = True
 
     line = g.status_line()
+    plain = _strip_html(line)
 
-    assert 'Gate 0:  empty' in line
-    assert 'spool 55       UID' not in line
-    assert '[HH: spool 55  assigned]' in line
+    assert 'Gate 0:  empty' in plain
+    assert 'spool 55       UID' not in plain
+    assert '[HH: spool 55  assigned]' in plain
+    assert '<span style="color:#87CEEB">empty</span>' in line
+    assert '<span style="color:#FFFF00">assigned</span>' in line
 
 def test_status_line_collapses_hh_assigned_cache_empty_note():
     """HH assigned with no NFC cache should be one compact status block."""
@@ -363,9 +372,22 @@ def test_status_line_collapses_hh_assigned_cache_empty_note():
     g.printer.set_mmu(MockMMU(gate_status=[0], gate_spool_id=[55]))
 
     line = g.status_line()
+    plain = _strip_html(line)
 
-    assert '[HH has spool 55; NFC cache empty]' not in line
-    assert '[HH: spool 55  assigned, NFC cache empty]' in line
+    assert '[HH has spool 55; NFC cache empty]' not in plain
+    assert '[HH: spool 55  assigned, NFC cache empty]' in plain
+    assert '<span style="color:#FFFF00">assigned</span>' in line
+
+def test_status_line_colors_hh_available_with_html_span():
+    g = _make_gate()
+    g.printer.set_mmu(MockMMU(gate_status=[1], gate_spool_id=[55]))
+    g._state.current_uid = '04C19F92D32A81'
+    g._state.current_spool = 55
+
+    line = g.status_line()
+
+    assert '<span style="color:#90EE90">available</span>' in line
+    assert 'HH: spool 55  available' in _strip_html(line)
 
 def test_hh_found_without_spool_does_not_clear_nfc_cache():
     g = _make_gate()
@@ -380,8 +402,9 @@ def test_hh_found_without_spool_does_not_clear_nfc_cache():
     assert g._state.current_uid == '04C19F92D32A81'
     assert g._state.current_spool == 55
     assert g._hh_load_paused
-    assert 'HH: found/no spool' in g.status_line()
-    assert '[NFC has spool 55; HH found/no spool]' in g.status_line()
+    line = _strip_html(g.status_line())
+    assert 'HH: found/no spool' in line
+    assert '[NFC has spool 55; HH found/no spool]' in line
 
 def test_hh_found_with_nfc_spool_does_not_start_scan_jog():
     g = _make_gate()
@@ -407,9 +430,10 @@ def test_startup_hh_found_without_spool_allows_discovery_scan():
 
     assert not g._hh_load_paused
     assert g._state.current_spool is None
-    assert 'Gate 0:  occupied' in g.status_line()
-    assert '[polling]' in g.status_line()
-    assert '[HH: found/no spool]' in g.status_line()
+    line = _strip_html(g.status_line())
+    assert 'Gate 0:  occupied' in line
+    assert '[polling]' in line
+    assert '[HH: found/no spool]' in line
 
 def test_hh_found_without_nfc_spool_starts_discovery_scan_jog():
     g = _make_gate()
