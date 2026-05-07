@@ -35,7 +35,30 @@ jobs:
           echo "upstream_sha=$UPSTREAM_SHA" >> "$GITHUB_OUTPUT"
           echo "upstream_date=$UPSTREAM_DATE" >> "$GITHUB_OUTPUT"
 
+      - name: Check ignored upstream commit
+        id: ignored
+        env:
+          UPSTREAM_SHA: ${{ steps.fetch.outputs.upstream_sha }}
+        run: |
+          IGNORED_SHAS="$(
+            awk -F: '/^ignored_upstream_commits:/ {print $2}' VENDORED.md \
+              | sed 's/#.*//' \
+              | tr ', ' '\n' \
+              | sed '/^$/d'
+          )"
+          IGNORED=false
+          for SHA in $IGNORED_SHAS; do
+            case "$UPSTREAM_SHA" in
+              "$SHA"*)
+                IGNORED=true
+                echo "Ignoring upstream commit $UPSTREAM_SHA (matched $SHA)"
+                ;;
+            esac
+          done
+          echo "ignored=$IGNORED" >> "$GITHUB_OUTPUT"
+
       - name: Check for differences
+        if: steps.ignored.outputs.ignored != 'true'
         id: diff
         run: |
           CHANGED=false

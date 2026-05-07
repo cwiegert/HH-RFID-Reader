@@ -15,6 +15,7 @@ upstream_repo:   https://github.com/lameandboard/rfid.git
 upstream_branch: main
 upstream_commit: c1aadffa8d58abc92eaa674e66a57b2998a44386
 synced_date:     2026-04-30
+ignored_upstream_commits: 5b9b81797786
 ```
 
 ### Usage notes
@@ -36,6 +37,11 @@ the UID onto the newly-created spool using its configured single Spoolman extra 
 
 If that UID patch fails, the read is treated as unresolved so the system does not lose
 the UID-to-spool link.
+
+`ignored_upstream_commits` lists upstream revisions that were reviewed and
+intentionally not merged because this project keeps local compatibility patches
+that upstream has not accepted yet. The sync workflow skips PR creation when
+upstream `main` is at one of those commits.
 
 ### Updating
 
