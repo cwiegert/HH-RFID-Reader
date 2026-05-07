@@ -43,7 +43,7 @@ SSH to the Pi:
 cd ~
 git clone --filter=blob:none --sparse git@github.com:<your-github-username>/NFC-Reader.git emu-nfc-reader
 cd ~/emu-nfc-reader
-git sparse-checkout set klippy config docs tools
+git sparse-checkout set klippy config 
 ```
 
 The sparse checkout skips any large binary assets and keeps only what the Pi and Klipper need.
@@ -97,7 +97,7 @@ i2c_mcu:    lane0
 i2c_bus:    i2c3_PB3_PB4
 ```
 
-`i2c_mcu` must exactly match the MCU name in your Happy Hare config (from `mmu_hardware.cfg`), typically `lane0`, `lane1`, etc.
+`i2c_mcu` must exactly match the MCU name in your Happy Hare config (from `mmu_hardware.cfg`), typically `mmu0`, `mmu1`, etc.
 
 > [!IMPORTANT]
 > **Temperature sensor I2C bus must match.** If your lane MCU also has a thermistor or temperature sensor connected over I2C (e.g. an SHT3x), it must be configured on the **same hardware I2C bus** as the PN532. Set `i2c_bus` in your temperature sensor section to the same value as the `i2c_bus` in the matching `[nfc_gate laneN]` section (or the base `[nfc_gate]` if all lanes share one bus). Using a different bus, or using the Klipper software-emulated I2C bus (`i2c_software_*`), will cause collisions or read failures on both devices. Hardware I2C is required.

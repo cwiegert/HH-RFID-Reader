@@ -52,12 +52,12 @@ Edit `~/printer_data/config/nfc/nfc_reader_hw.cfg`. The default file has four la
 ```ini
 [nfc_gate lane0]
 mmu_gate:   0
-i2c_mcu:    lane0
+i2c_mcu:    mmu0
 i2c_bus:    i2c3_PB3_PB4
 
 [nfc_gate lane1]
 mmu_gate:   1
-i2c_mcu:    lane1
+i2c_mcu:    mmu1
 i2c_bus:    i2c3_PB3_PB4
 ```
 
@@ -78,7 +78,7 @@ All polling, timing, and logging settings are inherited from the base `[nfc_gate
 ```ini
 [nfc_gate lane2]
 mmu_gate:   2
-i2c_mcu:    lane2
+i2c_mcu:    mmu2
 i2c_bus:    i2c3_PB3_PB4
 debug:      2              ; verbose logging on this lane only
 ```
