@@ -736,6 +736,15 @@ def test_start_scan_clears_hh_gate_cache_before_spoolman_sync():
     assert sync_idx  is not None, "MMU_SPOOLMAN SYNC=1 not called on scan start"
     assert clear_idx < sync_idx,  "cache clear must run before Spoolman sync"
 
+def test_start_scan_sync_hh_false_clears_cache_but_skips_spoolman():
+    """sync_hh=False must still clear HH gate cache but skip MMU_SPOOLMAN SYNC."""
+    from nfc_gates import scan_jog
+    g = _make_gate(gate=2)
+    scan_jog.start(g, sync_hh=False)
+    scripts = g.printer.gcode_scripts
+    assert any('_NFC_GATE_CLEAR_CACHE GATE=2' in s for s in scripts)
+    assert not any('MMU_SPOOLMAN' in s for s in scripts)
+
 def test_scan_step_issues_one_chunk_when_due():
     """No tag + due chunk issues scan_jog_mm, not the full scan distance."""
     g = _make_gate(gate=1, scan_jog_mm=50.0, scan_max_mm=200.0,

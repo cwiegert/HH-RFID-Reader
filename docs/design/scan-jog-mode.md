@@ -75,7 +75,7 @@ _poll_timer_event (every poll_interval)
 - A 2-second idle-settle delay (`_scan_idle_ready_time`) is inserted after HH reports idle. This prevents premature scan entry while HH is still completing its park move.
 - If another gate holds the scan lock, `_scan_pending` is re-armed and a 3-second retry is scheduled rather than silently dropping the trigger or spamming logs.
 
-**Manual trigger:** `NFC GATE=N JOG_SCAN=1` calls `scan_jog.manual_jog_scan(gate, gcmd)` directly. It runs the same precondition checks (not printing, HH idle, no other gate scanning, reader healthy) and calls `start(gate)`. No edge detection is involved. `HH_SYNC=0` skips the pre-scan `MMU_SPOOLMAN SYNC=1` call for Happy Hare extension-hook callers that are already running inside Happy Hare.
+**Manual trigger:** `NFC GATE=N JOG_SCAN=1` calls `scan_jog.manual_jog_scan(gate, gcmd)` directly. It runs the same precondition checks (not printing, HH idle, no other gate scanning, reader healthy) and calls `start(gate)`. No edge detection is involved. `HH_SYNC=0` skips the pre-scan `MMU_SPOOLMAN SYNC=1` call for Happy Hare extension-hook callers running inside HH's execution context — the HH gate cache clear (`MMU_GATE_MAP`) still runs unconditionally.
 
 ---
 
@@ -154,32 +154,42 @@ that list.
 
 ## Implementation: `scan_jog.py`
 
-### `start(gate)` — enter scan mode
+### `start(gate, max_mm, sync_hh)` — enter scan mode
 
 ```python
-def start(gate):
+def start(gate, max_mm=None, sync_hh=True):
     gate.__class__._active_scan_gate = gate._gate
     gate._scan_mode = True
     gate._scan_mm_total = 0.0
     gate._scan_next_chunk_time = gate.reactor.monotonic()
-    gate._hh_seed_spool_id = None     # clear startup seed — scan must re-read
+    gate._hh_seed_spool_id = None
     gate._hh_seed_available = False
     gate._scan_found_event = None
     gate._state.current_uid   = None  # force changed event on first read
     gate._state.current_spool = None
 
-    # 1. Clear stale spool/color/material from the HH local gate map.
-    # 2. Push that cleared state to Spoolman so the spool is no longer
-    #    shown as "at MMU Gate N" while the scan jog runs.
-    clear_hh_gate_cache(gate)        # _NFC_GATE_CLEAR_CACHE GATE=N
-    sync_spoolman_before_scan(gate)  # MMU_SPOOLMAN SYNC=1 QUIET=1
+    clear_hh_gate_cache(gate)        # always — MMU_GATE_MAP local update, safe in any context
+    if sync_hh:
+        sync_spoolman_before_scan(gate)  # MMU_SPOOLMAN SYNC=1 — skipped when called from HH hook
 
     gate._scan_timer = gate.reactor.register_timer(
         gate._scan_step_event,
         gate.reactor.monotonic())
 ```
 
-**Pre-scan clearing sequence:**  `clear_hh_gate_cache` issues `_NFC_GATE_CLEAR_CACHE GATE=N`, which resets the HH local gate map entry to `SPOOLID=-1 NAME=Unknown MATERIAL=Unknown COLOR=FFFFFF55`. `sync_spoolman_before_scan` then pushes that cleared state to Spoolman via `MMU_SPOOLMAN SYNC=1`, so the spool's location field in Spoolman is vacated before any jog move happens. When the scan succeeds, `_NFC_SPOOL_CHANGED` fires the next `MMU_SPOOLMAN SYNC=1` with the newly identified spool.
+**Pre-scan clearing sequence:**
+
+`clear_hh_gate_cache` runs unconditionally. It issues `_NFC_GATE_CLEAR_CACHE GATE=N`, which calls `MMU_GATE_MAP GATE=N SPOOLID=-1 NAME=Unknown MATERIAL=Unknown COLOR=FFFFFF00 AVAILABLE=1`. This gives the Mainsail UI a fully-transparent "unknown filament" placeholder (`COLOR=FFFFFF00`) while the scan jog runs. `AVAILABLE=1` keeps the gate marked as loaded so HH does not treat it as empty.
+
+`sync_spoolman_before_scan` runs only when `sync_hh=True`. It pushes the now-cleared HH gate state to Spoolman via `MMU_SPOOLMAN SYNC=1`, vacating the spool's location field in Spoolman before the jog begins. This call is skipped when the scan is triggered from inside a Happy Hare extension hook (`HH_SYNC=0`) because `MMU_SPOOLMAN SYNC=1` makes network calls that are unsafe from inside HH's execution context. `MMU_GATE_MAP` (used by the cache clear) is local-only and safe in all contexts.
+
+| Trigger | `sync_hh` | `clear_hh_gate_cache` | `sync_spoolman_before_scan` |
+|---|---|---|---|
+| Automatic `0→1` poll | `True` | ✅ always | ✅ runs |
+| Manual `NFC JOG_SCAN=1` | `True` | ✅ always | ✅ runs |
+| HH pre-gate hook (`HH_SYNC=0`) | `False` | ✅ always | ❌ skipped |
+
+When the scan succeeds, `_NFC_SPOOL_CHANGED` issues the next `MMU_SPOOLMAN SYNC=1` with the newly identified spool.
 
 ### `step_event(gate, eventtime)` — the loop body
 

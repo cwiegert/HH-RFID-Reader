@@ -91,6 +91,48 @@ poll_interval × absent_threshold = seconds before removal fires
 
 ---
 
+### Scan-and-Jog
+
+```ini
+[nfc_gate]
+scan_enabled:          True
+scan_jog_mm:           75.0
+scan_rewind_buffer_mm: 30.0
+scan_poll_interval:    0.10
+```
+
+| Setting | Default | Description |
+|---|---|---|
+| `scan_enabled` | `True` | Master switch. `False` disables automatic scan-jog entirely — the 0→1 edge is ignored and `NFC JOG_SCAN=1` is blocked. |
+| `scan_jog_mm` | `75.0` | Filament advance per jog step (mm). Each step spins the spool hub by this distance, giving the antenna a fresh read window. |
+| `scan_rewind_buffer_mm` | `30.0` | Distance reserved for Happy Hare's final gate-parking step (`_MMU_STEP_UNLOAD_GATE`). After a tag is found, NFC fast-rewinds to within this buffer and then hands off to HH for sensor/encoder-based final parking. If the scan moved less than this value, the fast rewind is skipped. |
+| `scan_poll_interval` | `0.10` | Minimum seconds between NFC read attempts during scan-jog. The jog chunk cadence is derived automatically from `scan_jog_mm ÷ gear_short_move_speed`; this setting controls read frequency independently of motor timing. |
+
+**Happy Hare post-preload hook (alternative to automatic polling):**
+
+The [jacksky6 JK-dev branch](https://github.com/jacksky6/Happy-Hare/tree/JK-dev) of Happy Hare adds `variable_user_post_preload_extension` in `config/base/mmu_macro_vars.cfg`. Set it to trigger NFC scan-jog after each successful `MMU_PRELOAD`:
+
+```ini
+[gcode_macro _MMU_SEQUENCE_VARS]
+description: Happy Hare sequence macro configuration variables
+gcode: # Leave empty
+variable_user_post_preload_extension: 'NFC JOG_SCAN=1 HH_SYNC=0'
+```
+
+Happy Hare appends `GATE=<n>` automatically, so the final command is `NFC JOG_SCAN=1 HH_SYNC=0 GATE=<n>`. `HH_SYNC=0` skips the pre-scan `MMU_SPOOLMAN SYNC=1` call because the hook is already running inside the Happy Hare preload flow.
+
+Recommended NFC config when using the hook:
+
+```ini
+[nfc_gate]
+startup_polling: 0
+scan_enabled:    False
+```
+
+With this setup NFC does not poll gate-status at all — Happy Hare calls NFC only after the relevant gate completes preload. The gate-status 0→1 edge trigger is disabled.
+
+---
+
 ### PN532 I2C Hardware
 
 ```ini

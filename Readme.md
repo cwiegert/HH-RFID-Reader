@@ -12,7 +12,7 @@ Load spool → HH parks filament → scan-jog rotates spool → tag in range →
 
 ## What You Need
 
-- A Voron with an EMU running [Happy Hare](https://github.com/moggieuk/Happy-Hare)
+- A Voron with an EMU running [Happy Hare](https://github.com/moggieuk/Happy-Hare) — post-preload hook integration requires the [jacksky6 JK-dev branch](https://github.com/jacksky6/Happy-Hare/tree/JK-dev)
 - One mcu per filament lane (EBB36, EBB42, or SLB)
 - One PN532 NFC reader module per gate (~$3–5 each) 
 - M2 x 4 self-tapping screws to mount each PN532 to the bracket
@@ -46,19 +46,37 @@ NFC tags sit on the spool hub. When Happy Hare parks filament at the gate the hu
 2. NFC_Manager detects the 0→1 edge on the next poll tick
 3. The scan-jog loop starts — filament advances in `scan_jog_mm` steps (default 75 mm), reading the NFC tag after each step
 4. The moment the tag rotates into read range, the spool is identified through Spoolman and dispatched to Happy Hare
-5. The filament rewinds to the parked position via `MMU_UNLOAD restore=0`
+5. The filament rewinds to the parked position; Happy Hare's `_MMU_STEP_UNLOAD_GATE` performs the final sensor-based park
 
 **Manual trigger:** If the automatic trigger didn't fire (or you want to retry), run:
 ```gcode
 NFC GATE=0 JOG_SCAN=1
 ```
-This runs the exact same sequence with the same precondition checks (HH idle, not printing, no other gate scanning)
+This runs the exact same sequence with the same precondition checks (HH idle, not printing, no other gate scanning).
+
+**Happy Hare post-preload hook (alternative to automatic polling):** The [jacksky6 JK-dev branch](https://github.com/jacksky6/Happy-Hare/tree/JK-dev) of Happy Hare adds a `variable_user_post_preload_extension` hook. Configure it to trigger NFC scan-jog automatically after each `MMU_PRELOAD`:
+
+```ini
+[gcode_macro _MMU_SEQUENCE_VARS]
+variable_user_post_preload_extension: 'NFC JOG_SCAN=1 HH_SYNC=0'
+```
+
+Happy Hare appends `GATE=<n>` automatically, giving `NFC JOG_SCAN=1 HH_SYNC=0 GATE=<n>`. Use this recommended config with the hook:
+
+```ini
+startup_polling: 0
+scan_enabled:    False
+```
+
+This disables gate-status polling entirely — Happy Hare calls NFC only after the relevant gate completes preload. See [Configuration Reference](docs/shared/configuration.md) for full details.
+
+**Tag-not-in-Spoolman behavior:** If the tag UID is detected but not registered in Spoolman, the gate is kept `AVAILABLE=1` with `SPOOLID=-1` so Happy Hare still treats the lane as loaded. The console prompts the user to add the UID to Spoolman.
 
 **Configurable per lane** — see [Configuration Reference](docs/shared/configuration.md):
 
 | Key | Default | Effect |
 |---|---|---|
-| `scan_enabled` | `True` | Master switch — set `False` to disable automatic scan-jog |
+| `scan_enabled` | `True` | Master switch — set `False` to disable automatic scan-jog (use with HH hook) |
 | `scan_jog_mm` | `75.0` | Filament advance per step (mm) |
 | `scan_rewind_buffer_mm` | `30.0` | Distance left for Happy Hare's final gate parking step |
 | `scan_poll_interval` | `0.1` | Minimum seconds between NFC reads during scan |

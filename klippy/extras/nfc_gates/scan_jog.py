@@ -187,6 +187,7 @@ def start(gate, max_mm=None, sync_hh=True):
     gate._hh_load_paused = False
     gate._scan_gate_selected = False  # deferred to first jog (must run from timer, not GCode handler)
 
+    clear_hh_gate_cache(gate)
     if sync_hh:
         sync_spoolman_before_scan(gate)
 
