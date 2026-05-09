@@ -114,6 +114,32 @@ def sync_spoolman_before_scan(gate):
             gate._name, gate._gate, e)
 
 
+def get_active_gate(gate):
+    """Return Happy Hare's currently selected gate, or -1 if unavailable."""
+    hh = gate._read_hh_status()
+    if not hh.present:
+        return -1
+    return hh.active_gate
+
+
+def restore_active_gate(gate):
+    """Restore the Happy Hare gate that was selected before scan-jog."""
+    previous_gate = getattr(gate, '_scan_previous_active_gate', -1)
+    gate._scan_previous_active_gate = -1
+    if previous_gate < 0 or previous_gate == gate._gate:
+        return
+    gcode = gate.printer.lookup_object('gcode', None)
+    if gcode is None:
+        return
+    try:
+        gcode.run_script("MMU_SELECT GATE=%d" % previous_gate)
+    except Exception as e:
+        logger.warning(
+            "nfc_gate: [%s] gate %d scan mode — failed to restore "
+            "Happy Hare selected gate %d: %s",
+            gate._name, gate._gate, previous_gate, e)
+
+
 def resume_poll_after_rewind(gate):
     """Restart regular polling after the queued rewind move can finish."""
     delay = gate._poll_interval
@@ -136,6 +162,7 @@ def start(gate, max_mm=None):
     gate._scan_found_event = None
     gate._scan_previous_uid = gate._state.current_uid
     gate._scan_previous_spool = gate._state.current_spool
+    gate._scan_previous_active_gate = get_active_gate(gate)
     gate._state.current_uid   = None  # force changed event on first read
     gate._state.current_spool = None
     gate._hh_load_paused = False
@@ -226,7 +253,10 @@ def finish(gate):
     msg = "⏪ NFC[%d]: rewinding %.1fmm" % (gate._gate, gate._scan_mm_total)
     logger.info(msg)
     gate._console(msg)
-    gate._run_rewind()
+    try:
+        gate._run_rewind()
+    finally:
+        restore_active_gate(gate)
     gate.__class__._active_scan_gate = None
     # Filament is back at the gate — dispatch the event that was suppressed during the jog.
     if gate._scan_found_event is not None:
@@ -268,7 +298,10 @@ def rewind_and_exit(gate):
         gate._gate, gate._scan_mm_total)
     logger.warning(msg)
     gate._console(msg)
-    gate._run_rewind()
+    try:
+        gate._run_rewind()
+    finally:
+        restore_active_gate(gate)
     gate.__class__._active_scan_gate = None
     previous_uid = getattr(gate, '_scan_previous_uid', None)
     previous_spool = getattr(gate, '_scan_previous_spool', None)
@@ -310,6 +343,9 @@ def run_rewind(gate):
     if gate._scan_mm_total <= 0.0:
         return
     gcode = gate.printer.lookup_object('gcode')
-    gcode.run_script("MMU_TEST_MOVE MOVE=%.2f QUIET=1\nM400"
-                     % (-(gate._scan_mm_total - 10)))
-    gcode.run_script("mmu_check_gate")
+    buffer_mm = max(0.0, getattr(gate, '_scan_rewind_buffer_mm', 30.0))
+    fast_rewind = gate._scan_mm_total - buffer_mm
+    if fast_rewind > 0.0:
+        gcode.run_script("MMU_TEST_MOVE MOVE=%.2f QUIET=1\nM400"
+                         % (-fast_rewind))
+    gcode.run_script("_MMU_STEP_UNLOAD_GATE")

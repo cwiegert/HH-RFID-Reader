@@ -233,16 +233,19 @@ def test_defaults_absent_threshold_zero_raises():
 def test_scan_defaults():
     d = NFCGateDefaults(MockConfig())
     assert d.scan_jog_mm   == 50.0
+    assert d.scan_rewind_buffer_mm == 30.0
     assert d.scan_poll_interval == 0.1
     assert d.scan_enabled  == True
 
 def test_scan_keys_overridden():
     d = NFCGateDefaults(MockConfig({
         'scan_jog_mm':        25.0,
+        'scan_rewind_buffer_mm': 45.0,
         'scan_poll_interval': 0.2,
         'scan_enabled':       False,
     }))
     assert d.scan_jog_mm   == 25.0
+    assert d.scan_rewind_buffer_mm == 45.0
     assert d.scan_poll_interval == 0.2
     assert d.scan_enabled  == False
 
@@ -250,6 +253,13 @@ def test_scan_jog_mm_below_min_raises():
     try:
         NFCGateDefaults(MockConfig({'scan_jog_mm': 0.5}))
         assert False, "Expected error for scan_jog_mm below minval"
+    except (ValueError, Exception):
+        pass
+
+def test_scan_rewind_buffer_mm_below_min_raises():
+    try:
+        NFCGateDefaults(MockConfig({'scan_rewind_buffer_mm': -0.1}))
+        assert False, "Expected error for scan_rewind_buffer_mm below minval"
     except (ValueError, Exception):
         pass
 

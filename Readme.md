@@ -60,6 +60,7 @@ This runs the exact same sequence with the same precondition checks (HH idle, no
 |---|---|---|
 | `scan_enabled` | `True` | Master switch — set `False` to disable automatic scan-jog |
 | `scan_jog_mm` | `75.0` | Filament advance per step (mm) |
+| `scan_rewind_buffer_mm` | `30.0` | Distance left for Happy Hare's final gate parking step |
 | `scan_poll_interval` | `0.1` | Minimum seconds between NFC reads during scan |
 
 ---

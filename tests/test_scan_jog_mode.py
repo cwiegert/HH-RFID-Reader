@@ -194,7 +194,8 @@ class MockPrinter:
 
 def _make_gate(gate=0, scan_jog_mm=50.0, scan_max_mm=200.0,
                scan_poll_interval=0.5,
-               scan_enabled=True):
+               scan_enabled=True,
+               scan_rewind_buffer_mm=30.0):
     """Build a minimal NFCGate with scan-jog state, bypassing __init__.
 
     Uses object.__new__ to skip Klipper config/I2C setup, then manually
@@ -208,6 +209,7 @@ def _make_gate(gate=0, scan_jog_mm=50.0, scan_max_mm=200.0,
     g._polling            = True
     g._poll_interval      = 30.0
     g._scan_jog_mm        = scan_jog_mm
+    g._scan_rewind_buffer_mm = scan_rewind_buffer_mm
     g._scan_max_mm        = scan_max_mm
     g._scan_poll_interval = scan_poll_interval
     g._scan_enabled       = scan_enabled
@@ -218,6 +220,7 @@ def _make_gate(gate=0, scan_jog_mm=50.0, scan_max_mm=200.0,
     g._scan_idle_ready_time = 0.0
     g._scan_found_event     = None
     g._scan_gate_selected   = False
+    g._scan_previous_active_gate = -1
     g._scan_timer         = None
     g._prev_gate_status   = -1
     g._scan_pending      = False
@@ -307,6 +310,62 @@ def test_finish_holds_lock_until_rewind_check_gate_runs():
 
     assert observed == [2]
     assert NFCGate._active_scan_gate is None
+
+def test_finish_scan_restores_previous_hh_selected_gate():
+    g = _make_gate(gate=3)
+    g.printer.set_mmu(MockMMU(
+        gate_status=[0, 0, 0, 1],
+        gate_spool_id=[-1, -1, -1, -1],
+        active_gate=1))
+    g._start_scan_mode()
+    g._scan_mm_total = 20.0
+
+    g._finish_scan()
+
+    assert g.printer.gcode_scripts[-1] == 'MMU_SELECT GATE=1'
+
+def test_no_tag_scan_restores_previous_hh_selected_gate():
+    g = _make_gate(gate=3)
+    g.printer.set_mmu(MockMMU(
+        gate_status=[0, 0, 0, 1],
+        gate_spool_id=[-1, -1, -1, -1],
+        active_gate=1))
+    g._start_scan_mode()
+    g._scan_mm_total = 20.0
+
+    g._rewind_and_exit_scan()
+
+    assert g.printer.gcode_scripts[-1] == 'MMU_SELECT GATE=1'
+
+def test_finish_scan_restores_previous_hh_selected_gate_after_rewind_error():
+    g = _make_gate(gate=3)
+    g.printer.set_mmu(MockMMU(
+        gate_status=[0, 0, 0, 1],
+        gate_spool_id=[-1, -1, -1, -1],
+        active_gate=1))
+    g._start_scan_mode()
+    g._run_rewind = lambda: (_ for _ in ()).throw(RuntimeError("boom"))
+
+    try:
+        g._finish_scan()
+    except RuntimeError:
+        pass
+
+    assert g.printer.gcode_scripts[-1] == 'MMU_SELECT GATE=1'
+
+def test_scan_does_not_restore_when_previous_hh_gate_matches_scan_gate():
+    g = _make_gate(gate=3)
+    g.printer.set_mmu(MockMMU(
+        gate_status=[0, 0, 0, 1],
+        gate_spool_id=[-1, -1, -1, -1],
+        active_gate=3))
+    g._start_scan_mode()
+    g._scan_mm_total = 20.0
+
+    g._finish_scan()
+
+    assert all(script != 'MMU_SELECT GATE=3'
+               for script in g.printer.gcode_scripts)
 
 def test_second_gate_blocked_when_lock_held():
     """When gate 0 holds the lock, gate 1 must not acquire it."""
@@ -833,9 +892,25 @@ def test_run_rewind_gcode_content():
     g._run_rewind()
     scripts = g.printer.gcode_scripts
     assert len(scripts) == 2
-    assert 'MMU_TEST_MOVE MOVE=-90.00' in scripts[0]
-    assert scripts[1] == 'mmu_check_gate'
+    assert 'MMU_TEST_MOVE MOVE=-70.00' in scripts[0]
+    assert scripts[1] == '_MMU_STEP_UNLOAD_GATE'
     assert 'MMU_UNLOAD' not in scripts[0]
+
+def test_run_rewind_uses_configured_buffer():
+    g = _make_gate(gate=3, scan_rewind_buffer_mm=40.0)
+    g._scan_mm_total = 100.0
+    g._run_rewind()
+    scripts = g.printer.gcode_scripts
+    assert len(scripts) == 2
+    assert 'MMU_TEST_MOVE MOVE=-60.00' in scripts[0]
+    assert scripts[1] == '_MMU_STEP_UNLOAD_GATE'
+
+def test_run_rewind_short_scan_skips_fast_rewind():
+    g = _make_gate(gate=3, scan_rewind_buffer_mm=30.0)
+    g._scan_mm_total = 20.0
+    g._run_rewind()
+    scripts = g.printer.gcode_scripts
+    assert scripts == ['_MMU_STEP_UNLOAD_GATE']
 
 def test_rewind_skipped_when_nothing_jogged():
     """_run_rewind must not issue any GCode if scan_mm_total is 0."""

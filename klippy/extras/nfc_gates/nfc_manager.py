@@ -198,6 +198,9 @@ class NFCGateDefaults:
         self.i2c_bus            = config.get('i2c_bus', None)
         self.scan_jog_mm        = config.getfloat('scan_jog_mm', 50.0,
                                                    minval=1.0, maxval=500.0)
+        self.scan_rewind_buffer_mm = config.getfloat(
+            'scan_rewind_buffer_mm', 30.0,
+            minval=0.0, maxval=500.0)
         self.scan_poll_interval = config.getfloat('scan_poll_interval', 0.1,
                                                    minval=0.1, maxval=5.0)
         self.scan_enabled         = config.getboolean('scan_enabled', True)
@@ -351,6 +354,10 @@ class NFCGate:
         self._scan_jog_mm   = config.getfloat('scan_jog_mm',
                                                d.scan_jog_mm if d else 50.0,
                                                minval=1.0, maxval=500.0)
+        self._scan_rewind_buffer_mm = config.getfloat(
+            'scan_rewind_buffer_mm',
+            d.scan_rewind_buffer_mm if d else 30.0,
+            minval=0.0, maxval=500.0)
         self._scan_max_mm   = None
         self._mmu_vars_path = None
         self._bowden_lengths = None
