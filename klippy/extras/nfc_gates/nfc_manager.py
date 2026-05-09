@@ -986,6 +986,20 @@ class NFCGate:
     def _poll_hh_pause_check(self):
         """Suspend polling while Happy Hare says filament is still present."""
         if (not self._scan_mode
+                and self._state.current_uid is not None
+                and self._state.current_spool is None):
+            hh = self._read_hh_status()
+            if hh.present and hh.available:
+                if not self._hh_load_paused:
+                    self._hh_load_paused = True
+                    logger.info(
+                        "nfc_gate: [%s] gate %d — unregistered tag "
+                        "confirmed by NFC; HH reports filament present — "
+                        "suspending poll until ejected",
+                        self._name, self._gate)
+                self._state.miss_count = 0
+                return True
+        if (not self._scan_mode
                 and self._hh_gate_matches_current_spool()
                 and self._state.current_spool is not None):
             if not self._hh_load_paused:
@@ -997,7 +1011,8 @@ class NFCGate:
             self._state.miss_count = 0
             return True
         if self._hh_load_paused:
-            if self._state.current_spool is None:
+            if (self._state.current_uid is None
+                    and self._state.current_spool is None):
                 self._hh_load_paused = False
                 return False
             hh = self._read_hh_status()

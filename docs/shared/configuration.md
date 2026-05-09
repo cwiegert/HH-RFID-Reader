@@ -256,15 +256,18 @@ Called after `absent_threshold` consecutive missed polls. Parameter: `GATE`.
 
 Default:
 ```gcode
-MMU_GATE_MAP GATE={gate} SPOOLID=-1 AVAILABLE=0 SYNC=1 QUIET=1
+MMU_GATE_MAP GATE={gate} SPOOLID=-1 AVAILABLE=1 SYNC=1 QUIET=1
 MMU_GATE_MAP GATE={gate} APPLY=1
 ```
+
+The default clears only the Spoolman ID and keeps the Happy Hare gate available.
 
 ### `_NFC_TAG_NO_SPOOL`
 
 Called when a tag is detected but no matching spool is found in Spoolman. Parameters: `GATE`, `UID`.
 
-Default: prints the unknown UID to the console with instructions to register it.
+Default: prints the unknown UID to the console with instructions to register it,
+then keeps the Happy Hare gate available with `SPOOLID=-1`.
 
 ---
 

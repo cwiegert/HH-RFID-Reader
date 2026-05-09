@@ -272,6 +272,32 @@ def test_paused_without_nfc_spool_does_not_skip_reader():
     assert not skipped
     assert not g._hh_load_paused
 
+def test_uid_only_pauses_poll_while_hh_reports_filament_present():
+    g = _make_gate()
+    g.printer.set_mmu(MockMMU(gate_status=[1], gate_spool_id=[-1]))
+    g._state.current_uid = '04C19F92D32A81'
+    g._state.current_spool = None
+
+    skipped = g._poll_hh_pause_check()
+
+    assert skipped
+    assert g._hh_load_paused
+    assert g._state.miss_count == 0
+
+def test_uid_only_pause_resumes_when_hh_gate_empty():
+    g = _make_gate()
+    g.printer.set_mmu(MockMMU(gate_status=[0], gate_spool_id=[-1]))
+    g._state.current_uid = '04C19F92D32A81'
+    g._state.current_spool = None
+    g._hh_load_paused = True
+
+    skipped = g._poll_hh_pause_check()
+
+    assert not skipped
+    assert not g._hh_load_paused
+    assert g._state.current_uid is None
+    assert g._state.current_spool is None
+
 def test_finish_scan_releases_lock():
     g = _make_gate()
     g._start_scan_mode()
@@ -1021,6 +1047,7 @@ def test_finish_scan_uid_only_event_dispatches_without_meta():
     g._finish_scan()
 
     assert g._klipper.calls == [('uid_only', 0, '04AABB', None, None)]
+    assert g._hh_load_paused
 
 
 # ── Approx helper (avoids pytest dependency for float comparison) ─────────────

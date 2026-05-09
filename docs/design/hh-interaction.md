@@ -118,14 +118,14 @@ MMU_GATE_MAP GATE={gate} APPLY=1
 {% if "load" in mmu_action or "unload" in mmu_action or "homing" in mmu_action %}
     { action_respond_info("... ignoring removal.") }
 {% else %}
-    MMU_GATE_MAP GATE={gate} SPOOLID=-1 AVAILABLE=0 SYNC=1 QUIET=1
+    MMU_GATE_MAP GATE={gate} SPOOLID=-1 AVAILABLE=1 SYNC=1 QUIET=1
     MMU_GATE_MAP GATE={gate} APPLY=1
 {% endif %}
 ```
 
-**MMU action guard:** before clearing the gate, the macro reads `printer.mmu.action`. If the MMU is loading, unloading, or homing, the removal event is silently ignored. This prevents a tag momentarily leaving read range during filament movement from triggering a spurious gate clear. The removal will be retried on the next poll cycle if the tag is still absent.
+**MMU action guard:** before clearing the Spoolman ID, the macro reads `printer.mmu.action`. If the MMU is loading, unloading, or homing, the removal event is silently ignored. This prevents a tag momentarily leaving read range during filament movement from triggering a spurious gate-map update. The removal will be retried on the next poll cycle if the tag is still absent.
 
-The macro calls `MMU_SPOOLMAN SYNC=1 QUIET=1` after the gate map update so Happy Hare synchronizes the cleared assignment to Spoolman.
+The macro keeps `AVAILABLE=1` so Happy Hare still treats the lane as loaded/available, while `SPOOLID=-1` disconnects the Spoolman spool binding. It then calls `MMU_SPOOLMAN SYNC=1 QUIET=1` so Happy Hare synchronizes the updated assignment to Spoolman.
 
 ### `_NFC_TAG_NO_SPOOL`
 
@@ -133,7 +133,7 @@ The macro calls `MMU_SPOOLMAN SYNC=1 QUIET=1` after the gate map update so Happy
 { action_respond_info("NFC gate %d: tag UID %s is not registered in Spoolman.\n..." % ...) }
 ```
 
-Logs the UID to the console and prompts the user to register it. Does not call `MMU_GATE_MAP`. No HH state changes.
+Logs the UID to the console, prompts the user to register it, and leaves the gate available with `SPOOLID=-1`.
 
 ---
 
@@ -243,7 +243,8 @@ When the Spoolman lookup fails (no UID in Spoolman, or Spoolman not configured):
 11. After absent_threshold polls (3 × 10 s = ~30 s) with no tag:
     GateState.process_read(None, None) → EVENT_REMOVED
     _NFC_SPOOL_REMOVED GATE=0 dispatched.
-    Macro checks printer.mmu.action — if idle, clears HH gate map.
+    Macro checks printer.mmu.action — if idle, clears only the Spoolman ID
+    while keeping the HH gate available.
 ```
 
 ---
@@ -285,7 +286,7 @@ All GCode is dispatched from `nfc_macros.cfg`. The NFC Python layer never calls 
 | `MMU_GATE_MAP` | `GATE=N SPOOLID=N AVAILABLE=1 SYNC=1 QUIET=1` | `_NFC_SPOOL_CHANGED` (Spoolman path) | Assign spool to gate and mark available |
 | `MMU_GATE_MAP` | `GATE=N [MATERIAL=X] [COLOR=X] [TEMP=N] AVAILABLE=1 QUIET=1` | `_NFC_SPOOL_CHANGED` (metadata path) | Set gate filament metadata when Spoolman is disabled |
 | `MMU_GATE_MAP` | `GATE=N APPLY=1` | `_NFC_SPOOL_CHANGED`, `_NFC_SPOOL_REMOVED` | Push updated map into active print state |
-| `MMU_GATE_MAP` | `GATE=N SPOOLID=-1 AVAILABLE=0 SYNC=1 QUIET=1` | `_NFC_SPOOL_REMOVED` | Clear gate assignment |
+| `MMU_GATE_MAP` | `GATE=N SPOOLID=-1 AVAILABLE=1 SYNC=1 QUIET=1` | `_NFC_SPOOL_REMOVED`, `_NFC_TAG_NO_SPOOL` | Clear Spoolman ID while keeping the gate available |
 | `MMU_SELECT` | `GATE=N` | scan-jog first jog only | Set active gate for `MMU_TEST_MOVE` |
 | `MMU_TEST_MOVE` | `MOVE=mm QUIET=1` | scan-jog each jog step and rewind | Drive gear stepper |
 

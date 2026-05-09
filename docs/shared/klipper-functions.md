@@ -382,11 +382,11 @@ Parameters:
 
 Default behavior:
 ```gcode
-MMU_GATE_MAP GATE={gate} SPOOLID=-1 AVAILABLE=0 SYNC=1 QUIET=1
+MMU_GATE_MAP GATE={gate} SPOOLID=-1 AVAILABLE=1 SYNC=1 QUIET=1
 MMU_GATE_MAP GATE={gate} APPLY=1
 ```
 
-Clears the gate in Happy Hare's gate map. `AVAILABLE=0` marks the gate as empty. `APPLY=1` applies the change immediately.
+Clears only the Spoolman ID in Happy Hare's gate map. `AVAILABLE=1` keeps the gate marked as occupied/available, and `APPLY=1` applies the change immediately.
 
 The macro also checks `printer.mmu.action` — if the MMU is mid-load, unload, or homing, the removal is silently ignored to avoid clearing the gate while filament is actively moving.
 
@@ -404,11 +404,11 @@ Parameters:
 - `GATE` — Happy Hare gate number
 - `UID` — the unrecognized tag UID
 
-Default behavior: prints a message to the console with the UID and instructions to register it.
+Default behavior: prints a message to the console with the UID and instructions to register it, then leaves the Happy Hare gate available with no Spoolman ID.
 
-**Optional:** If you want unregistered tags to clear the Happy Hare gate instead of just logging, add this line to the macro body:
+**Optional:** If you want unregistered tags to clear the Happy Hare gate instead, change the macro body to:
 ```gcode
-MMU_GATE_MAP GATE={gate} SPOOLID=-1 SYNC=1 QUIET=1
+MMU_GATE_MAP GATE={gate} SPOOLID=-1 AVAILABLE=0 SYNC=1 QUIET=1
 ```
 
 ---

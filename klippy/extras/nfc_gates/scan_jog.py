@@ -271,7 +271,8 @@ def finish(gate):
             gate._klipper.dispatch(event_type, g, uid, spool, meta=meta)
         else:
             gate._poll_klipper_dispatch(event_type, g, uid, spool)
-        if event_type == 'changed' and spool is not None:
+        if ((event_type == 'changed' and spool is not None)
+                or event_type == 'uid_only'):
             gate._hh_load_paused = True
             gate._state.miss_count = 0
         if event_type == 'changed' and spool is not None:
