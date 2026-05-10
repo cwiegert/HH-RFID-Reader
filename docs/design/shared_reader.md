@@ -44,7 +44,7 @@
 | ✅ | Normal PN532 driver waits use injectable `sleep_fn`, and `NFCGate` supplies a reactor-cooperative sleep using `reactor.pause`. | `klippy/extras/nfc_gates/pn532_driver.py`, `klippy/extras/nfc_gates/nfc_manager.py` | |
 | ❌ | Installer generated shared config should expose every important shared timeout/effect knob clearly; current output comments `shared_tag_read_effect` and `shared_pending_timeout`, but not `shared_read_timeout`. | `install.sh` | |
 | ❌ | Shared reader behavior should have direct tests for config parsing, command handling, timeout behavior, pending spool staging, status output, and no-op preload behavior. Current tests only set `_shared = False` in scan-jog fixtures. | `tests/` | |
-| ❌ | PN532 low-level debug helpers still contain direct `time.sleep()` calls; either convert them to `sleep_fn` or document them as an explicit debug-only exception. | `klippy/extras/nfc_gates/pn532_driver.py` | |
+| ✅ | PN532 low-level debug helpers still contain direct `time.sleep()` calls; either convert them to `sleep_fn` or document them as an explicit debug-only exception. | `klippy/extras/nfc_gates/pn532_driver.py` | this is fine, will not implement a change |
 | ❌ | Lane-only wiring / architecture docs need a shared-reader exception so they do not imply shared installs are unsupported. | `docs/i2c-pn532/wiring.md`, `docs/shared/architecture-decisions.md` | |
 | ❌ | HH post-unload timing needs hardware validation to confirm shared polling starts after the gate is empty. | Happy Hare runtime, printer hardware | |
 | ❌ | HH LED effect invocation needs hardware validation for `MMU_SET_LED EXIT_EFFECT=<shared_tag_read_effect> DURATION=3`. | Happy Hare runtime, LED config | |
