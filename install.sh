@@ -30,6 +30,7 @@ PRINTER_CONFIG="${HOME}/printer_data/config"
 NFC_CONFIG_DIR="${PRINTER_CONFIG}/nfc"
 NFC_READER_CFG="${NFC_CONFIG_DIR}/nfc_reader.cfg"
 NFC_READER_HW_CFG="${NFC_CONFIG_DIR}/nfc_reader_hw.cfg"
+NFC_READER_SHARED_CFG="${NFC_CONFIG_DIR}/nfc_reader_shared.cfg"
 
 if [ -t 1 ]; then
     BOLD="$(printf '\033[1m')"
@@ -413,32 +414,28 @@ PYEOF
 }
 
 detect_reader_type() {
-    local file_path="$1"
-    python3 - "${file_path}" <<'PYEOF'
+    local shared_cfg="$1"
+    python3 - "${shared_cfg}" <<'PYEOF'
 import re, sys
 
-path = sys.argv[1]
 try:
-    text = open(path, 'r').read()
+    text = open(sys.argv[1], 'r').read()
+    if re.search(r'^\[nfc_gate shared\]\s*$', text, flags=re.M):
+        print('shared')
+        raise SystemExit
 except FileNotFoundError:
-    print('lane')
-    raise SystemExit
-
-if re.search(r'^\[nfc_gate shared\]\s*$', text, flags=re.M):
-    print('shared')
-else:
-    print('lane')
+    pass
+print('lane')
 PYEOF
 }
 
 detect_shared_mcu() {
-    local file_path="$1"
-    python3 - "${file_path}" <<'PYEOF'
+    local shared_cfg="$1"
+    python3 - "${shared_cfg}" <<'PYEOF'
 import sys
 
-path = sys.argv[1]
 try:
-    text = open(path, 'r').read()
+    text = open(sys.argv[1], 'r').read()
 except FileNotFoundError:
     print('mmu')
     raise SystemExit
@@ -476,10 +473,20 @@ with open(path, 'w') as f:
     f.write("# Single reader mounted inside the MMU body.  Tap a tagged spool before\n")
     f.write("# loading; NFC stages the spool ID for the next pregate preload automatically.\n")
     f.write("#\n")
-    f.write("# Include after nfc_reader.cfg and nfc_macros.cfg:\n")
+    f.write("# This file is separate from nfc_reader_hw.cfg so that the shared reader\n")
+    f.write("# can be added to an existing per-lane install without editing any existing\n")
+    f.write("# config file — just add the include below and fill in the hardware values.\n")
+    f.write("#\n")
+    f.write("# Pure shared-reader install — include this instead of nfc_reader_hw.cfg:\n")
+    f.write("#   [include nfc/nfc_reader.cfg]\n")
+    f.write("#   [include nfc/nfc_macros.cfg]\n")
+    f.write("#   [include nfc/nfc_reader_shared.cfg]\n")
+    f.write("#\n")
+    f.write("# Hybrid install (per-lane readers + shared reader) — include both:\n")
     f.write("#   [include nfc/nfc_reader.cfg]\n")
     f.write("#   [include nfc/nfc_macros.cfg]\n")
     f.write("#   [include nfc/nfc_reader_hw.cfg]\n")
+    f.write("#   [include nfc/nfc_reader_shared.cfg]\n")
     f.write("#\n")
     f.write("# ⚠️ After updating Klipper, rebuild and flash the MCU hosting the PN532\n")
     f.write(f"#    ({i2c_mcu}).  The MCU must be on the same Klipper version as the host.\n")
@@ -491,11 +498,21 @@ with open(path, 'w') as f:
     f.write(f"shared:                 true\n")
     f.write(f"startup_polling:        {startup_polling}\n")
     f.write("\n")
-    f.write("# Optional: name of a [mmu_led_effect] to flash on successful tag read\n")
+    f.write("# Optional: name of a [mmu_led_effect] to flash on successful tag read.\n")
     f.write("# shared_tag_read_effect: mmu_RFID_read\n")
     f.write("\n")
-    f.write("# Optional: seconds a scanned spool stays pending before expiring\n")
+    f.write("# Seconds a scanned spool stays pending (eligible for the next preload).\n")
     f.write("# shared_pending_timeout: 120.0\n")
+    f.write("\n")
+    f.write("# Seconds polling may run after NFC_SHARED READ=1 without resolving a tag\n")
+    f.write("# before auto-stopping.  No effect for startup_polling or post-PRELOAD_CHECK.\n")
+    f.write("# shared_read_timeout: 120.0\n")
+    f.write("\n")
+    f.write("# Consecutive unresolvable UIDs before the console advises MMU_PRELOAD.\n")
+    f.write("# shared_missed_limit: 3\n")
+    f.write("\n")
+    f.write("# Set to true to block pregate loads entirely when no spool is staged.\n")
+    f.write("# force_spool_id: false\n")
 PYEOF
 }
 
@@ -518,7 +535,7 @@ echo "Interactive setup"
 echo ""
 
 # ── Q1: Reader type ───────────────────────────────────────────────────────────
-DEFAULT_READER_TYPE="$(detect_reader_type "${NFC_READER_HW_CFG}")"
+DEFAULT_READER_TYPE="$(detect_reader_type "${NFC_READER_SHARED_CFG}")"
 echo "1. Reader type"
 echo "   $(choice_style lane)   = per-lane PN532, one per EBB42 board"
 echo "   $(choice_style shared) = single reader inside the MMU body for staging spools"
@@ -614,7 +631,7 @@ else
         "3. Poll at Klipper boot so you can tap a spool at any time? (recommended)" \
         "yes"
 
-    DEFAULT_I2C_MCU="$(detect_shared_mcu "${NFC_READER_HW_CFG}")"
+    DEFAULT_I2C_MCU="$(detect_shared_mcu "${NFC_READER_SHARED_CFG}")"
     prompt_with_default I2C_MCU \
         "4. Klipper MCU the shared PN532 is wired to (must match a [mcu ...] section)" \
         "${DEFAULT_I2C_MCU}"
@@ -780,7 +797,11 @@ echo ""
 
 merge_config "${REPO_DIR}/config/nfc_reader.cfg"   "${NFC_READER_CFG}"
 merge_config "${REPO_DIR}/config/nfc_macros.cfg" "${NFC_CONFIG_DIR}/nfc_macros.cfg"
-merge_config "${REPO_DIR}/config/nfc_reader_hw.cfg"  "${NFC_READER_HW_CFG}"
+# nfc_reader_hw.cfg is lane-specific — only merge it for lane installs.
+# Shared-only installs use nfc_reader_shared.cfg instead.
+if [ "${READER_TYPE}" = "lane" ]; then
+    merge_config "${REPO_DIR}/config/nfc_reader_hw.cfg"  "${NFC_READER_HW_CFG}"
+fi
 
 echo ""
 echo "Applying selected settings..."
@@ -796,7 +817,7 @@ set_config_value "${NFC_READER_CFG}" "nfc_gate" "spoolman_auto_create" \
 
 if [ "${READER_TYPE}" = "shared" ]; then
     # startup_polling and scan_enabled live in [nfc_gate shared], not [nfc_gate]
-    write_shared_config "${NFC_READER_HW_CFG}" "${I2C_MCU}" \
+    write_shared_config "${NFC_READER_SHARED_CFG}" "${I2C_MCU}" \
         "$( [ "${STARTUP_POLLING}" = "yes" ] && echo "1" || echo "0" )"
 else
     set_config_value "${NFC_READER_CFG}" "nfc_gate" "startup_polling" \
@@ -899,22 +920,22 @@ echo "  Config files in ${NFC_CONFIG_DIR}/:"
 echo "    nfc_reader.cfg     ← Spoolman URL, tag parsing, debug settings"
 echo "    nfc_macros.cfg     ← Happy Hare handoff macros"
 if [ "${READER_TYPE}" = "shared" ]; then
-    echo "    nfc_reader_hw.cfg  ← [nfc_gate shared] hardware config"
+    echo "    nfc_reader_shared.cfg  ← [nfc_gate shared] hardware config"
 else
-    echo "    nfc_reader_hw.cfg  ← hardware layout (one [nfc_gate laneN] per physical reader)"
+    echo "    nfc_reader_hw.cfg      ← hardware layout (one [nfc_gate laneN] per physical reader)"
 fi
 echo ""
 echo "Next steps (first install only):"
 echo ""
 
 if [ "${READER_TYPE}" = "shared" ]; then
-    echo "  1. Confirm i2c_mcu and i2c_bus in nfc_reader_hw.cfg match your hardware."
+    echo "  1. Confirm i2c_mcu and i2c_bus in nfc_reader_shared.cfg match your hardware."
     echo "     The installer wrote i2c_mcu: ${I2C_MCU} — edit if your MCU name differs."
     echo ""
     echo "  2. Add includes to printer.cfg:"
     echo "       [include nfc/nfc_reader.cfg]"
     echo "       [include nfc/nfc_macros.cfg]"
-    echo "       [include nfc/nfc_reader_hw.cfg]"
+    echo "       [include nfc/nfc_reader_shared.cfg]"
     echo ""
     echo "  3. Restart Klipper:"
     echo "     sudo systemctl restart klipper"
@@ -922,10 +943,10 @@ if [ "${READER_TYPE}" = "shared" ]; then
     echo "  4. Update and flash the MCU hosting the shared PN532 reader (${I2C_MCU})."
     echo "     The MCU must be on the same Klipper version as the host."
     echo ""
-    echo "  5. Wire Happy Hare hooks in mmu_macro_vars.cfg:"
-    echo "       variable_user_pre_load_extension:    '_NFC_SHARED_PRELOAD'"
-    echo "       variable_user_post_unload_extension: '_NFC_SHARED_POST_UNLOAD'"
-    echo "     (post_unload hook is optional when startup_polling is enabled)"
+    echo "  5. Wire the Happy Hare pre-load hook in mmu_macro_vars.cfg:"
+    echo "       variable_user_pre_load_extension: '_NFC_SHARED_PRELOAD'"
+    echo "     Polling pauses/resumes automatically on print start/end —"
+    echo "     the post-unload hook is no longer needed."
     echo ""
     echo "  6. Moonraker update_manager — added automatically by this script."
     echo "     If moonraker.conf was not found, add [update_manager emu_nfc_reader] manually."

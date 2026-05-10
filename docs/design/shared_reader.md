@@ -22,31 +22,41 @@
 | ✅ | Shared state tracks pending UID, pending spool ID, pending deadline, auto-created flag, last error, and read deadline. | `klippy/extras/nfc_gates/nfc_manager.py` | |
 | ✅ | Successful tag resolution stores a pending spool, starts `shared_pending_timeout`, stops polling, and keeps the pending spool after tag removal. | `klippy/extras/nfc_gates/nfc_manager.py` | |
 | ✅ | UID-only / unresolved tag records an error without clearing a previously pending spool. | `klippy/extras/nfc_gates/nfc_manager.py` | |
+| ✅ | Rich tag returning `DIRECT_METADATA_SPOOL` sentinel is treated as unresolved (increments miss counter, console message at limit); avoids crash in `_shared_preload_check`. Rich tags work when `spoolman_auto_create: true` creates a real spool ID first. | `klippy/extras/nfc_gates/nfc_manager.py`, `docs/shared/shared-reader.md`, `docs/shared/configuration.md` | |
 | ✅ | `shared_pending_timeout` defaults to `120.0` seconds and expires stale pending spools before preload staging. | `klippy/extras/nfc_gates/nfc_manager.py`, `docs/shared/configuration.md` | |
 | ✅ | `shared_read_timeout` defaults to `120.0` seconds and stops manual/eject-triggered polling when no valid tag resolves. | `klippy/extras/nfc_gates/nfc_manager.py`, `docs/shared/configuration.md` | |
 | ✅ | `startup_polling: 1` starts polling after PN532 init without applying the manual read timeout. | `klippy/extras/nfc_gates/nfc_manager.py`, `install.sh` | |
-| ✅ | Shared polling skips I2C reads while printing. | `klippy/extras/nfc_gates/nfc_manager.py` | |
-| ✅ | Shared polling skips I2C reads while Happy Hare reports active load, unload, or homing. | `klippy/extras/nfc_gates/nfc_manager.py` | |
-| ✅ | `PRELOAD_CHECK` uses the existing safety posture: check printing / HH busy state, but do not read NFC during preload check. | `klippy/extras/nfc_gates/nfc_manager.py` | |
-| ✅ | `PRELOAD_CHECK` stages the pending spool with `MMU_GATE_MAP NEXT_SPOOLID=<id>` and never blocks normal loading when no spool is pending. | `klippy/extras/nfc_gates/nfc_manager.py` | |
+| ✅ | Shared polling skips I2C reads while printing; polling continues at all other times including during HH load/unload/homing. | `klippy/extras/nfc_gates/nfc_manager.py` | |
+| ✅ | Unresolved UID increments `_shared_missed_resolutions`; after `shared_missed_limit` consecutive misses (config key, default 3, minval 1) a console message advises the user to use `MMU_PRELOAD`. Counter resets on successful resolution, `CLEAR=1`, or `READ=1`. | `klippy/extras/nfc_gates/nfc_manager.py` | |
+| ✅ | `PRELOAD_CHECK` with no staged spool emits a console message instructing the user to tap the tag first or use `MMU_PRELOAD`; no longer a silent no-op. | `klippy/extras/nfc_gates/nfc_manager.py` | |
+| ✅ | `force_spool_id: true` config option — when set, `PRELOAD_CHECK` with no staged spool raises a gcode error that blocks HH from continuing the preload. | `klippy/extras/nfc_gates/nfc_manager.py` | |
+| ✅ | `PRELOAD_CHECK` skips only while printing. HH-busy check removed — `user_pre_load_extension` fires while HH action is non-idle, so the busy check would always prevent staging. | `klippy/extras/nfc_gates/nfc_manager.py` | |
+| ✅ | `PRELOAD_CHECK` stages the pending spool with `MMU_GATE_MAP NEXT_SPOOLID=<id>`. | `klippy/extras/nfc_gates/nfc_manager.py` | |
 | ✅ | After successful `PRELOAD_CHECK`, shared polling restarts for the next spool with no read deadline. | `klippy/extras/nfc_gates/nfc_manager.py` | |
+| ✅ | **Hybrid install supported**: per-lane readers and a shared reader may coexist. At `PRELOAD_CHECK` time, if the pending spool is already assigned to any gate in HH's gate map, staging is skipped. In hybrid mode (`_has_per_lane_readers = True`) this is a silent info log — the per-lane reader handled it. In pure-shared mode this is unexpected (possible stale pending or duplicate load) and emits a console warning. `_has_per_lane_readers` is set at `_handle_connect` by scanning `_lane_instances` for non-shared entries; all entries are present at connect time. | `klippy/extras/nfc_gates/nfc_manager.py` | |
 | ✅ | `READ=0` stops polling but keeps any pending spool; `CLEAR=1` stops polling and clears pending/shared state. | `klippy/extras/nfc_gates/nfc_manager.py`, `docs/shared/klipper-functions.md` | |
-| ✅ | `CLEAR_CACHE=1` clears the `GateState` tag cache without clearing pending shared spool state. | `klippy/extras/nfc_gates/nfc_manager.py`, `docs/shared/klipper-functions.md` | |
+| ✅ | `NFC_SHARED CLEAR_CACHE=1` clears shared tag/cache state (`GateState`, Spoolman cache, PN532 current-card cache) while preserving `_shared_pending_*` staged spool state. | `klippy/extras/nfc_gates/nfc_manager.py`, `klippy/extras/nfc_gates/gate_state.py`, `tests/test_shared_reader.py` | |
 | ✅ | Successful tag read can trigger a named HH LED effect via `shared_tag_read_effect`; design example is blinking yellow `mmu_RFID_read`. | `klippy/extras/nfc_gates/nfc_manager.py`, `docs/shared/configuration.md` | |
 | ✅ | `NFC_SHARED STATUS=1` reports idle, polling, pending, expired, error, and reader-failed shared states. | `klippy/extras/nfc_gates/nfc_manager.py`, `docs/shared/klipper-functions.md` | |
+| ✅ | `NFC_SHARED POLL=1` now responds with `shared_status_line()` — shows pending spool, polling state, and error, not gate `255` / lane-oriented state. | `klippy/extras/nfc_gates/nfc_manager.py` | |
 | ✅ | `NFC_STATUS` output includes the shared reader; in a shared-only install it appears alone (no lane rows), in a mixed install it appears after the lane rows. The shared instance is in `_lane_instances` but filtered from the lane loop by the `_shared` flag; `_append_shared_status` adds it separately. | `klippy/extras/nfc_gates/nfc_manager.py`, `klippy/extras/nfc_gate.py` | |
 | ✅ | Shared reader ready/init messages use `NFC_SHARED` commands and do not include lane HH seed notes. | `klippy/extras/nfc_gates/nfc_manager.py` | |
+| ✅ | `_poll_timer_event` failed-reader log now uses `NFC_SHARED INIT=1` for the shared reader (matches the `_delayed_init` pattern). `NFC GATE=255 INIT=1` no longer appears. | `klippy/extras/nfc_gates/nfc_manager.py` | |
 | ✅ | Happy Hare pre-load hook bridge exists as `_NFC_SHARED_PRELOAD` and calls `NFC_SHARED PRELOAD_CHECK=1`. | `config/nfc_macros.cfg`, `install.sh`, `docs/shared/configuration.md` | |
-| ✅ | Happy Hare post-unload hook bridge exists as `_NFC_SHARED_POST_UNLOAD` and calls `NFC_SHARED READ=1`. | `config/nfc_macros.cfg`, `install.sh`, `docs/shared/configuration.md` | |
+| ✅ | `_NFC_SHARED_POST_UNLOAD` macro removed; polling is managed automatically via `idle_timeout:printing` / `idle_timeout:ready` events. | `config/nfc_macros.cfg` | |
+| ✅ | Shared polling pauses automatically on `idle_timeout:printing` and resumes on `idle_timeout:ready` / `idle_timeout:idle` when `startup_polling: 1`. | `klippy/extras/nfc_gates/nfc_manager.py` | |
+| ✅ | `_handle_print_end` no longer restarts polling when a valid (non-expired) spool is already pending. Logs "spool N still pending; polling stays stopped until PRELOAD_CHECK". Expired pending falls through to normal resume. | `klippy/extras/nfc_gates/nfc_manager.py` | |
 | ✅ | Installer supports an upfront lane/shared branch, defaults lane, and writes a shared-only hardware config when selected. | `install.sh` | |
 | ✅ | Installer detects existing `[nfc_gate shared]` config and existing shared MCU for reinstall defaults. | `install.sh` | |
 | ✅ | Installer next steps call out shared MCU flash and HH hook wiring. | `install.sh` | |
+| ✅ | **Separate file layout** — `[nfc_gate shared]` lives in `nfc_reader_shared.cfg`, not `nfc_reader_hw.cfg`. Pure-shared installs include it instead of `nfc_reader_hw.cfg`; hybrid installs include both. `install.sh`: `write_shared_config` targets the new file; `merge_config nfc_reader_hw.cfg` is skipped for pure-shared installs; `detect_reader_type` and `detect_shared_mcu` read only `nfc_reader_shared.cfg`. `config/nfc_reader_shared.cfg` ships in the repo as a template with full workflow explanation in the header. `nfc_reader_hw.cfg` has a hybrid pointer comment at the bottom. See `## Config File Layout` design section. | `install.sh`, `config/nfc_reader_shared.cfg`, `config/nfc_reader_hw.cfg`, `docs/shared/configuration.md`, `docs/shared/shared-reader.md` | |
 | ✅ | Normal PN532 driver waits use injectable `sleep_fn`, and `NFCGate` supplies a reactor-cooperative sleep using `reactor.pause`. | `klippy/extras/nfc_gates/pn532_driver.py`, `klippy/extras/nfc_gates/nfc_manager.py` | |
-| ❌ | Installer generated shared config should expose every important shared timeout/effect knob clearly; current output comments `shared_tag_read_effect` and `shared_pending_timeout`, but not `shared_read_timeout`. | `install.sh` | |
-| ❌ | Shared reader behavior should have direct tests for config parsing, command handling, timeout behavior, pending spool staging, status output, and no-op preload behavior. Current tests only set `_shared = False` in scan-jog fixtures. | `tests/` | |
+| ✅ | Installer generated shared config exposes all shared knobs as commented-out defaults: `shared_tag_read_effect`, `shared_pending_timeout`, `shared_read_timeout`, `shared_missed_limit`, `force_spool_id`. | `install.sh` | |
+| ✅ | Shared reader behavior covered by 36 tests in `tests/test_shared_reader.py`: config parsing, pending expiry, `PRELOAD_CHECK` (no spool, force_spool_id, staging, expiry, printing guard, hybrid/pure-shared already-assigned), `shared_status_line` (idle/polling/pending/expired/error/failed), print-start/end auto-pause/resume (including pending-spool guard), `_shared_handle_event` (CHANGED/UID_ONLY/REMOVED/DIRECT_METADATA_SPOOL, miss counter, LED effect), `_poll_timer_event` recovery command, `_shared_clear_pending` reset, shared `CLEAR_CACHE`. | `tests/test_shared_reader.py` | |
 | ✅ | PN532 low-level debug helpers still contain direct `time.sleep()` calls; either convert them to `sleep_fn` or document them as an explicit debug-only exception. | `klippy/extras/nfc_gates/pn532_driver.py` | this is fine, will not implement a change |
 | ❌ | Lane-only wiring / architecture docs need a shared-reader exception so they do not imply shared installs are unsupported. | `docs/i2c-pn532/wiring.md`, `docs/shared/architecture-decisions.md` | |
-| ❌ | HH post-unload timing needs hardware validation to confirm shared polling starts after the gate is empty. | Happy Hare runtime, printer hardware | |
+| ❌ | Shared-reader docs still contain stale post-unload/eject-hook and HH-busy-skip language even though current implementation uses idle-timeout pause/resume and `PRELOAD_CHECK` skips only while printing. | `docs/design/shared_reader.md`, `docs/shared/klipper-functions.md` | Remove or rewrite the `manual/eject hook`, `Eject-Hook Path`, post-unload quick-reference text, and HH load/unload/homing skip requirements. |
+| ❌ | Idle-timeout pause/resume needs hardware validation to confirm shared polling stops while printing and resumes afterward without disturbing a pending staged spool. | Klipper idle_timeout events, printer hardware | |
 | ❌ | HH LED effect invocation needs hardware validation for `MMU_SET_LED EXIT_EFFECT=<shared_tag_read_effect> DURATION=3`. | Happy Hare runtime, LED config | |
 | ❌ | Auto-created Spoolman spool IDs still need hardware / HH validation to confirm `MMU_GATE_MAP NEXT_SPOOLID=<id>` works without an explicit `MMU_SPOOLMAN REFRESH=1`. | `klippy/extras/nfc_gates/nfc_manager.py`, Happy Hare runtime | |
 
@@ -57,8 +67,8 @@
   The installer path matches that by writing only `[nfc_gate shared]` hardware.
 - The biggest implementation risk is not the core path; it is validation. The
   shared path needs unit tests and one real Happy Hare integration pass for
-  `NEXT_SPOOLID`, post-unload timing, LED effect invocation, and auto-created
-  Spoolman IDs.
+  `NEXT_SPOOLID`, idle-timeout pause/resume, LED effect invocation, and
+  auto-created Spoolman IDs.
 
 ---
 
@@ -247,6 +257,58 @@ if not self._shared:
         func=self.cmd_NFC, ...)
 ```
 
+---
+
+## Config File Layout
+
+### Decision: separate file
+
+The `[nfc_gate shared]` section lives in its own file — `nfc_reader_shared.cfg` — not in `nfc_reader_hw.cfg` alongside the per-lane sections.
+
+**Rationale:**
+- `nfc_reader_hw.cfg` is lane-specific. Adding a shared section to it would force a hybrid user to edit the lane file just to enable a feature that has nothing to do with lanes.
+- A separate file means adding the shared reader to an existing lane install is a single new `[include]` line in `printer.cfg` — no existing file is modified.
+- The installer can write, detect, and overwrite the shared file independently without touching the lane config.
+
+### Include patterns
+
+**Pure shared-reader install** — replaces `nfc_reader_hw.cfg`:
+```
+[include nfc/nfc_reader.cfg]
+[include nfc/nfc_macros.cfg]
+[include nfc/nfc_reader_shared.cfg]
+```
+
+**Hybrid install** (per-lane readers + shared reader) — both files active simultaneously:
+```
+[include nfc/nfc_reader.cfg]
+[include nfc/nfc_macros.cfg]
+[include nfc/nfc_reader_hw.cfg]
+[include nfc/nfc_reader_shared.cfg]
+```
+
+In the hybrid case the two files are fully independent at the Klipper config level. `nfc_manager.py` handles coexistence at runtime via `_has_per_lane_readers` (see Hybrid Install section below).
+
+### Files touched
+
+| File | Role |
+|---|---|
+| `config/nfc_reader_shared.cfg` | Repo template — ships with placeholder hardware values and a full header explaining the separate-file rationale, both include patterns, and the tap-and-load workflow. Power users can copy and fill in manually without running the installer. |
+| `config/nfc_reader_hw.cfg` | Pointer comment at the bottom directs hybrid users to `nfc_reader_shared.cfg` and the setup guide. |
+| `install.sh` — `NFC_READER_SHARED_CFG` | Path variable `${NFC_CONFIG_DIR}/nfc_reader_shared.cfg`. |
+| `install.sh` — `write_shared_config` | Writes `nfc_reader_shared.cfg` with the user's hardware values. Opens the file for write (always regenerates). Includes both pure-shared and hybrid include-pattern comments in the header. |
+| `install.sh` — `detect_reader_type` | Checks `nfc_reader_shared.cfg` for `[nfc_gate shared]` to default the reader-type question on reinstall. |
+| `install.sh` — `detect_shared_mcu` | Reads `i2c_mcu` from `nfc_reader_shared.cfg` to pre-fill the MCU question on reinstall. |
+| `install.sh` — merge block | `merge_config nfc_reader_hw.cfg` is conditional on `READER_TYPE=lane`. Pure-shared installs skip it entirely — no lane sections are written. |
+| `docs/shared/shared-reader.md` | Configuration section documents both include patterns and directs users to the template file. |
+| `docs/shared/configuration.md` | Shared Reader section updated to reference the new file and explain the separation. |
+
+### Why not merge_config for the shared file?
+
+`merge_config` is non-destructive — it preserves existing sections. `write_shared_config` overwrites on every install run. This is intentional: the hardware values (`i2c_mcu`, `i2c_bus`, `i2c_address`) come from installer questions, and optional keys are always commented-out defaults. There is nothing for the user to have edited that a fresh write would destroy. If a user has manually uncommented optional keys, they lose those on reinstall — a known trade-off documented in the header.
+
+---
+
 ### Why Not Reuse Happy Hare's Pending Timeout
 
 HH has an internal `pending_spool_id_timeout` that governs how long HH keeps a
@@ -351,23 +413,16 @@ The hook path uses the macros shipped in `nfc_macros.cfg`:
 
 ```ini
 ; stage NEXT_SPOOLID before a pregate-triggered automatic preload
-variable_user_pre_load_extension:    '_NFC_SHARED_PRELOAD'
-
-; start shared polling after a gate is ejected/unloaded
-; not needed when startup_polling: 1
-variable_user_post_unload_extension: '_NFC_SHARED_POST_UNLOAD'
+variable_user_pre_load_extension: '_NFC_SHARED_PRELOAD'
 ```
-
-`variable_user_post_unload_extension` fires after both `MMU_UNLOAD` and
-`MMU_EJECT`. Happy Hare's `mmu_macro_vars.cfg` groups these under the "unload"
-operation (comment at the `variable_user_post_unload_extension` line: "unload —
-individual MMU_UNLOAD/MMU_EJECT operation"). This hook is confirmed correct for
-starting shared polling.
 
 `variable_user_pre_load_extension` fires before a pregate-triggered automatic
 preload starts. This is the preload hook that calls `NFC_SHARED PRELOAD_CHECK`
-to stage `NEXT_SPOOLID` if a valid pending spool exists. This resolves Open
-Question #2.
+to stage `NEXT_SPOOLID` if a valid pending spool exists.
+
+Shared polling pauses and resumes automatically via Klipper's `idle_timeout`
+events — `variable_user_post_unload_extension` is not needed and has been
+removed.
 
 This macro is the bridge from the Happy Hare macro layer into NFC Python. Happy
 Hare does not call an NFC Python method directly. It runs a user GCode macro,
@@ -596,24 +651,16 @@ or the NFC command itself.
 description: Called by Happy Hare pre-load hook to stage NEXT_SPOOLID if a shared spool is pending
 gcode:
     NFC_SHARED PRELOAD_CHECK=1
-
-[gcode_macro _NFC_SHARED_POST_UNLOAD]
-description: Called by Happy Hare post-unload hook to start shared reader polling
-gcode:
-    NFC_SHARED READ=1
 ```
 
 HH variable wiring in `_MMU_SEQUENCE_VARS`:
 
 ```ini
-variable_user_pre_load_extension:    '_NFC_SHARED_PRELOAD'
-variable_user_post_unload_extension: '_NFC_SHARED_POST_UNLOAD'
+variable_user_pre_load_extension: '_NFC_SHARED_PRELOAD'
 ```
 
-`variable_user_post_unload_extension` is optional when `startup_polling: 1` is
-set — the reader is already polling at boot. It is useful when
-`startup_polling: 0` is preferred and polling should activate only after an
-unload or eject.
+Polling pauses automatically on `idle_timeout:printing` and resumes on
+`idle_timeout:ready` — no post-unload hook is needed.
 
 **Why macros instead of calling `NFC_SHARED PRELOAD_CHECK=1` directly in the
 variable:** HH's extension variables accept any GCode string. Setting the
@@ -662,7 +709,6 @@ using `NEXT_SPOOLID`.
 | NFC shared reader | Detect tag, resolve spool, maintain pending timeout, stage `NEXT_SPOOLID` when preload hook fires and a pending spool exists. |
 | Happy Hare | Detect that pregate preload is starting and apply `NEXT_SPOOLID` to the loaded gate. |
 | `_NFC_SHARED_PRELOAD` macro | Bridge from HH extension variable to `NFC_SHARED PRELOAD_CHECK=1`. Override point for user customisation. |
-| `_NFC_SHARED_POST_UNLOAD` macro | Bridge from HH post-unload hook to `NFC_SHARED READ=1`. Override point for user customisation. |
 
 ---
 
@@ -721,6 +767,56 @@ is likely preparing the next spool. Manual activation remains available with
 Polling can be stopped with `NFC_SHARED READ=0`. If no valid tag is found
 after `shared_read_timeout` seconds, shared mode stops polling automatically.
 The default timeout is 120 seconds.
+
+---
+
+## Normal Load Flow
+
+The following sequence covers one complete spool load using the shared reader.
+This is the reference flow for user documentation.
+
+1. **Shared reader is polling.** `startup_polling: 1` starts polling at boot.
+   Polling pauses automatically when printing starts (`idle_timeout:printing`)
+   and resumes when printing completes (`idle_timeout:ready`). The reader
+   continuously scans for a tag at all other times.
+
+2. **User taps spool tag on the shared reader.** The PN532 reads the UID on the
+   next poll tick. NFC immediately looks up the spool ID in Spoolman. On
+   success the pending spool is stored (`_shared_pending_spool`), the
+   `shared_pending_timeout` countdown begins, and polling stops. An LED effect
+   fires if `shared_tag_read_effect` is configured.
+
+3. **User drops the spool into an MMU lane** (physical action — NFC takes no
+   action here).
+
+4. **User pushes the filament tip into the pregate/buffer sensor.** HH detects
+   filament at the pregate sensor and begins a pregate load operation. HH's
+   action transitions to `loading`.
+
+5. **HH fires `user_pre_load_extension` → `_NFC_SHARED_PRELOAD` macro →
+   `NFC_SHARED PRELOAD_CHECK=1`.** This happens automatically while HH is
+   setting up the load; no user action required.
+
+6. **`PRELOAD_CHECK` runs.** It checks only that the printer is not actively
+   printing. It checks the pending spool timeout, then issues
+   `MMU_GATE_MAP NEXT_SPOOLID=<spool_id>` to stage the spool for the gate
+   that HH is about to load. The pending state is cleared.
+
+7. **HH completes the pregate load and assigns the staged spool ID** to
+   whichever gate was just loaded. The spool is now registered in HH's gate
+   map.
+
+8. **Polling restarts automatically** (no read deadline). The shared reader is
+   immediately ready for the next spool tap without any user action.
+
+> **If no spool is staged when `PRELOAD_CHECK` fires:** a console message
+> advises the user to tap a tag first or use `MMU_PRELOAD` to load without
+> spool assignment. With `force_spool_id: true` the load is blocked entirely
+> until a spool is staged.
+
+> **If the tag UID cannot be resolved** after `shared_missed_limit` consecutive
+> attempts (default 3), a console message advises using `MMU_PRELOAD` for
+> manual loading.
 
 ---
 
@@ -1128,10 +1224,9 @@ Next steps (first install only):
      this is the MMU main board (e.g. the `mmu` MCU). Flash it the
      same way you flash any other Klipper MCU.
 
-  5. Wire Happy Hare hooks in mmu_macro_vars.cfg:
-       variable_user_pre_load_extension:    '_NFC_SHARED_PRELOAD'
-       variable_user_post_unload_extension: '_NFC_SHARED_POST_UNLOAD'
-     (post_unload hook is optional when startup_polling: 1)
+  5. Wire the Happy Hare pre-load hook in mmu_macro_vars.cfg:
+       variable_user_pre_load_extension: '_NFC_SHARED_PRELOAD'
+     Polling pauses/resumes automatically on print start/end.
 
   6. Moonraker update_manager — added automatically by this script.
 ```
@@ -1202,10 +1297,7 @@ New code should be mostly:
 
 ## Open Questions
 
-1. ~~Confirm on hardware that `variable_user_post_unload_extension` fires after
-   `MMU_EJECT`.~~ **Resolved.** HH `mmu_macro_vars.cfg` explicitly groups
-   `MMU_UNLOAD`/`MMU_EJECT` under the same "unload" operation; this hook covers
-   both. Confirm timing on hardware (gate empty before first poll tick) during
+1. Confirm timing on hardware (gate empty before first poll tick) during
    integration testing.
 2. ~~What exact Happy Hare hook fires before pregate-triggered automatic
    preload?~~ **Resolved.** `variable_user_pre_load_extension` fires before a

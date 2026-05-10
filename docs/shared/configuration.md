@@ -321,9 +321,13 @@ The shared reader is an optional single PN532 mounted inside the MMU body — no
 
 **No per-lane readers are required.** A shared-only installation needs only the base `[nfc_gate]` section (for Spoolman config) and the `[nfc_gate shared]` section. No `[nfc_gate lane0]` or similar sections are needed.
 
+The shared reader lives in its own file — `nfc_reader_shared.cfg` — so it can be added to any install without editing the lane hardware config. For a **pure shared install**, include it instead of `nfc_reader_hw.cfg`. For a **hybrid install** (per-lane readers plus a shared reader), include both.
+
+Run `install.sh` to generate `nfc_reader_shared.cfg` with your hardware values, or copy the template from `config/nfc_reader_shared.cfg` in the repo and edit `i2c_mcu`, `i2c_bus`, and `i2c_address` manually.
+
 ### Config
 
-Add a `[nfc_gate shared]` section to `nfc_reader_hw.cfg`:
+The `[nfc_gate shared]` section lives in `nfc_reader_shared.cfg`:
 
 ```ini
 [nfc_gate shared]
@@ -347,6 +351,8 @@ poll_interval:          3.0
 shared_pending_timeout: 120.0
 shared_read_timeout:    120.0
 shared_tag_read_effect: mmu_RFID_read
+shared_missed_limit:    3
+force_spool_id:         false
 ```
 
 | Setting | Default | Description |
@@ -357,26 +363,28 @@ shared_tag_read_effect: mmu_RFID_read
 | `shared_pending_timeout` | `120.0` | Seconds a scanned spool remains eligible for the next preload. |
 | `shared_read_timeout` | `120.0` | Seconds polling may run without resolving a valid tag before auto-stopping. No effect when started via `startup_polling` or PRELOAD_CHECK auto-restart. |
 | `shared_tag_read_effect` | `''` | Name of a `[mmu_led_effect]` to play on successful tag read. Leave empty to skip LED feedback. |
+| `shared_missed_limit` | `3` | Consecutive unresolvable UID reads before a console message advises the user to use `MMU_PRELOAD`. Minimum 1. |
+| `force_spool_id` | `false` | When `true`, `PRELOAD_CHECK` raises a gcode error if no spool is staged, blocking Happy Hare from completing the pregate load until a tag has been scanned. |
 
-`mmu_gate` and `scan_enabled` are not written — both are implied by `shared: true` and set internally. Only one shared reader may be configured. The reader inherits `spoolman_url`, `spoolman_rfid_key`, `tag_parsing`, `spoolman_auto_create`, and all logging settings from the base `[nfc_gate]` section.
+`mmu_gate` and `scan_enabled` are not user-configurable — both are set internally by `shared: true`. Only one shared reader may be configured. The reader inherits `spoolman_url`, `spoolman_rfid_key`, `tag_parsing`, `spoolman_auto_create`, and all logging settings from the base `[nfc_gate]` section.
+
+**Rich tags** work with the shared reader when `spoolman_auto_create: true` is set in `[nfc_gate]` — the spool is created in Spoolman automatically and the resulting ID is staged. Rich tags without `spoolman_auto_create`, and `spoolman_url: rich` mode, are not compatible — `MMU_GATE_MAP NEXT_SPOOLID` requires an integer spool ID. See [Shared Reader — Rich tag compatibility](shared-reader.md#rich-tag-compatibility).
 
 ### Happy Hare hook wiring
 
-Add two user extension hooks to `mmu_macro_vars.cfg`:
+Add one user extension hook to `mmu_macro_vars.cfg`:
 
 ```ini
 [gcode_macro _MMU_SEQUENCE_VARS]
 ; stage NEXT_SPOOLID before a pregate-triggered automatic preload
-variable_user_pre_load_extension:    '_NFC_SHARED_PRELOAD'
-
-; start shared polling after a gate is unloaded or ejected
-; not needed when startup_polling: 1 — the reader is already polling
-variable_user_post_unload_extension: '_NFC_SHARED_POST_UNLOAD'
+variable_user_pre_load_extension: '_NFC_SHARED_PRELOAD'
 ```
 
-`variable_user_post_unload_extension` fires after both `MMU_UNLOAD` and `MMU_EJECT`. `variable_user_pre_load_extension` fires at the start of every load, including pregate preloads — `PRELOAD_CHECK` is a no-op if printing or if no pending spool exists, so it is safe to leave wired for all loads.
+`variable_user_pre_load_extension` fires at the start of every pregate load. `PRELOAD_CHECK` skips only while printing — it is safe to leave wired for all loads. If no spool is staged a console message advises the user; with `force_spool_id: true` the load is blocked instead.
 
-Both hooks point to macros shipped in `nfc_macros.cfg`. Override the macro in your own cfg to add pre/post logic without changing the HH variable.
+Shared polling pauses automatically when printing starts and resumes when printing completes via Klipper's `idle_timeout` events — no post-unload hook is needed.
+
+The pre-load hook points to a macro shipped in `nfc_macros.cfg`. Override it in your own cfg to add logic around the NFC check without changing the HH variable.
 
 ### LED effect
 
