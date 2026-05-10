@@ -176,6 +176,8 @@ def start(gate, max_mm=None, sync_hh=True):
     gate._scan_mode = True
     gate._scan_mm_total = 0.0
     gate._scan_next_chunk_time = gate.reactor.monotonic()
+    gate._scan_decode_retry_attempts = 0
+    gate._scan_decode_retry_uid = None
     gate._hh_seed_spool_id = None
     gate._hh_seed_available = False
     gate._scan_found_event = None
@@ -235,6 +237,8 @@ def step_event(gate, eventtime):
         tag_found = False
 
     if tag_found:
+        if retry_incomplete_decode(gate, now):
+            return gate.reactor.monotonic() + gate._scan_poll_interval
         gate._finish_scan()
         return gate.reactor.NEVER
 
@@ -268,6 +272,80 @@ def step_event(gate, eventtime):
             gate._gate, chunk, gate._scan_mm_total, gate._scan_max_mm)
 
     return now + gate._scan_poll_interval
+
+
+def current_tag_decode_incomplete(gate):
+    tag = gate._state.current_tag
+    if tag is None:
+        return False
+    if gate._state.current_spool is not None:
+        return False
+    return bool(getattr(tag, 'read_incomplete', False))
+
+
+def reset_uid_only_read(gate, uid):
+    if gate._state.current_uid == uid and gate._state.current_spool is None:
+        gate._state.current_uid = None
+        gate._state.current_spool = None
+        gate._state.miss_count = 0
+    if gate._scan_found_event is not None:
+        event = gate._scan_found_event
+        if len(event) >= 3 and event[2] == uid:
+            gate._scan_found_event = None
+
+
+def retry_incomplete_decode(gate, now):
+    if not current_tag_decode_incomplete(gate):
+        return False
+
+    tag = gate._state.current_tag
+    uid = tag.uid
+    max_retries = max(0, int(getattr(gate, '_scan_decode_retries', 3)))
+    retry_mm = max(0.0, float(getattr(gate, '_scan_decode_retry_mm', 5.0)))
+    if max_retries <= 0 or retry_mm <= 0.0:
+        return False
+
+    if gate._scan_decode_retry_uid != uid:
+        gate._scan_decode_retry_uid = uid
+        gate._scan_decode_retry_attempts = 0
+
+    if gate._scan_decode_retry_attempts >= max_retries:
+        msg = ("NFC[%d]: tag decode still incomplete after %d retries; "
+               "using current result" % (gate._gate, max_retries))
+        logger.warning(msg)
+        gate._console("⚠️ " + msg)
+        return False
+
+    remaining = gate._scan_max_mm - gate._scan_mm_total
+    if remaining <= 0.0:
+        return False
+
+    reason = getattr(tag, 'read_retry_reason', None)
+    if not reason:
+        auth_failed = getattr(tag, 'mifare_auth_failed_sectors', None) or []
+        if getattr(tag, 'parse_error', None):
+            reason = tag.parse_error
+        elif auth_failed:
+            reason = "auth failed sectors %s" % auth_failed
+        else:
+            reason = "incomplete rich tag read"
+
+    step = min(retry_mm, remaining)
+    gate._scan_decode_retry_attempts += 1
+    attempt = gate._scan_decode_retry_attempts
+    msg = ("NFC[%d]: tag decode incomplete; retry %d/%d after %.1fmm jog"
+           % (gate._gate, attempt, max_retries, step))
+    logger.warning("%s (uid=%s reason=%s)", msg, uid, reason)
+    gate._console("⚠️ " + msg)
+    reset_uid_only_read(gate, uid)
+    gate._run_jog(step)
+    gate._scan_mm_total += step
+    gate._scan_next_chunk_time = (
+        now + chunk_interval(gate, step) + chunk_dwell(gate))
+    logger.info(
+        "NFC[%d]: decode retry move queued %.1fmm  scan position %.1f / %.1fmm",
+        gate._gate, step, gate._scan_mm_total, gate._scan_max_mm)
+    return True
 
 
 def finish(gate):
@@ -315,6 +393,8 @@ def finish(gate):
             gate._console(msg)
     gate._scan_previous_uid = None
     gate._scan_previous_spool = None
+    gate._scan_decode_retry_attempts = 0
+    gate._scan_decode_retry_uid = None
     gate._resume_poll_after_rewind()
 
 
@@ -340,6 +420,8 @@ def rewind_and_exit(gate):
             "nfc_gate: [%s] gate %d scan mode — no tag found, "
             "NFC state and HH gate cache cleared after rewind",
             gate._name, gate._gate)
+    gate._scan_decode_retry_attempts = 0
+    gate._scan_decode_retry_uid = None
     gate._resume_poll_after_rewind()
 
 

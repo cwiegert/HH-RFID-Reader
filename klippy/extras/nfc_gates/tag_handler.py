@@ -361,19 +361,41 @@ def resolve_auth_keys(gate, tag):
 def capture_mifare_metadata(gate, tag, sector_keys):
     uid_hex   = tag.uid
     uid_bytes = bytes((tag.target_info or {}).get('uid_bytes') or [])
+    tag.mifare_auth_failed_sectors = []
+    tag.mifare_read_failed_blocks = []
     try:
         block_dict = gate._reader.mifare_read_authenticated_blocks(
             sector_keys, sectors=[0, 1, 2, 3, 4], uid_bytes=uid_bytes)
     except Exception as e:
         tag.parse_error = 'mifare read failed: %s' % e
         tag.meta = {'uid': uid_hex}
+        tag.read_incomplete = True
+        tag.read_retry_reason = tag.parse_error
         logger.warning(
             "nfc_gate: [%s] gate %d — uid=%s  MIFARE read failed: %s",
             gate._name, gate._gate, uid_hex, e)
         return
+    if isinstance(block_dict, dict):
+        tag.mifare_auth_failed_sectors = list(
+            block_dict.get('auth_failed_sectors') or [])
+        tag.mifare_read_failed_blocks = list(
+            block_dict.get('read_failed_blocks') or [])
+        if tag.mifare_auth_failed_sectors:
+            tag.read_incomplete = True
+            tag.read_retry_reason = (
+                "auth failed sectors %s" %
+                tag.mifare_auth_failed_sectors)
+        elif tag.mifare_read_failed_blocks:
+            tag.read_incomplete = True
+            tag.read_retry_reason = (
+                "read failed blocks %s" %
+                tag.mifare_read_failed_blocks)
     if not block_dict or not block_dict.get('blocks'):
         tag.parse_error = 'mifare read returned no blocks'
         tag.meta = {'uid': uid_hex}
+        tag.read_incomplete = True
+        if not tag.read_retry_reason:
+            tag.read_retry_reason = tag.parse_error
         logger.warning(
             "nfc_gate: [%s] gate %d — uid=%s  MIFARE read returned no "
             "blocks (auth failed on all sectors?)",
