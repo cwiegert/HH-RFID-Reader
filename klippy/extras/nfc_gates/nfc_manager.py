@@ -281,6 +281,9 @@ class NFCGate:
 
         # Read shared first — it controls how subsequent params are parsed.
         self._shared = config.getboolean('shared', False)
+        _i2c_mcu_name = config.get('i2c_mcu', 'mcu')
+        _m = re.search(r'(\d+)$', _i2c_mcu_name)
+        self._shared_mcu_index = int(_m.group(1)) if _m else None
         if self._shared:
             for existing in _lane_instances:
                 if getattr(existing, '_shared', False):
@@ -438,6 +441,8 @@ class NFCGate:
                 'shared_read_timeout', 120.0, minval=1.0)
             self._shared_tag_read_effect = config.get(
                 'shared_tag_read_effect', '')
+            self._shared_auto_create_effect = config.get(
+                'shared_auto_create_effect', '')
             self._shared_force_spool_id  = config.getboolean(
                 'force_spool_id', False)
             self._shared_missed_limit    = config.getint(
@@ -446,8 +451,9 @@ class NFCGate:
         else:
             self._shared_pending_timeout = 120.0
             self._shared_read_timeout    = 120.0
-            self._shared_tag_read_effect = ''
-            self._shared_force_spool_id  = False
+            self._shared_tag_read_effect    = ''
+            self._shared_auto_create_effect = ''
+            self._shared_force_spool_id     = False
             self._shared_missed_limit    = _SHARED_MISSED_RESOLUTION_LIMIT
 
         self._shared_pending_uid          = None
@@ -533,40 +539,68 @@ class NFCGate:
             gcmd.respond_info("NFC[%s]: init failed: %s" %
                               (self._name, e))
 
-    def _shared_play_tag_read_effect(self, gcmd=None):
-        if not self._shared_tag_read_effect:
+    def _shared_gate_effect_name(self, base):
+        """Return per-gate HH variant of an [mmu_led_effect] name.
+
+        With define_on: gates, HH registers mmu_RFID_read_gates_1,
+        mmu_RFID_read_gates_2, ... (1-based).  The index is derived from the
+        trailing digit of i2c_mcu (mmu0 → index 1, mmu3 → index 4).
+        Falls back to the base name (all gates) when the MCU name has no digit.
+        """
+        if self._shared_mcu_index is None:
+            return base
+        return "%s_gates_%d" % (base, self._shared_mcu_index + 1)
+
+    def _shared_play_led_effect(self, effect_name, gcmd=None):
+        if not effect_name:
             if gcmd is not None:
                 gcmd.respond_info(
-                    "NFC[%s]: no shared_tag_read_effect configured"
-                    % self._name)
+                    "NFC[%s]: no LED effect configured" % self._name)
             return False
+        gate_effect = self._shared_gate_effect_name(effect_name)
         try:
-            self._gcode.run_script(
-                "MMU_SET_LED EXIT_EFFECT=%s DURATION=3"
-                % self._shared_tag_read_effect)
+            self._gcode.run_script("_MMU_SET_LED_EFFECT EFFECT=%s" % gate_effect)
             if gcmd is not None:
                 gcmd.respond_info(
-                    "NFC[%s]: LED effect %s requested"
-                    % (self._name, self._shared_tag_read_effect))
+                    "NFC[%s]: LED effect %s started"
+                    % (self._name, gate_effect))
             return True
         except Exception as e:
             logger.warning(
-                "nfc_gate: [%s] shared LED effect failed (no HH LEDs?): %s",
-                self._name, e)
+                "nfc_gate: [%s] LED effect %s failed (mmu_led_effect not "
+                "defined or HH LED plugin missing): %s",
+                self._name, gate_effect, e)
             try:
                 self._gcode.run_script(
                     "RESPOND MSG=\"NFC[%s]: LED effect '%s' failed; "
                     "tag read still staged\""
-                    % (self._name, self._shared_tag_read_effect))
+                    % (self._name, gate_effect))
             except Exception as respond_error:
                 logger.debug(
                     "nfc_gate: [%s] RESPOND failed after LED warning: %s",
                     self._name, respond_error)
             if gcmd is not None:
                 gcmd.respond_info(
-                    "NFC[%s]: LED effect %s failed"
-                    % (self._name, self._shared_tag_read_effect))
+                    "NFC[%s]: LED effect %s failed" % (self._name, gate_effect))
             return False
+
+    def _shared_play_tag_read_effect(self, gcmd=None):
+        return self._shared_play_led_effect(self._shared_tag_read_effect, gcmd)
+
+    def _shared_play_auto_create_effect(self):
+        self._shared_play_led_effect(self._shared_auto_create_effect)
+
+    def _shared_stop_auto_create_effect(self):
+        if not self._shared_auto_create_effect:
+            return
+        gate_effect = self._shared_gate_effect_name(self._shared_auto_create_effect)
+        try:
+            self._gcode.run_script(
+                "_MMU_STOP_LED_EFFECTS EFFECTS=%s" % gate_effect)
+        except Exception as e:
+            logger.debug(
+                "nfc_gate: [%s] _MMU_STOP_LED_EFFECTS %s failed: %s",
+                self._name, gate_effect, e)
 
     def _set_reading(self, gcmd, enabled):
         if enabled:
@@ -1676,7 +1710,9 @@ class NFCGate:
                 "auto_created=%s pending for %.0fs",
                 self._name, spool, uid, auto_created,
                 self._shared_pending_timeout)
-            if self._shared_tag_read_effect:
+            if auto_created and self._shared_auto_create_effect:
+                self._shared_play_auto_create_effect()
+            elif self._shared_tag_read_effect:
                 self._shared_play_tag_read_effect()
             self._shared_last_action = (
                 "tag staged spool %d uid=%s auto_created=%s"
@@ -1861,6 +1897,9 @@ class NFCGate:
             self._shared_last_action = (
                 "MMU_GATE_MAP failed for spool %d" % spool_id)
             return
+        if auto_created:
+            self._shared_stop_auto_create_effect()
+            self._shared_play_tag_read_effect()
         self._shared_clear_pending()
         self._shared_last_action = (
             "staged spool %d via NEXT_SPOOLID" % spool_id)
@@ -1950,8 +1989,10 @@ class NFCGate:
                       self._shared_missed_limit))
         lines.append("    force_spool_id: %s" %
                      ("on" if self._shared_force_spool_id else "off"))
-        lines.append("    tag_read_effect: %s" %
+        lines.append("    tag_read_effect:    %s" %
                      (self._shared_tag_read_effect or "none"))
+        lines.append("    auto_create_effect: %s" %
+                     (self._shared_auto_create_effect or "none"))
         lines.append("    last_action: %s" %
                      (self._shared_last_action or "none"))
         lines.append("    next: %s" % self._shared_next_action())

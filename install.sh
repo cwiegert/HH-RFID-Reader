@@ -24,6 +24,15 @@
 
 set -e
 
+# ── CLI arguments ─────────────────────────────────────────────────────────────
+_CLI_PROFILE=""
+while getopts "p:" _opt; do
+    case "$_opt" in
+        p) _CLI_PROFILE="$OPTARG" ;;
+    esac
+done
+shift $(( OPTIND - 1 ))
+
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 KLIPPER_EXTRAS="${HOME}/klipper/klippy/extras"
 PRINTER_CONFIG="${HOME}/printer_data/config"
@@ -31,23 +40,71 @@ NFC_CONFIG_DIR="${PRINTER_CONFIG}/nfc"
 NFC_READER_CFG="${NFC_CONFIG_DIR}/nfc_reader.cfg"
 NFC_READER_HW_CFG="${NFC_CONFIG_DIR}/nfc_reader_hw.cfg"
 NFC_READER_SHARED_CFG="${NFC_CONFIG_DIR}/nfc_reader_shared.cfg"
+MMU_HW_CFG="${PRINTER_CONFIG}/mmu/base/mmu_hardware.cfg"
 
 if [ -t 1 ]; then
     BOLD="$(printf '\033[1m')"
+    RESET="$(printf '\033[0m')"
     GREEN="$(printf '\033[32m')"
     CYAN="$(printf '\033[1;96m')"
-    RESET="$(printf '\033[0m')"
+    BRIGHT_GREEN="$(printf '\033[1;32m')"
+    YELLOW="$(printf '\033[1;33m')"
+    MAGENTA="$(printf '\033[1;35m')"
+    WHITE="$(printf '\033[1;37m')"
+    ORANGE="$(printf '\033[38;5;214m')"
+    DEFAULT="${CYAN}"   # interim default until profile is resolved
 else
-    BOLD=""
-    GREEN=""
-    CYAN=""
-    RESET=""
+    BOLD="" RESET="" GREEN="" CYAN="" BRIGHT_GREEN="" YELLOW="" MAGENTA="" WHITE="" ORANGE="" DEFAULT=""
 fi
+
+# ── Terminal profile → highlight color map ──────────────────────────────────
+# Called once after _CLI_PROFILE is known (from -p or the interactive prompt).
+# Sets DEFAULT to the best-contrast color for the named profile.
+apply_profile_color() {
+    local _color
+    case "$1" in
+        # ── macOS Terminal.app ─────────────────────────────────────────
+        "Homebrew")         _color="$(printf '\033[1;96m')"  ;;  # bright cyan   — green text bg, cyan contrasts
+        "Ocean")            _color="$(printf '\033[1;32m')"  ;;  # bright green  — pops on dark blue background
+        "Grass")            _color="$(printf '\033[1;33m')"  ;;  # bright yellow — readable on green bg
+        "Novel")            _color="$(printf '\033[0;34m')"  ;;  # dark blue     — light tan background
+        "Pro")              _color="$(printf '\033[1;36m')"  ;;  # bright cyan   — dark background
+        "Basic")            _color="$(printf '\033[0;34m')"  ;;  # dark blue     — white background
+        "Manuscript")       _color="$(printf '\033[0;34m')"  ;;  # dark blue     — cream background
+        "Red Sands")        _color="$(printf '\033[1;33m')"  ;;  # bright yellow — dark red background
+        "Silver Aerogel")   _color="$(printf '\033[0;36m')"  ;;  # dark cyan     — grey background
+        "Solid Colors")     _color="$(printf '\033[1;37m')"  ;;  # bright white  — unknown bg
+
+        # ── iTerm2 built-in ────────────────────────────────────────────
+        "Default")          _color="$(printf '\033[1;96m')"  ;;  # bright cyan
+        "Dark Background")  _color="$(printf '\033[1;96m')"  ;;  # bright cyan
+        "Light Background") _color="$(printf '\033[0;34m')"  ;;  # dark blue
+        "Pastel"*)          _color="$(printf '\033[1;96m')"  ;;  # bright cyan   — dark pastel bg
+        "Solarized Dark")   _color="$(printf '\033[1;33m')"  ;;  # bright yellow — solarized accent
+        "Solarized Light")  _color="$(printf '\033[0;34m')"  ;;  # dark blue
+        "Tango Dark")       _color="$(printf '\033[1;96m')"  ;;  # bright cyan
+        "Tango Light")      _color="$(printf '\033[0;34m')"  ;;  # dark blue
+        "Smoooooth")        _color="$(printf '\033[1;96m')"  ;;  # bright cyan
+
+        # ── Popular community themes (iTerm2) ─────────────────────────
+        "Dracula")          _color="$(printf '\033[1;35m')"  ;;  # bright magenta — matches Dracula purple
+        "Monokai"*)         _color="$(printf '\033[1;33m')"  ;;  # bright yellow  — matches Monokai
+        "Gruvbox Dark")     _color="$(printf '\033[1;33m')"  ;;  # bright yellow/orange
+        "Gruvbox Light")    _color="$(printf '\033[0;31m')"  ;;  # dark red
+        "Nord")             _color="$(printf '\033[1;96m')"  ;;  # bright cyan    — Nord frost palette, contrasts on dark blue-grey
+        "One Dark")         _color="$(printf '\033[1;96m')"  ;;  # bright cyan    — Atom One Dark
+        "Cobalt2")          _color="$(printf '\033[1;33m')"  ;;  # bright yellow
+        "Catppuccin"*)      _color="$(printf '\033[1;35m')"  ;;  # bright magenta — matches Catppuccin mauve
+
+        *)                  _color="$(printf '\033[1;96m')"  ;;  # bright cyan fallback
+    esac
+    DEFAULT="${_color}"
+}
 
 choice_style() {
     case "$1" in
         auto|spoolman|lane)
-            printf '%s%s%s%s' "${CYAN}" "${BOLD}" "$1" "${RESET}"
+            printf '%s%s%s%s' "${DEFAULT}" "${BOLD}" "$1" "${RESET}"
             ;;
         direct|rich|shared)
             printf '%s' "$1"
@@ -59,6 +116,7 @@ choice_style() {
 }
 
 print_banner() {
+    printf '%s' "${DEFAULT}${BOLD}"
     cat <<'EOF'
 ███╗   ██╗███████╗ ██████╗
 ████╗  ██║██╔════╝██╔════╝
@@ -74,7 +132,7 @@ print_banner() {
 ██║  ██║███████╗██║  ██║██████╔╝███████╗██║  ██║
 ╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝╚═════╝ ╚══════╝╚═╝  ╚═╝
 EOF
-    echo ""
+    printf '%s\n' "${RESET}"
 }
 
 prompt_with_default() {
@@ -82,7 +140,7 @@ prompt_with_default() {
     local prompt_text="$2"
     local default_value="$3"
     local reply
-    read -r -p "${prompt_text} [${BOLD}${default_value}${RESET}]: " reply
+    read -r -p "${prompt_text} [${DEFAULT}${BOLD}${default_value}${RESET}]: " reply
     if [ -z "${reply}" ]; then
         reply="${default_value}"
     fi
@@ -97,9 +155,9 @@ prompt_yes_no() {
     local reply
 
     if [ "${default_value}" = "yes" ]; then
-        default_hint="${CYAN}${BOLD}Y${RESET}/n"
+        default_hint="${DEFAULT}${BOLD}Y${RESET}/n"
     else
-        default_hint="y/${CYAN}${BOLD}N${RESET}"
+        default_hint="y/${DEFAULT}${BOLD}N${RESET}"
     fi
 
     while true; do
@@ -483,6 +541,102 @@ print('i2c1')
 PYEOF
 }
 
+# ── I2C bus discovery helpers ────────────────────────────────────────────────
+#
+# list_i2c_buses <mcu> <config_dir>
+#   Scans all .cfg files under <config_dir> for sections that set both
+#   i2c_mcu = <mcu> and i2c_bus = <value>.  Prints unique bus names, sorted.
+#
+list_i2c_buses() {
+    local mcu="$1"
+    local config_dir="$2"
+    [ -d "$config_dir" ] || return
+    python3 - "$mcu" "$config_dir" <<'PYEOF'
+import sys, re, os
+
+mcu, config_dir = sys.argv[1], sys.argv[2]
+buses = set()
+
+for root, dirs, files in os.walk(config_dir):
+    for fname in sorted(files):
+        if not fname.endswith('.cfg'):
+            continue
+        try:
+            text = open(os.path.join(root, fname)).read()
+        except Exception:
+            continue
+        current_mcu = None
+        current_bus = None
+        for line in text.splitlines():
+            s = line.strip()
+            if s.startswith('['):
+                if current_mcu == mcu and current_bus:
+                    buses.add(current_bus)
+                current_mcu = None
+                current_bus = None
+                continue
+            m = re.match(r'i2c_mcu\s*[=:]\s*(\S+)', s)
+            if m:
+                current_mcu = m.group(1).rstrip(';').strip()
+                continue
+            m = re.match(r'i2c_bus\s*[=:]\s*(\S+)', s)
+            if m:
+                current_bus = m.group(1).rstrip(';').strip()
+        if current_mcu == mcu and current_bus:
+            buses.add(current_bus)
+
+for bus in sorted(buses):
+    print(bus)
+PYEOF
+}
+
+# prompt_i2c_bus_select <varname> <mcu> <config_dir> <default>
+#   Shows I2C buses found in config files for <mcu> as a numbered list.
+#   Option 0 lets the user type a custom value.  Falls back to plain
+#   prompt_with_default when no buses are found.
+#
+prompt_i2c_bus_select() {
+    local varname="$1"
+    local mcu="$2"
+    local config_dir="$3"
+    local default_val="$4"
+
+    local buses=()
+    while IFS= read -r bus; do
+        [ -n "$bus" ] && buses+=("$bus")
+    done < <(list_i2c_buses "$mcu" "$config_dir")
+
+    if [ ${#buses[@]} -eq 0 ]; then
+        prompt_with_default "$varname" \
+            "5. I2C bus on MCU '${mcu}' for the shared PN532 (e.g. i2c3_PB3_PB4)" \
+            "$default_val"
+        return
+    fi
+
+    echo "5. I2C bus on MCU '${mcu}' for the shared PN532"
+    echo "   Buses already used on '${mcu}' in your config files:"
+    local i
+    for i in "${!buses[@]}"; do
+        local marker=""
+        [ "${buses[$i]}" = "$default_val" ] && marker="  ← current"
+        printf "    %d) %s%s\n" "$((i+1))" "${buses[$i]}" "$marker"
+    done
+    echo "    0) Enter a different bus name"
+    echo ""
+
+    local choice=""
+    read -r -p "   Select I2C bus [0-${#buses[@]}]: " choice
+
+    if [[ "$choice" =~ ^[1-9][0-9]*$ ]] && [ "$choice" -le "${#buses[@]}" ]; then
+        eval "${varname}='${buses[$((choice-1))]}'"
+    else
+        local custom=""
+        read -r -p "   Enter I2C bus name [${default_val}]: " custom
+        eval "${varname}='${custom:-${default_val}}'"
+    fi
+}
+
+
 write_shared_config() {
     local file_path="$1"
     local i2c_mcu="$2"
@@ -526,8 +680,13 @@ with open(path, 'w') as f:
     f.write(f"shared:                 true\n")
     f.write(f"startup_polling:        {startup_polling}\n")
     f.write("\n")
-    f.write("# Optional: name of a [mmu_led_effect] to flash on successful tag read.\n")
-    f.write("# shared_tag_read_effect: mmu_RFID_read\n")
+    f.write("# [mmu_led_effect] to flash on successful tag read (defined in nfc_macros.cfg).\n")
+    f.write("# NFC derives the per-gate variant from i2c_mcu at runtime\n")
+    f.write("# (e.g. mmu0 → mmu_RFID_read_gates_1 via _MMU_SET_LED_EFFECT).\n")
+    f.write("shared_tag_read_effect: mmu_RFID_read\n")
+    f.write("\n")
+    f.write("# [mmu_led_effect] to blink while an auto-created spool is pending.\n")
+    f.write("shared_auto_create_effect: mmu_RFID_creating\n")
     f.write("\n")
     f.write("# Seconds a scanned spool stays pending (eligible for the next preload).\n")
     f.write("# shared_pending_timeout: 120.0\n")
@@ -556,6 +715,65 @@ if [ ! -d "${PRINTER_CONFIG}" ]; then
     echo "ERROR: Printer config directory not found at ${PRINTER_CONFIG}"
     echo "       Expected: ~/printer_data/config/"
     exit 1
+fi
+
+# ── Profile color setup ───────────────────────────────────────────────────────
+if [ -n "${_CLI_PROFILE}" ]; then
+    apply_profile_color "${_CLI_PROFILE}"
+elif [ -t 0 ] && [ -t 1 ]; then
+    echo ""
+    echo "Terminal profile — pick your theme so highlights render correctly:"
+    echo ""
+    echo "  macOS Terminal.app"
+    echo "   1) Homebrew          → bright cyan"
+    echo "   2) Ocean             → bright green"
+    echo "   3) Grass             → bright yellow"
+    echo "   4) Novel             → dark blue"
+    echo "   5) Pro               → bright cyan"
+    echo "   6) Basic             → dark blue  [default]"
+    echo "   7) Manuscript        → dark blue"
+    echo "   8) Red Sands         → bright yellow"
+    echo "   9) Silver Aerogel    → dark cyan"
+    echo ""
+    echo "  iTerm2 / community"
+    echo "  10) Default / Dark Background  → bright cyan"
+    echo "  11) Solarized Dark             → bright yellow"
+    echo "  12) Solarized Light            → dark blue"
+    echo "  13) Tango Dark                 → bright cyan"
+    echo "  14) Tango Light                → dark blue"
+    echo "  15) Dracula                    → bright magenta"
+    echo "  16) Monokai                    → bright yellow"
+    echo "  17) Gruvbox Dark               → bright yellow"
+    echo "  18) Nord                       → bright cyan"
+    echo "  19) One Dark                   → bright cyan"
+    echo "  20) Catppuccin                 → bright magenta"
+    echo ""
+    _profile_reply=""
+    read -r -p "  Profile number or exact name [default=6]: " _profile_reply
+    case "${_profile_reply}" in
+        1|Homebrew|homebrew)             _CLI_PROFILE="Homebrew" ;;
+        2|Ocean|ocean)                   _CLI_PROFILE="Ocean" ;;
+        3|Grass|grass)                   _CLI_PROFILE="Grass" ;;
+        4|Novel|novel)                   _CLI_PROFILE="Novel" ;;
+        5|Pro|pro)                       _CLI_PROFILE="Pro" ;;
+        6|Basic|basic)                   _CLI_PROFILE="Basic" ;;
+        7|Manuscript|manuscript)         _CLI_PROFILE="Manuscript" ;;
+        8|"Red Sands"|"red sands"|redsands) _CLI_PROFILE="Red Sands" ;;
+        9|"Silver Aerogel"|"silver aerogel") _CLI_PROFILE="Silver Aerogel" ;;
+        10|Default|default|"Dark Background") _CLI_PROFILE="Default" ;;
+        11|"Solarized Dark"|"solarized dark")  _CLI_PROFILE="Solarized Dark" ;;
+        12|"Solarized Light"|"solarized light") _CLI_PROFILE="Solarized Light" ;;
+        13|"Tango Dark"|"tango dark"|tangodark) _CLI_PROFILE="Tango Dark" ;;
+        14|"Tango Light"|"tango light"|tangolight) _CLI_PROFILE="Tango Light" ;;
+        15|Dracula|dracula)              _CLI_PROFILE="Dracula" ;;
+        16|Monokai|monokai)              _CLI_PROFILE="Monokai" ;;
+        17|"Gruvbox Dark"|"gruvbox dark") _CLI_PROFILE="Gruvbox Dark" ;;
+        18|Nord|nord)                    _CLI_PROFILE="Nord" ;;
+        19|"One Dark"|"one dark")        _CLI_PROFILE="One Dark" ;;
+        20|Catppuccin|catppuccin)        _CLI_PROFILE="Catppuccin" ;;
+        *)                               _CLI_PROFILE="Basic" ;;   # 6, blank, or unknown
+    esac
+    apply_profile_color "${_CLI_PROFILE}"
 fi
 
 print_banner
@@ -665,9 +883,7 @@ else
         "${DEFAULT_I2C_MCU}"
 
     DEFAULT_I2C_BUS="$(detect_shared_i2c_bus "${NFC_READER_SHARED_CFG}")"
-    prompt_with_default I2C_BUS \
-        "5. I2C bus on that MCU for the shared PN532 (real SDA/SCL pins)" \
-        "${DEFAULT_I2C_BUS}"
+    prompt_i2c_bus_select I2C_BUS "${I2C_MCU}" "${PRINTER_CONFIG}" "${DEFAULT_I2C_BUS}"
 
     echo "6. Tag read mode"
     echo "   $(choice_style spoolman) = UID-only lookup in Spoolman's extra field (default)"
@@ -694,6 +910,56 @@ else
     fi
 
 fi
+
+# ── Summary + confirm before any writes ──────────────────────────────────────
+echo ""
+echo "${DEFAULT}${BOLD}════════════════════════════════════════════════════════════════${RESET}"
+echo "${DEFAULT}${BOLD}  Install summary — review before writing${RESET}"
+echo "${DEFAULT}${BOLD}════════════════════════════════════════════════════════════════${RESET}"
+echo "  Reader type:       ${READER_TYPE}"
+echo "  Spoolman:          ${SPOOLMAN_URL}"
+echo "  Startup polling:   ${STARTUP_POLLING}"
+if [ "${READER_TYPE}" = "shared" ]; then
+    echo "  i2c_mcu:           ${I2C_MCU}"
+    echo "  i2c_bus:           ${I2C_BUS}"
+    # Compute per-gate HH effect name from MCU trailing digit (mmu0 → index 1)
+    if [[ "${I2C_MCU}" =~ ([0-9]+)$ ]]; then
+        _gate_idx="${BASH_REMATCH[1]}"
+        _gate_led_idx=$(( _gate_idx + 1 ))
+        echo "  LED effects:       ${DEFAULT}mmu_RFID_read_gates_${_gate_led_idx} / mmu_RFID_creating_gates_${_gate_led_idx}${RESET}"
+        echo "                     (gate ${_gate_idx}, via _MMU_SET_LED_EFFECT)"
+    else
+        echo "  LED effects:       ${DEFAULT}mmu_RFID_read / mmu_RFID_creating${RESET} (all gates — no digit in MCU name)"
+    fi
+else
+    echo "  Lane count:        ${LANE_COUNT}"
+    echo "  Scan-jog:          ${SCAN_ENABLED}"
+fi
+echo "  Tag mode:          ${TAG_MODE}"
+if [ "${TAG_MODE}" = "rich" ]; then
+    echo "  Bambu reads:       ${BAMBU_READS}"
+    echo "  Auto-create:       ${SPOOLMAN_AUTO_CREATE}"
+fi
+echo ""
+echo "  Files that will be written / merged:"
+echo "    ${DEFAULT}${NFC_READER_CFG}${RESET}"
+echo "    ${DEFAULT}${NFC_CONFIG_DIR}/nfc_macros.cfg${RESET}"
+if [ "${READER_TYPE}" = "shared" ]; then
+    echo "    ${DEFAULT}${NFC_READER_SHARED_CFG}${RESET}  (overwritten)"
+else
+    echo "    ${DEFAULT}${NFC_READER_HW_CFG}${RESET}"
+fi
+echo "${DEFAULT}${BOLD}════════════════════════════════════════════════════════════════${RESET}"
+echo ""
+read -r -p "  Proceed with install? [y/N]: " _confirm
+case "${_confirm}" in
+    [yY]|[yY][eE][sS]) ;;
+    *)
+        echo "  Install cancelled — no files were written."
+        exit 0
+        ;;
+esac
+echo ""
 
 # ── Symlink Python extras into Klipper ───────────────────────────────────────
 
@@ -916,7 +1182,7 @@ fi
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo ""
-echo "Install complete."
+echo "${DEFAULT}${BOLD}Install complete.${RESET}"
 echo ""
 echo "  Selected options:"
 echo "    reader type:        ${READER_TYPE}"
