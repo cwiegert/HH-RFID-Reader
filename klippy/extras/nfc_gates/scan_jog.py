@@ -228,6 +228,10 @@ def step_event(gate, eventtime):
 
     now = gate.reactor.monotonic()
 
+    retry_poll = decode_retry_in_progress(gate)
+    if retry_poll:
+        log_decode_retry_poll_start(gate)
+
     try:
         tag_found = gate._poll()
     except Exception:
@@ -236,6 +240,9 @@ def step_event(gate, eventtime):
         logger.error(msg)
         gate._console(msg)
         tag_found = False
+
+    if retry_poll:
+        log_decode_retry_poll_result(gate, tag_found)
 
     if tag_found:
         if retry_incomplete_decode(gate, now):
@@ -310,6 +317,56 @@ def decode_retry_in_progress(gate):
         max_attempts > 0 and retry_mm > 0.0
         and gate._scan_decode_retry_uid is not None
         and gate._scan_decode_retry_attempts > 0)
+
+
+def log_decode_retry_poll_start(gate):
+    max_attempts, _retry_mm = decode_retry_config(gate)
+    if gate._debug >= 3:
+        logger.info(
+            "nfc_gate: [%s] gate %d decode retry poll %d/%d at "
+            "scan position %.1f / %.1fmm (offset %.1fmm)",
+            gate._name, gate._gate,
+            gate._scan_decode_retry_attempts, max_attempts,
+            gate._scan_mm_total, gate._scan_max_mm,
+            getattr(gate, '_scan_decode_retry_offset', 0.0))
+
+
+def log_decode_retry_poll_result(gate, tag_found):
+    max_attempts, _retry_mm = decode_retry_config(gate)
+    attempt = gate._scan_decode_retry_attempts
+    tag = gate._state.current_tag
+    if tag_found:
+        uid = getattr(tag, 'uid', None) or gate._state.current_uid
+        incomplete = bool(getattr(tag, 'read_incomplete', False))
+        raw = getattr(tag, 'raw_tag_data', None)
+        block_count = None
+        if isinstance(raw, dict) and raw.get('blocks') is not None:
+            try:
+                block_count = len(raw.get('blocks'))
+            except Exception:
+                block_count = None
+        if gate._debug >= 3:
+            if block_count is None:
+                logger.info(
+                    "nfc_gate: [%s] gate %d decode retry poll %d/%d "
+                    "read uid=%s incomplete=%s",
+                    gate._name, gate._gate, attempt, max_attempts,
+                    uid, incomplete)
+            else:
+                logger.info(
+                    "nfc_gate: [%s] gate %d decode retry poll %d/%d "
+                    "read uid=%s incomplete=%s blocks=%d",
+                    gate._name, gate._gate, attempt, max_attempts,
+                    uid, incomplete, block_count)
+        return
+
+    if gate._debug >= 3:
+        logger.info(
+            "nfc_gate: [%s] gate %d decode retry poll %d/%d found no tag "
+            "at scan position %.1f / %.1fmm (offset %.1fmm)",
+            gate._name, gate._gate, attempt, max_attempts,
+            gate._scan_mm_total, gate._scan_max_mm,
+            getattr(gate, '_scan_decode_retry_offset', 0.0))
 
 
 def next_decode_retry_move(gate, max_attempts, retry_mm):

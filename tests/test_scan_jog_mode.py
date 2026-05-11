@@ -773,6 +773,39 @@ def test_scan_step_continues_decode_retry_without_regular_jog():
     assert not any('MMU_TEST_MOVE MOVE=20.00' in script
                    for script in g.printer.gcode_scripts)
 
+
+def test_scan_step_logs_decode_retry_poll_without_tag():
+    from nfc_gates import scan_jog
+
+    g = _make_gate(scan_jog_mm=20.0, scan_max_mm=200.0,
+                   scan_decode_retry_mm=5.0,
+                   scan_decode_retry_rounds=3)
+    g._debug = 3
+    g._scan_mode = True
+    g._scan_mm_total = 105.0
+    g._scan_decode_retry_uid = '04AABB'
+    g._scan_decode_retry_attempts = 1
+    g._scan_decode_retry_offset = 5.0
+    g._scan_found_event = ('uid_only', 0, '04AABB', None, None)
+    g.printer.set_print_state('standby')
+    g.printer.set_mmu(MockMMU(gear_short_move_speed=100.0))
+    g._poll = lambda: False
+
+    messages = []
+    old_info = scan_jog.logger.info
+    scan_jog.logger.info = lambda msg, *args: messages.append(
+        msg % args if args else msg)
+    try:
+        g._scan_step_event(100.0)
+    finally:
+        scan_jog.logger.info = old_info
+
+    assert any('decode retry poll 1/6 at scan position 105.0' in msg
+               for msg in messages)
+    assert any('decode retry poll 1/6 found no tag' in msg
+               for msg in messages)
+
+
 def test_scan_step_accepts_result_after_decode_retry_limit():
     g = _make_gate(scan_decode_retry_rounds=1)
     g._scan_mode = True
