@@ -16,7 +16,6 @@ Console prefixes are used consistently:
 - `❌` means the command or automatic handoff failed.
 - `⚠️` means NFC skipped, ignored, or warned but kept the system recoverable.
 - `⛔` means an action was blocked by a safety/precondition check.
-- `🚫` means a print-safety block prevented the action.
 - `✅` means the requested action completed.
 - `😊` means a tag was found/read successfully.
 - `🔍` means scan-jog started.
@@ -80,7 +79,7 @@ JOG_SCAN=1` or by the automatic scan-jog trigger.
 | Case | Console message | `nfc_reader.log` |
 |---|---|---|
 | Reader failed | `❌ NFC[laneN]: reader failed — run NFC GATE=<n> INIT=1 first` | `ERROR    ❌ NFC[laneN]: reader failed — run NFC GATE=<n> INIT=1 first` |
-| Print active | `🚫 NFC[laneN]: print is active — cannot start scan-jog while printing` | `WARNING  🚫 NFC[laneN]: print is active — cannot start scan-jog while printing` |
+| Print active | `⛔ NFC[laneN]: print is active — cannot start scan-jog while printing` | `WARNING  ⛔ NFC[laneN]: print is active — cannot start scan-jog while printing` |
 | Happy Hare busy | `⛔ NFC[laneN]: Happy Hare is busy (action=<action>) — wait for idle before starting scan-jog` | `WARNING  ⛔ NFC[laneN]: Happy Hare is busy (action=<action>) — wait for idle before starting scan-jog` |
 | Another gate scanning | `⛔ NFC[laneN]: gate <n> is already scanning — only one gate may scan at a time` | `WARNING  ⛔ NFC[laneN]: gate <n> is already scanning — only one gate may scan at a time` |
 | Same gate already scanning | `⛔ NFC[laneN]: scan-jog already in progress for this gate` | `WARNING  ⛔ NFC[laneN]: scan-jog already in progress for this gate` |

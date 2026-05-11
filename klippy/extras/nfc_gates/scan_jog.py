@@ -15,7 +15,7 @@ def manual_jog_scan(gate, gcmd):
         gcmd.respond_info(msg)
         return
     if is_printing(gate):
-        msg = "🚫 NFC[%s]: print is active — cannot start scan-jog while printing" % gate._name
+        msg = "⛔ NFC[%s]: print is active — cannot start scan-jog while printing" % gate._name
         logger.warning(msg)
         gcmd.respond_info(msg)
         return
