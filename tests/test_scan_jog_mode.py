@@ -1010,17 +1010,6 @@ def test_scan_step_runs_deferred_hh_prep_before_first_move():
     assert 'MMU_TEST_MOVE MOVE=50.00' in scripts[2]
     assert not g._scan_hh_prep_pending
 
-def test_start_scan_sync_hh_false_skips_both_hh_calls():
-    """sync_hh=False must skip both _NFC_GATE_CLEAR_CACHE and MMU_SPOOLMAN SYNC.
-    Both call gcode.run_script() which deadlocks when called from inside an HH hook."""
-    from nfc_gates import scan_jog
-    g = _make_gate(gate=2)
-    scan_jog.start(g, sync_hh=False)
-    scripts = g.printer.gcode_scripts
-    assert not any('_NFC_GATE_CLEAR_CACHE' in s for s in scripts)
-    assert not any('MMU_SPOOLMAN' in s for s in scripts)
-    assert not g._scan_hh_prep_pending
-
 def test_scan_step_issues_one_chunk_when_due():
     """No tag + due chunk issues scan_jog_mm, not the full scan distance."""
     g = _make_gate(gate=1, scan_jog_mm=50.0, scan_max_mm=200.0,
@@ -1181,15 +1170,16 @@ def test_manual_jog_success_message_has_readable_spacing():
     assert gcmd.responses[-1].startswith(
         '🔍 NFC[test]: scan-jog started for gate 3 (max=')
 
-def test_manual_jog_can_skip_hh_spoolman_sync():
+def test_manual_jog_schedules_required_hh_prep():
     g = _make_gate(gate=3)
     g.printer.set_print_state('standby')
     g.printer.set_mmu(MockMMU(gate_status=[0, 0, 0, 1], action='idle'))
-    gcmd = MockGCmd({'HH_SYNC': 0})
+    gcmd = MockGCmd()
 
     g._manual_jog_scan(gcmd)
 
     assert g._scan_mode
+    assert g._scan_hh_prep_pending
     assert not any('MMU_SPOOLMAN SYNC=1' in script
                    for script in g.printer.gcode_scripts)
 

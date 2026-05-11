@@ -169,11 +169,11 @@ NFC GATE=0 JOG_SCAN=1
 
 **What it does:** Selects the gate, then jogs the filament forward in `scan_jog_mm` increments, reading the NFC tag after each step. When the tag is found it rewinds toward the parked position, leaves `scan_rewind_buffer_mm` for Happy Hare's final gate parking step, and runs `_MMU_STEP_UNLOAD_GATE`. If the lane's Happy Hare Bowden calibration length is reached without a read, it follows the same rewind-and-park path and exits scan mode.
 
-`HH_SYNC=0` skips the pre-scan `MMU_SPOOLMAN SYNC=1` call. Use it when scan-jog is launched from inside a Happy Hare hook, where calling back into HH via Spoolman sync would cause reentrancy problems.
+Scan-jog always clears the Happy Hare gate cache and runs the pre-scan
+`MMU_SPOOLMAN SYNC=1` before moving filament. When launched from a Happy Hare
+hook, those prep calls are deferred to the scan timer so the hook can return
+before NFC calls back into Happy Hare.
 
-```gcode
-NFC GATE=0 JOG_SCAN=1 HH_SYNC=0
-```
 
 **Happy Hare post-preload hook setup:**
 
@@ -183,13 +183,13 @@ The [jacksky6 JK-dev branch](https://github.com/jacksky6/Happy-Hare/tree/JK-dev)
 [gcode_macro _MMU_SEQUENCE_VARS]
 description: Happy Hare sequence macro configuration variables
 gcode: # Leave empty
-variable_user_post_preload_extension: 'NFC JOG_SCAN=1 HH_SYNC=0'
+variable_user_post_preload_extension: 'NFC JOG_SCAN=1'
 ```
 
 Happy Hare appends `GATE=<n>` automatically after a successful preload, so the final command becomes:
 
 ```gcode
-NFC JOG_SCAN=1 HH_SYNC=0 GATE=<n>
+NFC JOG_SCAN=1 GATE=<n>
 ```
 
 Recommended NFC config when using the hook — disables gate-status polling so HH is the sole trigger:

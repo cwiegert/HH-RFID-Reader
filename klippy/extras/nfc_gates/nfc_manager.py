@@ -1275,8 +1275,8 @@ class NFCGate:
     def _resume_poll_after_rewind(self):
         return scan_jog.resume_poll_after_rewind(self)
 
-    def _start_scan_mode(self, max_mm=None, sync_hh=True):
-        return scan_jog.start(self, max_mm, sync_hh=sync_hh)
+    def _start_scan_mode(self, max_mm=None):
+        return scan_jog.start(self, max_mm)
 
     def _scan_step_event(self, eventtime):
         return scan_jog.step_event(self, eventtime)

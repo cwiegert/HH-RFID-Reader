@@ -52,8 +52,7 @@ def manual_jog_scan(gate, gcmd):
         return
 
     gate.reactor.update_timer(gate._poll_timer, gate.reactor.NEVER)
-    sync_hh = bool(gcmd.get_int("HH_SYNC", 1, minval=0, maxval=1))
-    start(gate, max_mm=max_mm, sync_hh=sync_hh)
+    start(gate, max_mm=max_mm)
     gcmd.respond_info(
         "🔍 NFC[%s]: scan-jog started for gate %d"
         " (max=%.0fmm  poll=%.2fs)"
@@ -182,7 +181,7 @@ def resume_poll_after_rewind(gate):
         gate.reactor.monotonic() + delay)
 
 
-def start(gate, max_mm=None, sync_hh=True):
+def start(gate, max_mm=None):
     if max_mm is not None:
         gate._scan_max_mm = float(max_mm)
     gate.__class__._active_scan_gate = gate._gate
@@ -207,7 +206,7 @@ def start(gate, max_mm=None, sync_hh=True):
             gate._scan_previous_uid, gate._scan_previous_spool)
     gate._hh_load_paused = False
     gate._scan_gate_selected = False  # deferred to first jog (must run from timer, not GCode handler)
-    gate._scan_hh_prep_pending = bool(sync_hh)
+    gate._scan_hh_prep_pending = True
 
     gate._scan_timer = gate.reactor.register_timer(
         gate._scan_step_event,
