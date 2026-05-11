@@ -69,7 +69,7 @@ class KlipperInterface:
                     name     = self._metadata_name(meta or {})
                     material = self._macro_value((meta or {}).get('material', ''))
                     color    = self._macro_value((meta or {}).get('color_hex', ''))
-                    temp     = (meta or {}).get('min_temp')
+                    temp     = (meta or {}).get('max_temp')
                     parts = ['_NFC_SPOOL_CHANGED', 'GATE={}'.format(gate)]
                     if name:
                         parts.append('NAME={}'.format(name))
