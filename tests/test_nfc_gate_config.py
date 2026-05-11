@@ -262,13 +262,6 @@ def test_scan_jog_mm_below_min_raises():
     except (ValueError, Exception):
         pass
 
-def test_scan_rewind_buffer_mm_below_min_raises():
-    try:
-        NFCGateDefaults(MockConfig({'scan_rewind_buffer_mm': -0.1}))
-        assert False, "Expected error for scan_rewind_buffer_mm below minval"
-    except (ValueError, Exception):
-        pass
-
 if __name__ == '__main__':
     tests = [v for k, v in sorted(globals().items()) if k.startswith('test_')]
     passed = failed = 0

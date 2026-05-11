@@ -164,15 +164,9 @@ def start(gate, max_mm=None):
     gate._scan_mode = True
     gate._scan_mm_total = 0.0
     gate._scan_next_chunk_time = gate.reactor.monotonic()
-    gate._hh_seed_spool_id = None
+    gate._hh_seed_spool_id = None     # clear startup seed — scan must re-read
     gate._hh_seed_available = False
     gate._scan_found_event = None
-    gate._scan_previous_uid = gate._state.current_uid
-    gate._scan_previous_spool = gate._state.current_spool
-    gate._scan_previous_active_gate = get_active_gate(gate)
-    gate._state.reset()          # clears uid, spool, current_tag, miss_count
-    gate._hh_load_paused = False
-    gate._scan_gate_selected = False
 
     gate._scan_hh_prep_pending = True
 
@@ -259,27 +253,11 @@ def finish(gate):
 ```python
 def rewind_and_exit(gate):
     gate._scan_mode = False
-    gate._state.miss_count = 0
-    try:
-        gate._run_rewind()
-    finally:
-        restore_active_gate(gate)
     gate.__class__._active_scan_gate = None
-    clear_hh_gate_cache(gate)   # _NFC_GATE_CLEAR_CACHE GATE=N — safe, timer thread
-    gate._state.reset()         # clean slate: uid, spool, tag, miss_count all None/0
-    gate._hh_load_paused = False
-    gate._scan_previous_uid = None
-    gate._scan_previous_spool = None
+    gate._state.miss_count = 0
+    gate._run_rewind()
     gate._resume_poll_after_rewind()
 ```
-
-**After a no-tag scan, both sides are left as clean slate:**
-
-`clear_hh_gate_cache` is safe here because `rewind_and_exit` is always called from the reactor timer thread — not from inside an HH hook — so `gcode.run_script()` does not deadlock.
-
-`gate._state.reset()` clears NFC uid, spool, current_tag, and miss_count. The previous spool is **not** restored. Since HH's gate map was just cleared, restoring the old NFC spool would create a mismatch (`_check_hh_cleared` would see NFC=54, HH=Unknown and immediately re-clear NFC, creating a re-dispatch loop on the next poll).
-
-After the rewind, `_hh_load_paused = False` and both states are blank. When the next normal poll fires and the tag is under the reader, NFC re-reads it, re-looks up the spool in Spoolman, and re-dispatches to HH in one clean cycle.
 
 `resume_poll_after_rewind` restarts the poll timer with an extra delay equal to the rewind move duration (`scan_mm_total / speed`) so the first scheduled poll fires after the rewind is complete.
 
@@ -323,21 +301,7 @@ The scan timer is created anew on each scan entry. Returning `reactor.NEVER` fro
 
 `step_event` calls `gate._poll()` directly — the same method the poll timer fires. `_poll()` runs the full state machine including Spoolman lookup and `GateState.process_read`. When `_poll()` returns `True` (tag found), `step_event` calls `finish()` immediately.
 
-**`_poll()` UID short-circuit.** Before calling `_resolve_spool()` (Spoolman round trip), `_poll()` checks:
-
-```python
-if uid_hex is not None and uid_hex == self._state.current_uid:
-    self._state.miss_count = 0
-    return True   # same tag already tracked — skip Spoolman
-```
-
-This means Spoolman is only called when the UID changes (new tag, or after `GateState.reset()` cleared `current_uid`). Repeated reads of the same tag — the common case during scan-jog dwell periods and normal polling — cost only an I2C read with no network round trip. `reset()` sets `current_uid = None`, so the first read after any scan entry or abort always goes to Spoolman once to re-establish the spool mapping.
-
-**Event dispatch is deferred during scan.** If a spool-changed event fires while `_scan_mode` is True (filament is still moving), `nfc_manager` caches it in `_scan_found_event` instead of dispatching immediately. `finish()` dispatches the cached event after `run_rewind()` returns, so HH and Spoolman receive the notification only after the filament is back at the parked position.
-
-**`GateState.reset()`** clears `_current_uid`, `_current_spool`, `current_tag`, and `miss_count` atomically. It is called in two places:
-- `start()` — before the scan timer is registered, so the first scan poll fires a `changed` event even if the same tag was previously known.
-- `rewind_and_exit()` — after the no-tag rewind, so NFC and HH both start from a clean slate for the next poll cycle.
+**Event dispatch is deferred during scan.** If a spool-changed event fires while `_scan_mode` is True (filament is still moving), `NFC_manager` caches it in `_scan_found_event` instead of dispatching immediately. `finish()` dispatches the cached event after `run_rewind()` returns, so HH and Spoolman receive the notification only after the filament is back at the parked position.
 
 `GateState.miss_count` does **not** increment during scan ticks. `process_read()` receives `scan_mode=True` when called from within scan mode — the miss path is skipped for no-read results. A missed NFC read during a deliberate spool rotation is not an absence event.
 
@@ -353,12 +317,9 @@ When `_poll()` identifies a tag during a scan step, `GateState.process_read` set
 
 Scan-jog messages follow the standard debug level conventions:
 
-| Message | Level | `nfc_reader.log` | `klippy.log` |
+| Message | Level gate | `nfc_reader.log` | `klippy.log` |
 |---|---|---|---|
 | `scan mode started — chunk=Xmm max=Xmm speed=Xmm/s` | `debug >= 3` | ✅ | ❌ |
-| `gate state reset (uid=X spool=X -> None/None)` | `debug >= 3` | ✅ | ❌ |
-| `clearing HH gate cache before scan-jog` | `debug >= 3` | ✅ | ❌ |
-| `syncing HH Spoolman state before scan-jog` | `debug >= 3` | ✅ | ❌ |
 | `gate loaded; waiting for HH idle before scan` | `debug >= 3` | ✅ | ❌ |
 | `HH idle; waiting 0.1s before scan-jog` | `debug >= 3` | ✅ | ❌ |
 | `scan preflight — lane N gate_status=X safe/not safe` | `debug >= 3` | ✅ | ❌ |
@@ -369,7 +330,6 @@ Scan-jog messages follow the standard debug level conventions:
 | `no tag — jogged Xmm / Xmm` | `info` (always at each step) | ✅ | ❌ |
 | `print started — aborting` | warning (always) | ✅ | ✅ |
 | `no tag after Xmm — rewinding` | warning (always) | ✅ | ✅ |
-| `no tag found, NFC state and HH gate cache cleared after rewind` | `debug >= 3` | ✅ | ❌ |
 
 Set `debug: 3` to observe scan start and success. Set `debug: 4` for full poll detail during scans.
 
