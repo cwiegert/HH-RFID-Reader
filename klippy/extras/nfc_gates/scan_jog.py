@@ -11,14 +11,15 @@ DECODE_RETRY_SETTLE_DELAY = 1.0
 def manual_jog_scan(gate, gcmd):
     """Start scan-and-jog on demand, matching the automatic trigger path."""
     if gate._failed:
-        msg = ("❌ NFC[%s]: reader failed — "
+        msg = ("[ERROR] NFC[%s]: reader failed - "
                "run NFC GATE=%d INIT=1 first"
                % (gate._name, gate._gate))
         logger.error(msg)
         gcmd.respond_info(msg)
         return
     if is_printing(gate):
-        msg = "🚫 NFC[%s]: print is active — cannot start scan-jog while printing" % gate._name
+        msg = ("[WARN] NFC[%s]: print is active - "
+               "cannot start scan-jog while printing" % gate._name)
         logger.warning(msg)
         gcmd.respond_info(msg)
         return
@@ -248,7 +249,7 @@ def step_event(gate, eventtime):
         tag_found = gate._poll()
     except Exception:
         logger.exception("nfc_gate: [%s] scan step poll error", gate._name)
-        msg = "❌ NFC[%d]: scan poll failed" % gate._gate
+        msg = "[ERROR] NFC[%d]: scan poll failed" % gate._gate
         logger.error(msg)
         gate._console(msg)
         tag_found = False
@@ -412,7 +413,7 @@ def queue_decode_retry_move(gate, now, uid, reason, max_attempts, retry_mm):
     msg = ("NFC[%d]: tag decode incomplete; retry %d/%d after %.1fmm jog"
            % (gate._gate, attempt, max_attempts, move))
     logger.warning("%s (uid=%s reason=%s)", msg, uid, reason)
-    gate._console("鈿狅笍 " + msg)
+    gate._console("[WARN] " + msg)
     reset_uid_only_read(gate, uid)
     gate._run_jog(move)
     gate._scan_mm_total += move
@@ -443,7 +444,7 @@ def retry_incomplete_decode(gate, now):
         msg = ("NFC[%d]: tag decode still incomplete after %d retries; "
                "using current result" % (gate._gate, max_attempts))
         logger.warning(msg)
-        gate._console("⚠️ " + msg)
+        gate._console("[WARN] " + msg)
         return False
 
     reason = getattr(tag, 'read_retry_reason', None)
@@ -482,7 +483,7 @@ def retry_incomplete_decode(gate, now):
     msg = ("NFC[%d]: tag decode incomplete; retry %d/%d after %.1fmm jog"
            % (gate._gate, attempt, max_attempts, move))
     logger.warning("%s (uid=%s reason=%s)", msg, uid, reason)
-    gate._console("⚠️ " + msg)
+    gate._console("[WARN] " + msg)
     reset_uid_only_read(gate, uid)
     gate._run_jog(move)
     gate._scan_mm_total += move
@@ -501,7 +502,7 @@ def continue_decode_retry(gate, now):
         msg = ("NFC[%d]: tag decode still incomplete after %d retries; "
                "using current result" % (gate._gate, max_attempts))
         logger.warning(msg)
-        gate._console("鈿狅笍 " + msg)
+        gate._console("[WARN] " + msg)
         return False
     return queue_decode_retry_move(
         gate, now, uid, "no tag at retry position", max_attempts, retry_mm)
@@ -510,10 +511,11 @@ def continue_decode_retry(gate, now):
 def finish(gate):
     gate._scan_mode = False
     gate._state.miss_count = 0
-    found_msg = "😊 NFC[%d]: tag found" % gate._gate
+    found_msg = "[OK] NFC[%d]: tag found" % gate._gate
     info_both(found_msg)
     gate._console(found_msg)
-    msg = "⏪ NFC[%d]: rewinding %.1fmm" % (gate._gate, gate._scan_mm_total)
+    msg = "[REWIND] NFC[%d]: rewinding %.1fmm" % (
+        gate._gate, gate._scan_mm_total)
     logger.info(msg)
     gate._console(msg)
     try:
@@ -547,7 +549,7 @@ def finish(gate):
             info_both(msg)
             gate._console(msg)
         elif event_type == 'uid_only':
-            msg = "⚠️ NFC[%d]: tag has no Spoolman match" % g
+            msg = "[WARN] NFC[%d]: tag has no Spoolman match" % g
             logger.warning(msg)
             gate._console(msg)
     gate._scan_previous_uid = None
@@ -561,7 +563,7 @@ def finish(gate):
 def rewind_and_exit(gate):
     gate._scan_mode = False
     gate._state.miss_count = 0
-    msg = "⚠️ NFC[%d]: no tag found — ⏪ rewinding %.1fmm" % (
+    msg = "[WARN] NFC[%d]: no tag found; rewinding %.1fmm" % (
         gate._gate, gate._scan_mm_total)
     logger.warning(msg)
     gate._console(msg)
