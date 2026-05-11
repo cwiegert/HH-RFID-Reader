@@ -1,11 +1,22 @@
 # EMU NFC Gate Reader
 
-> Plug an NFC reader into each filament gate. Load a tagged spool. Happy Hare updates automatically.
+> NFC spool identification for Happy Hare: use one reader per EMU lane, or one shared reader inside the MMU body.
 
-Each filament gate on your EMU gets a PN532 NFC reader wired to its EBB42. When you load a spool, the system jogs the filament in small steps until the NFC tag rotates into read range, finds the matching entry in Spoolman, rewinds to the parked position, and tells Happy Hare which spool is in which gate — no console commands, no manual selection.
+This project supports two operating models:
+
+- **Per-lane readers:** each EMU gate gets its own PN532 reader. When you load a spool, NFC can scan-jog the filament until the tag rotates into read range, resolve the spool in Spoolman, and update Happy Hare's gate map automatically.
+- **Shared reader:** one PN532 is mounted inside the MMU body. Tap the spool tag before loading, then insert filament into any gate. When Happy Hare starts pregate preload, NFC stages that spool ID for the gate being loaded.
+
+Per-lane flow:
 
 ```
 Load spool → HH parks filament → scan-jog rotates spool → tag in range → Spoolman lookup → Happy Hare gate map
+```
+
+Shared-reader flow:
+
+```
+Tap tag → spool pending → load any MMU gate → HH pregate preload → spool assigned
 ```
 
 ---
@@ -13,9 +24,9 @@ Load spool → HH parks filament → scan-jog rotates spool → tag in range →
 ## What You Need
 
 - A Voron with an EMU running [Happy Hare](https://github.com/moggieuk/Happy-Hare) — post-preload hook integration requires the [jacksky6 JK-dev branch](https://github.com/jacksky6/Happy-Hare/tree/JK-dev)
-- One mcu per filament lane (EBB36, EBB42, or SLB)
-- One PN532 NFC reader module per gate (~$3–5 each) 
-- M2 x 4 self-tapping screws to mount each PN532 to the bracket
+- For per-lane mode: one MCU per filament lane (EBB36, EBB42, or SLB) and one PN532 NFC reader module per gate (~$3–5 each)
+- For shared-reader mode: one PN532 NFC reader connected to any available Klipper MCU I2C bus
+- M2 x 4 self-tapping screws to mount each PN532 to the printed bracket or shared-reader mount
 - Spoolman running and accessible from the Pi
 - NFC tags on your spools (NTAG213/215/216 or Mifare Classic)
 
@@ -101,7 +112,7 @@ MMU_GATE_MAP NEXT_SPOOLID=<spool_id>
 
 The shared reader issues this command at `variable_user_pre_load_extension` time — just before preload starts. Happy Hare assigns it to the loaded gate; NFC clears the pending state.
 
-**Setup:** add `[nfc_gate shared]` to `nfc_reader_hw.cfg` and wire two HH hooks. See [Configuration Reference](docs/shared/configuration.md#shared-reader) for the full config block and [Commands & Macros](docs/shared/klipper-functions.md#shared-reader) for operation.
+**Setup:** include `nfc_reader_shared.cfg` and wire the Happy Hare pre-load hook to `_NFC_SHARED_PRELOAD`. See [Shared Reader](docs/shared/shared-reader.md) for the full workflow, [Configuration Reference](docs/shared/configuration.md#shared-reader) for the config block, and [Commands & Macros](docs/shared/klipper-functions.md#shared-reader) for operation.
 
 ---
 
@@ -126,6 +137,15 @@ Add to `printer.cfg` — **order matters**:
 [include nfc/nfc_reader.cfg]
 [include nfc/nfc_macros.cfg]
 [include nfc/nfc_reader_hw.cfg]
+```
+
+For a shared-reader-only install, include `nfc_reader_shared.cfg` instead of
+`nfc_reader_hw.cfg`:
+
+```ini
+[include nfc/nfc_reader.cfg]
+[include nfc/nfc_macros.cfg]
+[include nfc/nfc_reader_shared.cfg]
 ```
 
 Set your Spoolman URL in `~/printer_data/config/nfc/nfc_reader.cfg`:
