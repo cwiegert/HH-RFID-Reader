@@ -354,6 +354,8 @@ poll_interval:          3.0
 shared_pending_timeout: 120.0
 shared_read_timeout:    120.0
 shared_tag_read_effect: mmu_RFID_read
+shared_spool_ready_effect: mmu_RFID_ready
+shared_tag_unresolved_effect: mmu_RFID_unresolved
 shared_missed_limit:    3
 force_spool_id:         false
 ```
@@ -365,7 +367,9 @@ force_spool_id:         false
 | `poll_interval` | `3.0` | Seconds between reads while polling is active. |
 | `shared_pending_timeout` | `120.0` | Seconds a scanned spool remains eligible for the next preload. |
 | `shared_read_timeout` | `120.0` | Seconds polling may run without resolving a valid tag before auto-stopping. No effect when started via `startup_polling` or PRELOAD_CHECK auto-restart. |
-| `shared_tag_read_effect` | `''` | Name of a `[mmu_led_effect]` to play on successful tag read. Leave empty to skip LED feedback. |
+| `shared_tag_read_effect` | `''` | Name of a `[mmu_led_effect]` to play as soon as the shared reader sees a tag. Leave empty to skip tag-detected LED feedback. |
+| `shared_spool_ready_effect` | `''` | Name of a `[mmu_led_effect]` to play when the tag resolves to a Spoolman spool and is ready to load. Leave empty to skip ready LED feedback. |
+| `shared_tag_unresolved_effect` | `''` | Name of a `[mmu_led_effect]` to play when the tag UID does not resolve to a spool. Leave empty to skip unresolved LED feedback. |
 | `shared_missed_limit` | `3` | Consecutive unresolvable UID reads before a console message advises the user to use `MMU_PRELOAD`. Minimum 1. |
 | `force_spool_id` | `false` | When `true`, `PRELOAD_CHECK` raises a gcode error if no spool is staged, blocking Happy Hare from completing the pregate load until a tag has been scanned. |
 
@@ -399,11 +403,21 @@ Define a named `[mmu_led_effect]` in your LED config (same style as `emu_macros.
 
 ```ini
 [mmu_led_effect mmu_RFID_read]
-define_on: gates,exit
-layers: strobe 1 0 top (1.0, 0.75, 0.0)
+define_on: gates
+layers: strobe 1 2 top (1, 1, 0)
+
+[mmu_led_effect mmu_RFID_ready]
+define_on: gates
+layers: strobe 1 2 top (0, 1, 0)
+
+[mmu_led_effect mmu_RFID_unresolved]
+define_on: gates
+layers: strobe 1 5 top (1, 0, 0)
 ```
 
-The effect name must match `shared_tag_read_effect` in the gate config.
+The effect names must match `shared_tag_read_effect`, `shared_spool_ready_effect`, and `shared_tag_unresolved_effect` in the gate config.
+
+`shared_auto_create_effect: mmu_RFID_creating` runs a bright yellow chase while Spoolman creates a missing spool, then stops before the green ready blink.
 
 ---
 

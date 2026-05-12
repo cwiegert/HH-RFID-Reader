@@ -133,6 +133,8 @@ poll_interval: 3.0
 shared_pending_timeout: 120.0
 shared_read_timeout:    120.0
 shared_tag_read_effect: mmu_RFID_read
+shared_spool_ready_effect: mmu_RFID_ready
+shared_tag_unresolved_effect: mmu_RFID_unresolved
 ```
 
 Keys:
@@ -146,7 +148,9 @@ Keys:
 | `poll_interval` | `3.0` | Poll interval while the reader is active. 3 s is imperceptible for a human loading spools; see Reactor Cooperation. |
 | `shared_pending_timeout` | `120.0` | Seconds a scanned spool remains eligible for the next preload. Governs the window from tag scan to `PRELOAD_CHECK` firing. |
 | `shared_read_timeout` | `120.0` | Seconds polling may remain active after `READ=1` without a valid tag resolving. No effect when polling starts via `startup_polling` or PRELOAD_CHECK auto-restart. |
-| `shared_tag_read_effect` | `''` | HH LED effect name for a successful tag read. Leave empty to skip LED feedback. |
+| `shared_tag_read_effect` | `''` | HH LED effect name for tag-detected feedback. Leave empty to skip LED feedback. |
+| `shared_spool_ready_effect` | `''` | HH LED effect name for ready-to-load feedback after a real Spoolman spool ID is resolved. |
+| `shared_tag_unresolved_effect` | `''` | HH LED effect name for unresolved UID feedback. |
 
 ### Config Validation
 
@@ -848,10 +852,13 @@ log and report the newly read UID/spool, and tell the user to run
 
 ## LED Feedback
 
-LED feedback should be minimal. The only required shared LED indication is:
+LED feedback should be minimal. The shared LED indications are:
 
 ```text
-tag read successfully -> blinking yellow LED response
+tag detected -> blinking yellow LED response
+auto-create in progress -> yellow chase LED response
+spool ID resolved -> blinking green LED response
+tag cannot resolve -> blinking red LED response
 ```
 
 This should follow the same model as the EMU LED configuration: define a named
@@ -862,39 +869,43 @@ Example NFC config:
 
 ```ini
 shared_tag_read_effect: mmu_RFID_read
+shared_spool_ready_effect: mmu_RFID_ready
+shared_tag_unresolved_effect: mmu_RFID_unresolved
 ```
 
 Example effect definition, in the same style as `emu_macros.cfg`:
 
 ```ini
 [mmu_led_effect mmu_RFID_read]
-define_on: gates,exit
-layers: strobe 1 0 top (1.0, 0.75, 0.0)
+define_on: gates
+layers: strobe 1 2 top (1, 1, 0)
+
+[mmu_led_effect mmu_RFID_ready]
+define_on: gates
+layers: strobe 1 2 top (0, 1, 0)
+
+[mmu_led_effect mmu_RFID_unresolved]
+define_on: gates
+layers: strobe 1 5 top (1, 0, 0)
 ```
 
-When a tag resolves and becomes the pending shared spool, NFC issues:
+When a tag is detected or later resolves and becomes the pending shared spool,
+NFC issues:
 
 ```gcode
-MMU_SET_LED EXIT_EFFECT=<shared_tag_read_effect> DURATION=3
+_MMU_SET_LED_EFFECT EFFECT=<configured_effect>
 ```
 
-`MMU_SET_LED` is the public HH LED command (`mmu_led_manager.py`). Passing
-`EXIT_EFFECT=<name>` with a base effect name causes HH to internally invoke
-`_MMU_SET_LED_EFFECT EFFECT=unit0_<name>_exit`, which plays the
-`[mmu_led_effect]` defined effect on all exit LEDs. `DURATION` limits how long
-the effect runs before HH returns exit LEDs to their default state.
+The effect name in config is the bare `[mmu_led_effect]` section name. For
+`define_on: gates`, NFC derives the gate-specific suffix from the shared reader
+MCU name when possible.
 
-The effect name in config (`shared_tag_read_effect`) is the bare `[mmu_led_effect]`
-section name without the `unit0_` prefix and segment suffix that HH appends
-internally. NFC passes the name exactly as configured; HH handles the rest.
-
-Example full invocation from `_shared_handle_event`:
+Example full invocation:
 ```python
-gcode.run_script(
-    "MMU_SET_LED EXIT_EFFECT=%s DURATION=3" % self._shared_tag_read_effect)
+gcode.run_script("_MMU_SET_LED_EFFECT EFFECT=%s" % effect_name)
 ```
 
-If `MMU_SET_LED` is not available (no `[mmu_leds]` configured), the
+If `_MMU_SET_LED_EFFECT` is not available (no `[mmu_leds]` configured), the
 `run_script` call will fail silently with a GCode error logged to the console.
 NFC should not treat LED failure as a fatal error — the shared spool is already
 staged at this point and the preload will proceed regardless.
@@ -1098,8 +1109,10 @@ i2c_address:            0x24
 shared:                 true
 startup_polling:        ${startup_polling}
 
-# Optional: uncomment and set to a named [mmu_led_effect] for tag-read feedback
+# Optional: uncomment and set to named [mmu_led_effect] entries
 # shared_tag_read_effect: mmu_RFID_read
+# shared_spool_ready_effect: mmu_RFID_ready
+# shared_tag_unresolved_effect: mmu_RFID_unresolved
 
 # Optional: adjust staging window (seconds a scanned spool stays pending)
 # shared_pending_timeout: 120.0

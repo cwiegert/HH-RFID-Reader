@@ -441,6 +441,10 @@ class NFCGate:
                 'shared_read_timeout', 120.0, minval=1.0)
             self._shared_tag_read_effect = config.get(
                 'shared_tag_read_effect', '')
+            self._shared_spool_ready_effect = config.get(
+                'shared_spool_ready_effect', '')
+            self._shared_tag_unresolved_effect = config.get(
+                'shared_tag_unresolved_effect', '')
             self._shared_auto_create_effect = config.get(
                 'shared_auto_create_effect', '')
             self._shared_force_spool_id  = config.getboolean(
@@ -452,6 +456,8 @@ class NFCGate:
             self._shared_pending_timeout = 120.0
             self._shared_read_timeout    = 120.0
             self._shared_tag_read_effect    = ''
+            self._shared_spool_ready_effect = ''
+            self._shared_tag_unresolved_effect = ''
             self._shared_auto_create_effect = ''
             self._shared_force_spool_id     = False
             self._shared_missed_limit    = _SHARED_MISSED_RESOLUTION_LIMIT
@@ -605,6 +611,12 @@ class NFCGate:
 
     def _shared_play_tag_read_effect(self, gcmd=None):
         return self._shared_play_led_effect(self._shared_tag_read_effect, gcmd)
+
+    def _shared_play_spool_ready_effect(self):
+        self._shared_play_led_effect(self._shared_spool_ready_effect)
+
+    def _shared_play_tag_unresolved_effect(self):
+        self._shared_play_led_effect(self._shared_tag_unresolved_effect)
 
     def _shared_play_auto_create_effect(self):
         self._shared_play_led_effect(self._shared_auto_create_effect)
@@ -1300,6 +1312,10 @@ class NFCGate:
                 return
             self._check_hh_cleared()
         uid_hex = self._read_current_tag()
+        if (self._shared and uid_hex is not None
+                and uid_hex != self._state.current_uid
+                and self._shared_tag_read_effect):
+            self._shared_play_tag_read_effect()
         if uid_hex is not None and uid_hex == self._state.current_uid:
             self._state.miss_count = 0
             return True
@@ -1698,6 +1714,8 @@ class NFCGate:
                 except Exception as e:
                     logger.debug(
                         "nfc_gate: [%s] RESPOND failed: %s", self._name, e)
+            if self._shared_tag_unresolved_effect:
+                self._shared_play_tag_unresolved_effect()
             return
 
         if event_type == EVENT_CHANGED and spool is not None:
@@ -1770,8 +1788,8 @@ class NFCGate:
                 logger.debug(
                     "nfc_gate: [%s] RESPOND failed after spool resolved: %s",
                     self._name, e)
-            if self._shared_tag_read_effect:
-                self._shared_play_tag_read_effect()
+            if self._shared_spool_ready_effect:
+                self._shared_play_spool_ready_effect()
             self._shared_last_action = (
                 "tag staged spool %d uid=%s auto_created=%s"
                 % (spool, uid, auto_created))
@@ -1801,6 +1819,8 @@ class NFCGate:
                         logger.debug(
                             "nfc_gate: [%s] RESPOND failed: %s",
                             self._name, e)
+                if self._shared_tag_unresolved_effect:
+                    self._shared_play_tag_unresolved_effect()
             elif self._debug >= 3:
                 logger.info(
                     "nfc_gate: [%s] shared UID-only ignored — pending "
@@ -2075,6 +2095,10 @@ class NFCGate:
                      ("on" if self._shared_force_spool_id else "off"))
         lines.append("    tag_read_effect:    %s" %
                      (self._shared_tag_read_effect or "none"))
+        lines.append("    spool_ready_effect: %s" %
+                     (self._shared_spool_ready_effect or "none"))
+        lines.append("    tag_unresolved_effect: %s" %
+                     (self._shared_tag_unresolved_effect or "none"))
         lines.append("    auto_create_effect: %s" %
                      (self._shared_auto_create_effect or "none"))
         lines.append("    last_action: %s" %

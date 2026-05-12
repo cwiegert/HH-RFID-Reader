@@ -47,7 +47,7 @@ enabling `spoolman_auto_create`.
 
 1. **Shared reader is polling.** `startup_polling: 1` starts it at boot. It scans continuously, pausing automatically when printing starts and resuming when printing completes — no manual intervention required.
 
-2. **Tap your spool tag on the shared reader.** NFC reads the UID and looks it up in Spoolman. On success the spool ID is stored as pending, the `shared_pending_timeout` countdown starts, and polling stops. An LED effect fires if `shared_tag_read_effect` is configured. If the LED effect fails, NFC logs and reports a warning but the spool remains staged.
+2. **Tap your spool tag on the shared reader.** NFC reads the UID and looks it up in Spoolman. Tag detection can flash yellow, auto-create can run a yellow chase while Spoolman creates a missing spool, and the ready-to-load confirmation is the green 2x blink. On success the spool ID is stored as pending, the `shared_pending_timeout` countdown starts, and polling stops.
 
 3. **Drop the spool into an MMU lane** (physical action — NFC takes no action here).
 
@@ -139,6 +139,8 @@ poll_interval:          3.0
 shared_pending_timeout: 120.0
 shared_read_timeout:    120.0
 shared_tag_read_effect: mmu_RFID_read
+shared_spool_ready_effect: mmu_RFID_ready
+shared_tag_unresolved_effect: mmu_RFID_unresolved
 shared_missed_limit:    3
 force_spool_id:         false
 ```
@@ -150,7 +152,9 @@ force_spool_id:         false
 | `poll_interval` | `3.0` | Seconds between tag reads while polling. |
 | `shared_pending_timeout` | `120.0` | Seconds a resolved spool stays eligible for the next preload. |
 | `shared_read_timeout` | `120.0` | Seconds polling may run after `NFC_SHARED READ=1` without resolving a tag before auto-stopping. Has no effect when started via `startup_polling` or after a successful `PRELOAD_CHECK`. |
-| `shared_tag_read_effect` | `''` | Name of a `[mmu_led_effect]` to play on successful tag read. |
+| `shared_tag_read_effect` | `''` | Name of a `[mmu_led_effect]` to play as soon as the shared reader sees a tag. |
+| `shared_spool_ready_effect` | `''` | Name of a `[mmu_led_effect]` to play when the tag resolves to a Spoolman spool and is ready to load. |
+| `shared_tag_unresolved_effect` | `''` | Name of a `[mmu_led_effect]` to play when the tag UID does not resolve to a spool. |
 | `shared_missed_limit` | `3` | Consecutive unresolvable reads before a console message advises `MMU_PRELOAD`. Minimum 1. |
 | `force_spool_id` | `false` | Block pregate loads entirely when no spool is staged. |
 
@@ -180,11 +184,19 @@ Define a named `[mmu_led_effect]` in your LED config:
 
 ```ini
 [mmu_led_effect mmu_RFID_read]
-define_on: gates,exit
-layers: strobe 1 0 top (1.0, 0.75, 0.0)
+define_on: gates
+layers: strobe 1 2 top (1, 1, 0)
+
+[mmu_led_effect mmu_RFID_ready]
+define_on: gates
+layers: strobe 1 2 top (0, 1, 0)
+
+[mmu_led_effect mmu_RFID_unresolved]
+define_on: gates
+layers: strobe 1 5 top (1, 0, 0)
 ```
 
-Set `shared_tag_read_effect: mmu_RFID_read` in `[nfc_gate shared]`. The effect plays for 3 seconds on a successful tag read.
+Set `shared_tag_read_effect: mmu_RFID_read`, `shared_spool_ready_effect: mmu_RFID_ready`, and `shared_tag_unresolved_effect: mmu_RFID_unresolved` in `[nfc_gate shared]`. Tag detection flashes bright yellow 2x; auto-create runs a yellow chase; a ready spool ID flashes bright green 2x; an unresolved UID flashes bright red 5x. If auto-create is enabled, keep the tag in front of the reader until the green ready blink appears.
 
 ---
 

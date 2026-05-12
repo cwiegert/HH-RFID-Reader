@@ -680,12 +680,18 @@ with open(path, 'w') as f:
     f.write(f"shared:                 true\n")
     f.write(f"startup_polling:        {startup_polling}\n")
     f.write("\n")
-    f.write("# [mmu_led_effect] to flash on successful tag read (defined in nfc_macros.cfg).\n")
+    f.write("# [mmu_led_effect] to flash bright yellow 2x when a tag is read (defined in nfc_macros.cfg).\n")
     f.write("# NFC derives the per-gate variant from i2c_mcu at runtime\n")
     f.write("# (e.g. mmu0 → mmu_RFID_read_gates_1 via _MMU_SET_LED_EFFECT).\n")
     f.write("shared_tag_read_effect: mmu_RFID_read\n")
     f.write("\n")
-    f.write("# [mmu_led_effect] to blink while an auto-created spool is pending.\n")
+    f.write("# [mmu_led_effect] to flash bright green 2x when the spool ID is ready.\n")
+    f.write("shared_spool_ready_effect: mmu_RFID_ready\n")
+    f.write("\n")
+    f.write("# [mmu_led_effect] to flash bright red 5x when a tag UID does not resolve.\n")
+    f.write("shared_tag_unresolved_effect: mmu_RFID_unresolved\n")
+    f.write("\n")
+    f.write("# [mmu_led_effect] to run a bright yellow chase while Spoolman creates a missing spool.\n")
     f.write("shared_auto_create_effect: mmu_RFID_creating\n")
     f.write("\n")
     f.write("# Seconds a scanned spool stays pending (eligible for the next preload).\n")
@@ -926,10 +932,10 @@ if [ "${READER_TYPE}" = "shared" ]; then
     if [[ "${I2C_MCU}" =~ ([0-9]+)$ ]]; then
         _gate_idx="${BASH_REMATCH[1]}"
         _gate_led_idx=$(( _gate_idx + 1 ))
-        echo "  LED effects:       ${DEFAULT}mmu_RFID_read_gates_${_gate_led_idx} / mmu_RFID_creating_gates_${_gate_led_idx}${RESET}"
+        echo "  LED effects:       ${DEFAULT}mmu_RFID_read_gates_${_gate_led_idx} / mmu_RFID_ready_gates_${_gate_led_idx} / mmu_RFID_unresolved_gates_${_gate_led_idx} / mmu_RFID_creating_gates_${_gate_led_idx}${RESET}"
         echo "                     (gate ${_gate_idx}, via _MMU_SET_LED_EFFECT)"
     else
-        echo "  LED effects:       ${DEFAULT}mmu_RFID_read / mmu_RFID_creating${RESET} (all gates — no digit in MCU name)"
+        echo "  LED effects:       ${DEFAULT}mmu_RFID_read / mmu_RFID_ready / mmu_RFID_unresolved / mmu_RFID_creating${RESET} (all gates — no digit in MCU name)"
     fi
 else
     echo "  Lane count:        ${LANE_COUNT}"

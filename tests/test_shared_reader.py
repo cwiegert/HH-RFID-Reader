@@ -97,7 +97,8 @@ _stub('nfc_gates.spoolman_client', SpoolmanClient=_MockSpoolmanClient)
 sys.modules.pop('nfc_gates.nfc_manager', None)
 
 from nfc_gates.nfc_manager import NFCGate, _lane_instances
-from nfc_gates.gate_state import GateState, EVENT_CHANGED, EVENT_UID_ONLY, EVENT_REMOVED, DIRECT_METADATA_SPOOL
+from nfc_gates import tag_handler
+from nfc_gates.gate_state import GateState, CurrentTag, EVENT_CHANGED, EVENT_UID_ONLY, EVENT_REMOVED, DIRECT_METADATA_SPOOL
 
 
 # ── Test doubles ──────────────────────────────────────────────────────────────
@@ -159,9 +160,13 @@ class MockReader:
         self.read_target_calls = 0
         self.init_calls = 0
         self.alive = True
+        self.tag = None
 
     def _clear_current_card(self):
         self.clear_current_card_calls += 1
+
+    def read_tag(self):
+        return self.tag
 
     def read_target(self):
         self.read_target_calls += 1
@@ -177,9 +182,23 @@ class MockReader:
 class MockSpoolman:
     def __init__(self):
         self.clear_cache_calls = 0
+        self.spool_by_uid = {}
+        self._timeout = 5.0
+        self._rfid_key = 'rfid_tag'
+        self.set_uid_calls = []
 
     def clear_cache(self):
         self.clear_cache_calls += 1
+
+    def lookup_spool_by_uid(self, uid):
+        return self.spool_by_uid.get(uid)
+
+    def _resolve_base_url(self):
+        return 'http://spoolman.local'
+
+    def set_spool_uid(self, spool_id, uid):
+        self.set_uid_calls.append((spool_id, uid))
+        return True
 
 
 class MockGCmd:
@@ -261,6 +280,8 @@ def _make_shared(
         pending_timeout=120.0,
         read_timeout=120.0,
         tag_read_effect='',
+        spool_ready_effect='',
+        tag_unresolved_effect='',
         missed_limit=3,
         force_spool_id=False,
         has_per_lane_readers=False,
@@ -282,6 +303,8 @@ def _make_shared(
     g._shared_pending_timeout     = pending_timeout
     g._shared_read_timeout        = read_timeout
     g._shared_tag_read_effect     = tag_read_effect
+    g._shared_spool_ready_effect  = spool_ready_effect
+    g._shared_tag_unresolved_effect = tag_unresolved_effect
     g._shared_auto_create_effect  = ''
     g._shared_mcu_index           = None
     g._shared_missed_limit        = missed_limit
@@ -295,6 +318,9 @@ def _make_shared(
     g._shared_last_action         = None
     g._shared_read_deadline       = 0.0
     g._shared_missed_resolutions  = 0
+    g._spoolman_auto_create       = False
+    g._tag_parsing                = False
+    g._scan_mode                  = False
     g._state                      = GateState(255)
     g._reader                     = MockReader()
     g._spoolman                   = MockSpoolman()
@@ -880,15 +906,82 @@ def test_event_removed_keeps_pending():
     assert g._shared_pending_spool == 12
 
 
-def test_event_changed_fires_led_effect():
-    g = _make_shared(tag_read_effect='mmu_RFID_read')
+def test_event_changed_fires_spool_ready_led_effect():
+    g = _make_shared(spool_ready_effect='mmu_RFID_ready')
     g._shared_handle_event(EVENT_CHANGED, 'AA', 7)
-    assert any('_MMU_SET_LED_EFFECT' in s and 'mmu_RFID_read' in s
+    assert any('_MMU_SET_LED_EFFECT' in s and 'mmu_RFID_ready' in s
+               for s in g._gcode.scripts)
+
+
+def test_poll_fires_yellow_ack_then_green_ready_effect():
+    g = _make_shared(tag_read_effect='mmu_RFID_read',
+                     spool_ready_effect='mmu_RFID_ready')
+    g._reader.tag = 'AABB'
+    g._spoolman.spool_by_uid['AABB'] = 7
+
+    g._poll()
+
+    effects = [s for s in g._gcode.scripts if '_MMU_SET_LED_EFFECT' in s]
+    assert effects == [
+        '_MMU_SET_LED_EFFECT EFFECT=mmu_RFID_read',
+        '_MMU_SET_LED_EFFECT EFFECT=mmu_RFID_ready',
+    ]
+
+
+def test_event_changed_does_not_fire_tag_read_ack():
+    g = _make_shared(tag_read_effect='mmu_RFID_read',
+                     spool_ready_effect='mmu_RFID_ready')
+    g._shared_handle_event(EVENT_CHANGED, 'AA', 7)
+    assert not any(s == '_MMU_SET_LED_EFFECT EFFECT=mmu_RFID_read'
+                   for s in g._gcode.scripts)
+
+
+def test_event_uid_only_fires_unresolved_led_effect():
+    g = _make_shared(tag_unresolved_effect='mmu_RFID_unresolved')
+    g._shared_handle_event(EVENT_UID_ONLY, 'AABB', None)
+    assert any('_MMU_SET_LED_EFFECT' in s and 'mmu_RFID_unresolved' in s
+               for s in g._gcode.scripts)
+
+
+def test_auto_create_starts_and_stops_creating_led_effect():
+    import nfc_gates.vendor.lameandboard_spoolman as lb_spoolman
+
+    class FakeLBSpoolmanClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def auto_create_spool(self, meta, uid_hex=None):
+            return 42
+
+    original_client = lb_spoolman.SpoolmanClient
+    lb_spoolman.SpoolmanClient = FakeLBSpoolmanClient
+    try:
+        g = _make_shared()
+        g._spoolman_auto_create = True
+        g._tag_parsing = True
+        g._shared_auto_create_effect = 'mmu_RFID_creating'
+        g._state.current_tag = CurrentTag(uid='AABB')
+        g._state.current_tag.meta = {'uid': 'AABB', 'material': 'PLA'}
+
+        spool_id = tag_handler.resolve_spool(g, 'AABB')
+
+        assert spool_id == 42
+        assert g._spoolman.set_uid_calls == [(42, 'AABB')]
+        assert '_MMU_SET_LED_EFFECT EFFECT=mmu_RFID_creating' in g._gcode.scripts
+        assert '_MMU_STOP_LED_EFFECTS EFFECTS=mmu_RFID_creating' in g._gcode.scripts
+    finally:
+        lb_spoolman.SpoolmanClient = original_client
+
+
+def test_direct_metadata_without_spool_fires_unresolved_led_effect():
+    g = _make_shared(tag_unresolved_effect='mmu_RFID_unresolved')
+    g._shared_handle_event(EVENT_CHANGED, 'AABB', DIRECT_METADATA_SPOOL)
+    assert any('_MMU_SET_LED_EFFECT' in s and 'mmu_RFID_unresolved' in s
                for s in g._gcode.scripts)
 
 
 def test_event_changed_led_effect_failure_warns_but_stages():
-    g = _make_shared(tag_read_effect='bad_effect')
+    g = _make_shared(spool_ready_effect='bad_effect')
     g._gcode.fail_on = 'MMU_SET_LED'
     g._shared_handle_event(EVENT_CHANGED, 'AA', 7)
     assert g._shared_pending_spool == 7
