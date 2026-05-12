@@ -327,6 +327,25 @@ def test_resolve_direct_metadata_requires_current_tag_and_parsing_enabled():
     assert gate._resolve_spool('04AABB') is None
 
 
+def test_resolve_incomplete_structured_read_defers_metadata_direct_without_spoolman():
+    gate = _resolver_gate(
+        '04AABB',
+        {
+            'tag_format': 'bambu',
+            'material': 'PLA',
+            'color_hex': '0086D6',
+        },
+        spoolman=None,
+        tag_parsing=True)
+    gate._state.current_tag.read_incomplete = True
+    gate._state.current_tag.read_retry_reason = 'auth failed sectors [3, 4]'
+
+    assert gate._resolve_spool('04AABB') is None
+    assert gate._state.current_tag.resolution == {
+        'path': 'structured_read_incomplete',
+    }
+
+
 def test_resolve_auto_create_uses_vendor_top_level_then_patches_rfid_key(monkeypatch):
     fake_cls = _install_fake_lb_client(monkeypatch)
     spoolman = _ResolverSpoolman()

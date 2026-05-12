@@ -2,6 +2,7 @@
 #
 # Scan-and-jog mode helpers for NFCGate.
 
+from .gate_state import DIRECT_METADATA_SPOOL
 from .log import info_both, logger
 
 
@@ -323,13 +324,15 @@ def current_tag_decode_incomplete(gate):
     tag = gate._state.current_tag
     if tag is None:
         return False
-    if gate._state.current_spool is not None:
+    if (gate._state.current_spool is not None
+            and gate._state.current_spool is not DIRECT_METADATA_SPOOL):
         return False
     return bool(getattr(tag, 'read_incomplete', False))
 
 
 def reset_uid_only_read(gate, uid):
-    if gate._state.current_uid == uid and gate._state.current_spool is None:
+    if (gate._state.current_uid == uid
+            and gate._state.current_spool in (None, DIRECT_METADATA_SPOOL)):
         gate._state.current_uid = None
         gate._state.current_spool = None
         gate._state.miss_count = 0

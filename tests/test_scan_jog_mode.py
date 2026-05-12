@@ -84,7 +84,8 @@ _stub('nfc_gates.spoolman_client', SpoolmanClient=_MockSpoolmanClient)
 sys.modules.pop('nfc_gates.nfc_manager', None)
 
 from nfc_gates.nfc_manager import (
-    CurrentTag, GateState, NFCGate, _lane_instances, _lane_status_lines)
+    CurrentTag, DIRECT_METADATA_SPOOL, GateState, NFCGate, _lane_instances,
+    _lane_status_lines)
 
 
 # ── Test doubles ──────────────────────────────────────────────────────────────
@@ -621,6 +622,40 @@ def test_scan_step_retries_incomplete_rich_read():
     assert any('tag decode incomplete; retry 1/6 after 5.0mm jog' in msg
                for msg in g.printer._gcode.responses)
 
+
+def test_scan_step_retries_incomplete_metadata_direct_read():
+    g = _make_gate(scan_max_mm=200.0, scan_decode_retry_mm=5.0,
+                   scan_decode_retry_rounds=3)
+    g._scan_mode = True
+    g._scan_mm_total = 100.0
+    g._scan_found_event = ('changed', 0, '04AABB', None, None)
+    g._state.current_uid = '04AABB'
+    g._state.current_spool = DIRECT_METADATA_SPOOL
+    g._state.current_tag = CurrentTag(
+        uid='04AABB',
+        meta={'material': 'PLA', 'color_hex': '0086D6'},
+        read_incomplete=True,
+        read_retry_reason='auth failed sectors [3, 4]')
+    g.printer.set_print_state('standby')
+    g.printer.set_mmu(MockMMU(gear_short_move_speed=100.0))
+    g._poll = lambda: True
+    finished = []
+    g._finish_scan = lambda: finished.append(True)
+
+    result = g._scan_step_event(100.0)
+
+    assert not finished
+    assert result == pytest_approx(100.5)
+    assert g._scan_mm_total == 105.0
+    assert g._scan_decode_retry_attempts == 1
+    assert g._scan_decode_retry_uid == '04AABB'
+    assert g._scan_decode_retry_offset == 5.0
+    assert g._state.current_uid is None
+    assert g._state.current_spool is None
+    assert any('MMU_TEST_MOVE MOVE=5.00' in script
+               for script in g.printer.gcode_scripts)
+
+
 def test_scan_step_second_decode_retry_checks_other_side():
     g = _make_gate(scan_max_mm=200.0, scan_decode_retry_mm=5.0,
                    scan_decode_retry_rounds=3)
@@ -770,6 +805,46 @@ def test_scan_step_resumes_regular_scan_after_decode_retry_limit():
     assert g._scan_next_chunk_time == 100.0
     assert g._state.current_uid is None
     assert g._scan_found_event == ('uid_only', 0, '04AABB', None, None)
+    assert not any('MMU_TEST_MOVE' in script for script in g.printer.gcode_scripts)
+    assert any('tag decode still incomplete after 2 retries; continuing scan-jog' in msg
+               for msg in g.printer._gcode.responses)
+
+
+def test_scan_step_resumes_after_metadata_direct_decode_retry_limit():
+    g = _make_gate(scan_decode_retry_rounds=1)
+    g._scan_mode = True
+    g._scan_mm_total = 100.0
+    g._scan_next_chunk_time = 200.0
+    g._scan_decode_retry_uid = '04AABB'
+    g._scan_decode_retry_attempts = 2
+    g._scan_decode_retry_offset = -5.0
+    g._scan_found_event = ('changed', 0, '04AABB', None, {
+        'material': 'PLA',
+        'color_hex': '0086D6',
+    })
+    g._state.current_uid = '04AABB'
+    g._state.current_spool = DIRECT_METADATA_SPOOL
+    g._state.current_tag = CurrentTag(
+        uid='04AABB',
+        meta={'material': 'PLA', 'color_hex': '0086D6'},
+        read_incomplete=True,
+        read_retry_reason='auth failed sectors [3, 4]')
+    g.printer.set_print_state('standby')
+    g._poll = lambda: True
+    finished = []
+    g._finish_scan = lambda: finished.append(True)
+
+    result = g._scan_step_event(100.0)
+
+    assert not finished
+    assert result == pytest_approx(100.5)
+    assert g._scan_decode_retry_uid is None
+    assert g._scan_decode_retry_attempts == 0
+    assert g._scan_decode_retry_offset == 0.0
+    assert g._scan_next_chunk_time == 100.0
+    assert g._state.current_uid is None
+    assert g._state.current_spool is None
+    assert g._scan_found_event[0] == 'changed'
     assert not any('MMU_TEST_MOVE' in script for script in g.printer.gcode_scripts)
     assert any('tag decode still incomplete after 2 retries; continuing scan-jog' in msg
                for msg in g.printer._gcode.responses)
