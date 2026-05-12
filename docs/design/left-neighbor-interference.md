@@ -190,16 +190,24 @@ If the current scan reads the left neighbor:
 1. Log the decision, including current gate, left gate, UID, and spool ID when
    available.
 2. Select the left gate.
-3. Jog the left gate forward by a fixed distance.
+3. Jog the left gate in the positive `MMU_TEST_MOVE` direction by a fixed
+   distance. This is the "push filament out" direction for the parked left
+   neighbor.
 4. Wait for the move to complete.
 5. Re-select the current scan gate.
 6. Clear the false scan result.
 7. Continue the scan-jog loop.
 
+Only one clearance move should be attempted per scan. If the same scan reads
+the left neighbor again after a clearance move has already been queued, treat
+that as a larger mechanical/RF fault instead of issuing another positive move.
+Log and console a warning, abort scan-jog for the current gate, restore the
+left neighbor, and rewind the current gate through the normal scan exit path.
+
 Recommended fixed distance:
 
 ```python
-LEFT_NEIGHBOR_CLEARANCE_MM = 50.0
+LEFT_NEIGHBOR_CLEARANCE_MM = 75.0
 ```
 
 No config option is recommended. A fixed value keeps the feature simple and
@@ -209,7 +217,7 @@ Recommended GCode sequence:
 
 ```gcode
 MMU_SELECT GATE=<left>
-MMU_TEST_MOVE MOVE=50.00 QUIET=1
+MMU_TEST_MOVE MOVE=75.00 QUIET=1
 M400
 MMU_SELECT GATE=<current>
 ```
@@ -245,6 +253,7 @@ Recommended state on `NFCGate`:
 gate._scan_left_neighbor_gate = -1
 gate._scan_left_neighbor_shift_mm = 0.0
 gate._scan_left_neighbor_shifted = False
+gate._scan_left_neighbor_uid = None
 ```
 
 Initialize these in `scan_jog.start()`.
@@ -260,6 +269,7 @@ def restore_left_neighbor(gate):
     gate._scan_left_neighbor_shifted = False
     gate._scan_left_neighbor_gate = -1
     gate._scan_left_neighbor_shift_mm = 0.0
+    gate._scan_left_neighbor_uid = None
 
     gcode = gate.printer.lookup_object('gcode')
     gcode.run_script(
@@ -399,10 +409,12 @@ The handler should:
 3. Return `False` if the current UID is empty.
 4. Read the left NFC gate object and its `current_uid`.
 5. Return `False` if the left UID is empty or does not match.
-6. Log the interference decision.
-7. Move the left gate out of range.
-8. Clear the current gate's false read state.
-9. Keep scan-jog active and return `True`.
+6. If the left neighbor was already shifted during this scan and the same left
+   gate/UID is still being read, log a fault, abort scan-jog, and return `True`.
+7. Log the interference decision.
+8. Move the left gate out of range.
+9. Clear the current gate's false read state.
+10. Keep scan-jog active and return `True`.
 
 The handler should not inspect or compare spool IDs.
 
@@ -411,15 +423,16 @@ The handler should not inspect or compare spool IDs.
 Use a single fixed displacement:
 
 ```python
-LEFT_NEIGHBOR_CLEARANCE_MM = 50.0
+LEFT_NEIGHBOR_CLEARANCE_MM = 75.0
 ```
 
-The shift GCode should explicitly select the left gate, move it, wait, then
-select the current gate:
+The shift GCode should explicitly select the left gate, move it in the positive
+`MMU_TEST_MOVE` direction to push filament out, wait, then select the current
+gate:
 
 ```gcode
 MMU_SELECT GATE=<left>
-MMU_TEST_MOVE MOVE=50.00 QUIET=1
+MMU_TEST_MOVE MOVE=75.00 QUIET=1
 M400
 MMU_SELECT GATE=<current>
 ```
@@ -428,12 +441,25 @@ Set restore state only after the shift command is successfully queued:
 
 ```python
 gate._scan_left_neighbor_gate = left
-gate._scan_left_neighbor_shift_mm = 50.0
+gate._scan_left_neighbor_shift_mm = 75.0
 gate._scan_left_neighbor_shifted = True
+gate._scan_left_neighbor_uid = uid
 ```
 
 If the shift command raises, log a warning, clear no state, and return `False`
 so normal scan-jog behavior continues.
+
+Do not stack clearance moves. If `gate._scan_left_neighbor_shifted` is already
+`True` for the same left gate and UID, the implementation should not call
+`MMU_TEST_MOVE MOVE=75.00` again. It should report that the current reader is
+still seeing the left neighbor after clearance and exit scan-jog:
+
+```text
+[WARN] NFC[<current>]: still reading left neighbor gate <left> after 75mm clearance; check reader position, tag placement, or lane spacing
+```
+
+That exit should use the normal rewind/restore path so the neighbor is returned
+with `MMU_TEST_MOVE MOVE=-75.00` and the current gate is rewound.
 
 ### False Read Cleanup
 
@@ -472,7 +498,7 @@ Restore GCode:
 
 ```gcode
 MMU_SELECT GATE=<left>
-MMU_TEST_MOVE MOVE=-50.00 QUIET=1
+MMU_TEST_MOVE MOVE=-75.00 QUIET=1
 M400
 MMU_SELECT GATE=<current>
 ```
@@ -567,16 +593,35 @@ def handle_left_neighbor_interference(gate, now):
     if not is_left_neighbor_interference(gate, uid, spool):
         return False
 
+    left_gate = gate._gate - 1
+    if left_neighbor_already_shifted(gate, left_gate, uid):
+        msg = (
+            "NFC[%d]: still reading left neighbor gate %d after %.0fmm "
+            "clearance; check reader position, tag placement, or lane spacing"
+            % (gate._gate, left_gate, gate._scan_left_neighbor_shift_mm))
+        logger.warning("[WARN] %s", msg)
+        gate._console("[WARN] " + msg)
+        clear_false_scan_result(gate)
+        gate._rewind_and_exit_scan()
+        return True
+
     logger.warning(
         "nfc_gate: [%s] gate %d scan mode - uid=%s spool=%s belongs "
         "to left neighbor gate %d; moving neighbor out of reader field",
-        gate._name, gate._gate, uid, spool, gate._gate - 1)
+        gate._name, gate._gate, uid, spool, left_gate)
 
     shift_left_neighbor(gate)
     clear_false_scan_result(gate)
     gate._scan_next_chunk_time = (
         gate.reactor.monotonic() + DECODE_RETRY_SETTLE_DELAY)
     return True
+
+
+def left_neighbor_already_shifted(gate, left_gate, uid):
+    return (
+        gate._scan_left_neighbor_shifted
+        and gate._scan_left_neighbor_gate == left_gate
+        and gate._scan_left_neighbor_uid == uid)
 
 
 def is_left_neighbor_interference(gate, uid, spool):
@@ -626,8 +671,9 @@ Recommended cases:
   cleared
 - `finish()` restores the left gate if shifted
 - `rewind_and_exit()` restores the left gate if shifted
-- repeated left-neighbor hits do not stack multiple restore distances unless
-  another shift was actually issued
+- repeated left-neighbor hits after the first clearance do not issue another
+  `MOVE=75.00`; they warn, abort scan-jog, restore the neighbor, and rewind the
+  current gate
 - Spoolman-disabled read matching the left NFC gate object's cached UID shifts
   left and does not finish scan
 - Spoolman-disabled read with no cached left UID falls through to normal
@@ -637,7 +683,7 @@ The tests should assert emitted GCode order, especially:
 
 ```text
 MMU_SELECT GATE=<left>
-MMU_TEST_MOVE MOVE=50.00 QUIET=1
+MMU_TEST_MOVE MOVE=75.00 QUIET=1
 M400
 MMU_SELECT GATE=<current>
 ```
@@ -646,7 +692,7 @@ and restore:
 
 ```text
 MMU_SELECT GATE=<left>
-MMU_TEST_MOVE MOVE=-50.00 QUIET=1
+MMU_TEST_MOVE MOVE=-75.00 QUIET=1
 M400
 MMU_SELECT GATE=<current>
 ```
@@ -658,6 +704,10 @@ MMU_SELECT GATE=<current>
   returning `False` and letting normal scan-jog continue.
 - Moving the left neighbor assumes all lanes are parked or empty. The existing
   scan-jog preflight is therefore part of this feature's safety case.
+- If the reader still sees the same left-neighbor UID after a 75mm clearance
+  move, the problem is likely mechanical placement, reader field overlap, tag
+  placement, or lane spacing. The implementation should surface that condition
+  clearly and stop the scan instead of pushing the neighbor farther out.
 - The mitigation should be conservative about what counts as interference.
   False positives move a neighboring parked spool unnecessarily. False
   negatives preserve current behavior.
