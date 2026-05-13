@@ -439,6 +439,8 @@ class NFCGate:
                 'shared_pending_timeout', 120.0, minval=1.0)
             self._shared_read_timeout = config.getfloat(
                 'shared_read_timeout', 120.0, minval=1.0)
+            self._shared_led_segment = config.get(
+                'shared_led_segment', 'exit')
             self._shared_tag_read_effect = config.get(
                 'shared_tag_read_effect', '')
             self._shared_spool_ready_effect = config.get(
@@ -562,14 +564,16 @@ class NFCGate:
     def _shared_gate_effect_name(self, base):
         """Return per-gate HH variant of an [mmu_led_effect] name.
 
-        With define_on: gates, HH registers mmu_RFID_read_gates_1,
-        mmu_RFID_read_gates_2, ... (1-based).  The index is derived from the
-        trailing digit of i2c_mcu (mmu0 → index 1, mmu3 → index 4).
-        Falls back to the base name (all gates) when the MCU name has no digit.
+        With define_on: gates, HH registers effects as {base}_{segment}_{index}
+        (0-based), e.g. mmu_RFID_read_exit_0 ... mmu_RFID_read_exit_4.
+        The segment name comes from shared_led_segment (default: exit).
+        The index is the trailing digit of i2c_mcu (mmu4 → 4).
+        Falls back to the base name when the MCU name has no trailing digit.
         """
         if self._shared_mcu_index is None:
             return base
-        return "%s_gates_%d" % (base, self._shared_mcu_index + 1)
+        segment = getattr(self, '_shared_led_segment', 'exit')
+        return "%s_%s_%d" % (base, segment, self._shared_mcu_index)
 
     def _shared_play_led_effect(self, effect_name, gcmd=None):
         if not effect_name:
@@ -1962,56 +1966,29 @@ class NFCGate:
                 "nfc_gate: [%s] PRELOAD_CHECK — sending spool %d to Happy Hare "
                 "via MMU_GATE_MAP NEXT_SPOOLID",
                 self._name, spool_id)
-        if auto_created:
-            logger.debug(
-                "nfc_gate: [%s] PRELOAD_CHECK — refreshing Spoolman for "
-                "auto-created spool %d before gate map update",
-                self._name, spool_id)
-            try:
-                self._gcode.run_script("MMU_SPOOLMAN REFRESH=1 QUIET=1")
-            except Exception as e:
-                logger.error(
-                    "nfc_gate: [%s] PRELOAD_CHECK — MMU_SPOOLMAN REFRESH "
-                    "failed for auto-created spool %d: %s",
-                    self._name, spool_id, e)
-                gcmd.respond_info(
-                    "💥 NFC[%s]: MMU_SPOOLMAN REFRESH failed; pending spool %d kept. "
-                    "Fix HH/Spoolman, then run NFC_SHARED PRELOAD_CHECK=1 again"
-                    % (self._name, spool_id))
-                self._shared_last_action = (
-                    "MMU_SPOOLMAN REFRESH failed for spool %d" % spool_id)
-                return
-        try:
-            self._gcode.run_script(
-                "MMU_GATE_MAP NEXT_SPOOLID=%d" % spool_id)
-        except Exception as e:
-            logger.error(
-                "nfc_gate: [%s] PRELOAD_CHECK — MMU_GATE_MAP failed: %s",
-                self._name, e)
-            gcmd.respond_info(
-                "💥 NFC[%s]: MMU_GATE_MAP failed; pending spool %d kept. "
-                "Fix Happy Hare, then run NFC_SHARED PRELOAD_CHECK=1 again"
-                % (self._name, spool_id))
-            self._shared_last_action = (
-                "MMU_GATE_MAP failed for spool %d" % spool_id)
-            return
+        # MMU_GATE_MAP and MMU_SPOOLMAN REFRESH are called from the
+        # _NFC_SHARED_PRELOAD macro, not here.  Calling run_script() from
+        # inside a GCode command handler deadlocks Klipper's GCode queue.
+        # The macro reads pending_spool_id / pending_auto_created from
+        # get_status() and issues those commands directly.
         _ac_note = " [new spool synced]" if auto_created else ""
         gcmd.respond_info(
-            "✅ NFC[%s]: spool %d staged%s — sending to Happy Hare"
+            "✅ NFC[%s]: spool %d staged%s — macro will send to Happy Hare"
             % (self._name, spool_id, _ac_note))
+        logger.info(
+            "nfc_gate: [%s] PRELOAD_CHECK — spool %d validated, "
+            "macro responsible for MMU_GATE_MAP NEXT_SPOOLID",
+            self._name, spool_id)
         self._shared_clear_pending()
         self._shared_last_action = (
             "staged spool %d via NEXT_SPOOLID" % spool_id)
-        # Auto-restart polling so the reader is immediately ready for the
-        # next spool without any user action.  Clear the read deadline so
-        # this session runs indefinitely (no shared_read_timeout re-applied).
         self._shared_read_deadline = 0.0
         self._polling = True
         self.reactor.update_timer(self._poll_timer, self.reactor.NOW)
         logger.info(
-            "nfc_gate: [%s] PRELOAD_CHECK complete — spool %d staged via "
-            "NEXT_SPOOLID, pending cleared, polling restarted",
-            self._name, spool_id)
+            "nfc_gate: [%s] PRELOAD_CHECK complete — pending cleared, "
+            "polling restarted",
+            self._name)
         if self._debug >= 3:
             logger.info(
                 "nfc_gate: [%s] shared reader ready for next spool — "
@@ -2254,13 +2231,16 @@ class NFCGate:
             resolution = 'metadata_direct'
         elif tag is not None and isinstance(tag.resolution, dict):
             resolution = tag.resolution.get('path', '')
+        pending_spool = self._shared_pending_spool if self._shared else None
         return {
-            'gate':        self._gate,
-            'tag_present': tag_present,
-            'spool_id':    (-1 if is_meta_direct
-                            else self._state.current_spool
-                            if self._state.current_spool is not None else -1),
-            'uid':         self._state.current_uid or '',
-            'failed':      self._failed,
-            'resolution':  resolution,
+            'gate':                self._gate,
+            'tag_present':         tag_present,
+            'spool_id':            (-1 if is_meta_direct
+                                    else self._state.current_spool
+                                    if self._state.current_spool is not None else -1),
+            'uid':                 self._state.current_uid or '',
+            'failed':              self._failed,
+            'resolution':          resolution,
+            'pending_spool_id':    pending_spool if pending_spool is not None else -1,
+            'pending_auto_created': bool(self._shared_pending_auto_created) if self._shared else False,
         }
