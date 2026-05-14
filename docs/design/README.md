@@ -10,6 +10,7 @@ Internal engineering references. Not part of the user-facing documentation.
 | [HH Interaction](hh-interaction.md) | Unidirectional NFC→HH GCode push, HH status polling via `mmu.get_status()`, suspend/resume cycle trace, startup seeding |
 | [Error Handling and Logging](error-logging.md) | `_failed` flag, poll error containment, SpoolmanClient circuit breaker, debug levels 0–4, console output |
 | [Scan-and-Jog Mode](scan-jog-mode.md) | Trigger on HH gate_status 0→1 + 2s idle settle, `scan_jog.py` module drives `MMU_TEST_MOVE` jog chunks with timing from `gear_short_move_speed`, class-level scan lock prevents multi-lane race, dead-reckoning rewind via negative `MMU_TEST_MOVE`, print guard, miss count suppressed during scan |
+| [Left-Neighbor Interference](left-neighbor-interference.md) | Proposed scan-jog mitigation for gate `N` reading the parked spool on gate `N - 1`; Spoolman/metadata detection, neighbor jog-out, restore-on-exit |
 | [Vendor Integration](vendor-integration.md) | lameandboard/rfid library wiring, tag parsing pipeline (NTAG/MIFARE), five-step resolution ladder, DIRECT_METADATA_SPOOL sentinel, auto-create + MMU_SPOOLMAN refresh, `get_status()` fields |
 
 ### Module Map
