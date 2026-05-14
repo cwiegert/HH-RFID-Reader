@@ -119,6 +119,13 @@ class _BusDefaultConfig:
 _lane_instances = []
 
 
+def nfc_gate_for_gate_number(gate_number):
+    for candidate in _lane_instances:
+        if candidate._gate == gate_number:
+            return candidate
+    return None
+
+
 def _status_html_words(text):
     text = re.sub(r'\bavailable\b',
                   '<span style="color:#90EE90">available</span>', text)
@@ -408,6 +415,10 @@ class NFCGate:
         self._scan_decode_retry_attempts = 0
         self._scan_decode_retry_uid      = None
         self._scan_decode_retry_offset   = 0.0
+        self._scan_left_neighbor_gate = -1
+        self._scan_left_neighbor_shift_mm = 0.0
+        self._scan_left_neighbor_shifted = False
+        self._scan_left_neighbor_uid = None
         self._scan_idle_ready_time = 0.0
         self._scan_found_event     = None  # cached event suppressed during jog; dispatched after rewind
         self._prev_gate_status     = -1   # -1 = unknown; prevents false trigger on cold start
@@ -1284,6 +1295,9 @@ class NFCGate:
 
     def _run_rewind(self):
         return scan_jog.run_rewind(self)
+
+    def _nfc_gate_for_gate_number(self, gate_number):
+        return nfc_gate_for_gate_number(gate_number)
 
     def status_line(self):
         if self._failed:

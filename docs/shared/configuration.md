@@ -114,6 +114,11 @@ scan_poll_interval:    0.10
 | `scan_decode_retry_rounds` | `5` | Nearby retry rounds before accepting the current UID/metadata result. Each round probes both sides of the first UID hit. |
 | `scan_poll_interval` | `0.10` | Seconds between stopped-position NFC read attempts during scan-jog. Since Happy Hare `MMU_TEST_MOVE` blocks by default, this is not a read-while-moving interval. |
 
+There is no user setting for left-neighbor interference. During scan-jog, gate
+`N` checks only the cached UID on gate `N - 1`; if it exactly matches the UID
+just read, NFC moves the left neighbor 75 mm out of range, continues scanning,
+and restores the neighbor on scan exit.
+
 **Happy Hare post-preload hook (alternative to automatic polling):**
 
 The [jacksky6 JK-dev branch](https://github.com/jacksky6/Happy-Hare/tree/JK-dev) of Happy Hare adds `variable_user_post_preload_extension` in `config/base/mmu_macro_vars.cfg`. Set it to trigger NFC scan-jog after each successful `MMU_PRELOAD`:

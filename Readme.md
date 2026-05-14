@@ -85,6 +85,11 @@ This disables gate-status polling entirely — Happy Hare calls NFC only after t
 | `scan_decode_retry_rounds` | `5` | Nearby retry rounds; each round probes both sides of the first UID hit |
 | `scan_poll_interval` | `0.1` | Seconds between stopped-position NFC reads during scan |
 
+During scan-jog, gate `N` also guards against the rare case where its reader
+sees the parked spool on gate `N - 1`. If the read UID exactly matches the left
+neighbor's cached UID, NFC shifts that neighbor 75 mm out of range, continues
+scanning the current gate, and restores the neighbor on scan exit.
+
 ---
 
 ## Quick Install

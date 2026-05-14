@@ -127,6 +127,12 @@ self._scan_mm_total        = 0.0       # mm jogged forward so far
 self._scan_next_chunk_time = 0.0       # reactor timestamp when next jog chunk may fire
 self._scan_found_event     = None      # cached event suppressed during jog; dispatched after rewind
 
+# Left-neighbor interference mitigation
+self._scan_left_neighbor_gate = -1
+self._scan_left_neighbor_shift_mm = 0.0
+self._scan_left_neighbor_shifted = False
+self._scan_left_neighbor_uid = None
+
 # Trigger detection
 self._prev_gate_status     = -1        # -1 = cold start (no 0→1 false trigger)
 self._scan_pending         = False     # armed on 0→1; fires when HH confirms idle
@@ -208,6 +214,9 @@ def step_event(gate, eventtime):
     now = gate.reactor.monotonic()
     tag_found = gate._poll()
 
+    if tag_found and handle_left_neighbor_interference(gate, now):
+        return gate.reactor.monotonic() + gate._scan_poll_interval
+
     if tag_found:
         if retry_incomplete_decode(gate, now):
             return gate.reactor.monotonic() + gate._scan_poll_interval
@@ -234,6 +243,37 @@ The timer always returns `now + scan_poll_interval` so NFC is polled continuousl
 ### `finish(gate)` — tag found
 
 When a UID is detected but the rich payload read is marked incomplete, scan-jog queues nearby retry jogs before accepting the current UID/metadata result. The retry decision is format-neutral: reader/parser code sets `CurrentTag.read_incomplete` and `read_retry_reason`; scan-jog only applies the configured `scan_decode_retry_mm` / `scan_decode_retry_rounds` policy. Each retry round probes both sides of the first UID hit position. The first implementation marks incomplete MIFARE reads when sector authentication or block reads fail, which covers spool-mounted Bambu tags at the edge of the reader field.
+
+### Left-neighbor interference
+
+Some tagged spools expose a tag on both sides. With the PN532 mounted on the
+left side of each lane, gate `N` can occasionally see the parked spool on gate
+`N - 1` during scan-jog. The mitigation is intentionally narrow:
+
+- only active during scan-jog
+- only checks the immediate left neighbor
+- only treats a read as interference when the read UID exactly matches the
+  left NFC gate object's cached UID
+- never compares Spoolman spool IDs or Happy Hare display metadata
+
+When the match is confirmed, scan-jog selects the left gate, moves it forward
+75 mm, waits with `M400`, reselects the current gate, clears the false scan
+result, and continues scanning gate `N`. The current gate's
+`_scan_mm_total` is unchanged because the current spool did not move.
+
+If the same scan still reads the same left-neighbor UID after one clearance
+move, scan-jog warns, exits through the normal rewind path, and restores the
+left neighbor. It does not stack additional positive moves.
+
+Both successful and aborted scan exits call `restore_left_neighbor()` after the
+current gate rewind is queued:
+
+```gcode
+MMU_SELECT GATE=<left>
+MMU_TEST_MOVE MOVE=-75.00 QUIET=1
+M400
+MMU_SELECT GATE=<current>
+```
 
 ```python
 def finish(gate):

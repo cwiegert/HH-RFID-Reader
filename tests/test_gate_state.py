@@ -60,11 +60,18 @@ _stub('nfc_gates.pn532_driver',
       low_level_debug_help_lines=lambda command_base: [],
       run_low_level_debug=lambda *a, **k: False)
 _stub('nfc_gates.spoolman_client', SpoolmanClient=object)
-_stub('nfc_gates.vendor',
-      __path__=[os.path.join(_EXTRAS, 'nfc_gates', 'vendor')],
-      __package__='nfc_gates.vendor')
+_vendor_pkg = _stub('nfc_gates.vendor',
+                   __path__=[os.path.join(_EXTRAS, 'nfc_gates', 'vendor')],
+                   __package__='nfc_gates.vendor')
+_nfc_pkg.vendor = _vendor_pkg
+
+def _stub_parse_tag(raw, uid_hex=None, trace=None):
+    if trace is not None:
+        trace('debug', 'stub parser used')
+    return None
+
 _stub('nfc_gates.vendor.rfid_tag_parser',
-      parse_tag=lambda raw, uid_hex=None: None,
+      parse_tag=_stub_parse_tag,
       is_parse_error=lambda info: bool(
           isinstance(info, dict) and (info.get('error') or info.get('parse_error'))))
 

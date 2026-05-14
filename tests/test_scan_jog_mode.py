@@ -57,6 +57,10 @@ _stub('bus',
 _nfc_pkg = _stub('nfc_gates')
 _nfc_pkg.__path__    = [os.path.join(_EXTRAS, 'nfc_gates')]
 _nfc_pkg.__package__ = 'nfc_gates'
+_vendor_pkg = _stub('nfc_gates.vendor',
+                   __path__=[os.path.join(_EXTRAS, 'nfc_gates', 'vendor')],
+                   __package__='nfc_gates.vendor')
+_nfc_pkg.vendor = _vendor_pkg
 
 _null = _NullLogger()
 class _MockSpoolmanClient:
@@ -228,6 +232,10 @@ def _make_gate(gate=0, scan_jog_mm=50.0, scan_max_mm=200.0,
     g._scan_decode_retry_attempts = 0
     g._scan_decode_retry_uid = None
     g._scan_decode_retry_offset = 0.0
+    g._scan_left_neighbor_gate = -1
+    g._scan_left_neighbor_shift_mm = 0.0
+    g._scan_left_neighbor_shifted = False
+    g._scan_left_neighbor_uid = None
     g._scan_idle_ready_time = 0.0
     g._scan_found_event     = None
     g._scan_gate_selected   = False
@@ -1292,6 +1300,210 @@ def test_rewind_skipped_when_nothing_jogged():
     g = _make_gate(gate=1)
     g._run_rewind()   # scan_mm_total defaults to 0.0
     assert len(g.printer.gcode_scripts) == 0
+
+
+# ── Left-neighbor interference ────────────────────────────────────────────────
+
+def test_left_neighbor_gate_zero_falls_through_to_finish():
+    g = _make_gate(gate=0)
+    g._scan_mode = True
+    g._scan_found_event = ('changed', 0, 'LEFTUID', 42, None)
+    g._state.current_uid = 'LEFTUID'
+    g.printer.set_print_state('standby')
+    g._poll = lambda: True
+    finished = []
+    g._finish_scan = lambda: finished.append(True)
+
+    result = g._scan_step_event(100.0)
+
+    assert finished
+    assert result == g.reactor.NEVER
+    assert not any('MOVE=75.00' in s for s in g.printer.gcode_scripts)
+
+
+def test_left_neighbor_matching_uid_shifts_neighbor_and_continues_scan():
+    left = _make_gate(gate=0)
+    left._state.current_uid = 'LEFTUID'
+    g = _make_gate(gate=1)
+    g.printer.set_mmu(MockMMU(gate_status=[1, 1], gate_spool_id=[10, -1]))
+    g._scan_mode = True
+    g._scan_found_event = ('changed', 1, 'LEFTUID', 10, None)
+    g._state.current_uid = 'LEFTUID'
+    g._state.current_spool = 10
+    g._state.current_tag = CurrentTag(uid='LEFTUID', spool_id=10)
+    g.printer.set_print_state('standby')
+    g._poll = lambda: True
+    finished = []
+    g._finish_scan = lambda: finished.append(True)
+
+    old_lanes = list(_lane_instances)
+    try:
+        _lane_instances[:] = [left, g]
+        result = g._scan_step_event(100.0)
+    finally:
+        _lane_instances[:] = old_lanes
+
+    assert not finished
+    assert result == pytest_approx(100.5)
+    assert g._scan_left_neighbor_shifted
+    assert g._scan_left_neighbor_gate == 0
+    assert g._scan_left_neighbor_uid == 'LEFTUID'
+    assert g._scan_found_event is None
+    assert g._state.current_uid is None
+    assert g._state.current_spool is None
+    assert g._state.current_tag is None
+    assert g._scan_decode_retry_uid is None
+    assert g._scan_next_chunk_time == pytest_approx(101.0)
+    assert g.printer.gcode_scripts[-1] == (
+        'MMU_SELECT GATE=0\n'
+        'MMU_TEST_MOVE MOVE=75.00 QUIET=1\n'
+        'M400\n'
+        'MMU_SELECT GATE=1')
+
+
+def test_left_neighbor_nonmatching_uid_finishes_normally():
+    left = _make_gate(gate=0)
+    left._state.current_uid = 'LEFTUID'
+    g = _make_gate(gate=1)
+    g.printer.set_mmu(MockMMU(gate_status=[1, 1], gate_spool_id=[10, 20]))
+    g._scan_mode = True
+    g._scan_found_event = ('changed', 1, 'RIGHTUID', 20, None)
+    g._state.current_uid = 'RIGHTUID'
+    g.printer.set_print_state('standby')
+    g._poll = lambda: True
+    finished = []
+    g._finish_scan = lambda: finished.append(True)
+
+    old_lanes = list(_lane_instances)
+    try:
+        _lane_instances[:] = [left, g]
+        result = g._scan_step_event(100.0)
+    finally:
+        _lane_instances[:] = old_lanes
+
+    assert finished
+    assert result == g.reactor.NEVER
+    assert not any('MOVE=75.00' in s for s in g.printer.gcode_scripts)
+
+
+def test_left_neighbor_without_cached_uid_finishes_normally():
+    left = _make_gate(gate=0)
+    g = _make_gate(gate=1)
+    g.printer.set_mmu(MockMMU(gate_status=[1, 1], gate_spool_id=[10, 20]))
+    g._scan_mode = True
+    g._scan_found_event = ('changed', 1, 'RIGHTUID', 20, None)
+    g._state.current_uid = 'RIGHTUID'
+    g.printer.set_print_state('standby')
+    g._poll = lambda: True
+    finished = []
+    g._finish_scan = lambda: finished.append(True)
+
+    old_lanes = list(_lane_instances)
+    try:
+        _lane_instances[:] = [left, g]
+        result = g._scan_step_event(100.0)
+    finally:
+        _lane_instances[:] = old_lanes
+
+    assert finished
+    assert result == g.reactor.NEVER
+    assert not any('MOVE=75.00' in s for s in g.printer.gcode_scripts)
+
+
+def test_left_neighbor_hh_empty_vetoes_stale_cached_uid():
+    left = _make_gate(gate=0)
+    left._state.current_uid = 'LEFTUID'
+    g = _make_gate(gate=1)
+    g.printer.set_mmu(MockMMU(gate_status=[0, 1], gate_spool_id=[10, 20]))
+    g._scan_mode = True
+    g._scan_found_event = ('changed', 1, 'LEFTUID', 10, None)
+    g._state.current_uid = 'LEFTUID'
+    g.printer.set_print_state('standby')
+    g._poll = lambda: True
+    finished = []
+    g._finish_scan = lambda: finished.append(True)
+
+    old_lanes = list(_lane_instances)
+    try:
+        _lane_instances[:] = [left, g]
+        result = g._scan_step_event(100.0)
+    finally:
+        _lane_instances[:] = old_lanes
+
+    assert finished
+    assert result == g.reactor.NEVER
+    assert not any('MOVE=75.00' in s for s in g.printer.gcode_scripts)
+
+
+def test_finish_scan_restores_shifted_left_neighbor():
+    g = _make_gate(gate=2)
+    g._start_scan_mode()
+    g._scan_left_neighbor_gate = 1
+    g._scan_left_neighbor_shift_mm = 75.0
+    g._scan_left_neighbor_shifted = True
+    g._scan_left_neighbor_uid = 'LEFTUID'
+
+    g._finish_scan()
+
+    assert any(script == (
+        'MMU_SELECT GATE=1\n'
+        'MMU_TEST_MOVE MOVE=-75.00 QUIET=1\n'
+        'M400\n'
+        'MMU_SELECT GATE=2')
+        for script in g.printer.gcode_scripts)
+    assert not g._scan_left_neighbor_shifted
+
+
+def test_rewind_and_exit_restores_shifted_left_neighbor():
+    g = _make_gate(gate=2)
+    g._start_scan_mode()
+    g._scan_left_neighbor_gate = 1
+    g._scan_left_neighbor_shift_mm = 75.0
+    g._scan_left_neighbor_shifted = True
+    g._scan_left_neighbor_uid = 'LEFTUID'
+
+    g._rewind_and_exit_scan()
+
+    assert any(script == (
+        'MMU_SELECT GATE=1\n'
+        'MMU_TEST_MOVE MOVE=-75.00 QUIET=1\n'
+        'M400\n'
+        'MMU_SELECT GATE=2')
+        for script in g.printer.gcode_scripts)
+    assert not g._scan_left_neighbor_shifted
+
+
+def test_repeated_left_neighbor_hit_aborts_and_does_not_stack_clearance():
+    left = _make_gate(gate=0)
+    left._state.current_uid = 'LEFTUID'
+    g = _make_gate(gate=1)
+    g.printer.set_mmu(MockMMU(gate_status=[1, 1], gate_spool_id=[10, -1]))
+    g._scan_mode = True
+    g._scan_mm_total = 50.0
+    g._scan_left_neighbor_gate = 0
+    g._scan_left_neighbor_shift_mm = 75.0
+    g._scan_left_neighbor_shifted = True
+    g._scan_left_neighbor_uid = 'LEFTUID'
+    g._scan_found_event = ('changed', 1, 'LEFTUID', 10, None)
+    g._state.current_uid = 'LEFTUID'
+    g._state.current_spool = 10
+    g.printer.set_print_state('standby')
+    g._poll = lambda: True
+
+    old_lanes = list(_lane_instances)
+    try:
+        _lane_instances[:] = [left, g]
+        result = g._scan_step_event(100.0)
+    finally:
+        _lane_instances[:] = old_lanes
+
+    assert result == g.reactor.NEVER
+    assert not g._scan_mode
+    assert sum('MOVE=75.00' in s for s in g.printer.gcode_scripts) == 0
+    assert any('MOVE=-75.00' in s for s in g.printer.gcode_scripts)
+    assert any('MOVE=-20.00' in s for s in g.printer.gcode_scripts)
+    assert any('still reading left neighbor gate 0' in msg
+               for msg in g.printer._gcode.responses)
 
 
 # ── Poll timer resume ─────────────────────────────────────────────────────────

@@ -69,6 +69,12 @@ The `(uid, spool_id)` combination check means that if the same physical tag is r
 
 When a spool is loaded, the NFC tag is on the hub face — it may be pointing any direction. The scan-jog loop rotates the spool until the tag comes within read range of the PN532 antenna.
 
+During this scan, the current gate also checks for a narrow physical edge case:
+if gate `N` reads a UID already cached on gate `N - 1`, the read is treated as
+left-neighbor interference. NFC briefly shifts the left neighbor out of the
+reader field, clears the false read, continues scanning gate `N`, and restores
+the neighbor when the scan exits.
+
 ### Trigger
 
 The poll tick runs the gate-status edge check on every cycle. When all conditions are met, scan mode starts and the poll timer parks itself at `NEVER` for the duration.

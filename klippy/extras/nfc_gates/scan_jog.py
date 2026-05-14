@@ -2,12 +2,14 @@
 #
 # Scan-and-jog mode helpers for NFCGate.
 
+from . import hh_status
 from .gate_state import DIRECT_METADATA_SPOOL
 from .log import info_both, logger
 
 
 DECODE_RETRY_SETTLE_DELAY = 1.0
 SCAN_JOG_SUBSTEPS = 3
+LEFT_NEIGHBOR_CLEARANCE_MM = 75.0
 
 
 def manual_jog_scan(gate, gcmd):
@@ -204,6 +206,10 @@ def start(gate, max_mm=None):
     gate._scan_decode_retry_attempts = 0
     gate._scan_decode_retry_uid = None
     gate._scan_decode_retry_offset = 0.0
+    gate._scan_left_neighbor_gate = -1
+    gate._scan_left_neighbor_shift_mm = 0.0
+    gate._scan_left_neighbor_shifted = False
+    gate._scan_left_neighbor_uid = None
     gate._hh_seed_spool_id = None
     gate._hh_seed_available = False
     gate._scan_found_event = None
@@ -275,6 +281,11 @@ def step_event(gate, eventtime):
         logger.error(msg)
         gate._console(msg)
         tag_found = False
+
+    if tag_found and handle_left_neighbor_interference(gate, now):
+        if not gate._scan_mode:
+            return gate.reactor.NEVER
+        return gate.reactor.monotonic() + gate._scan_poll_interval
 
     if retry_poll:
         log_decode_retry_poll_result(gate, tag_found)
@@ -366,6 +377,149 @@ def current_tag_decode_incomplete(gate):
             and gate._state.current_spool is not DIRECT_METADATA_SPOOL):
         return False
     return bool(getattr(tag, 'read_incomplete', False))
+
+
+def read_uid_from_scan_event(gate):
+    event = getattr(gate, '_scan_found_event', None)
+    if event is not None and len(event) >= 3:
+        return event[2]
+    return gate._state.current_uid
+
+
+def read_spool_from_scan_event(gate):
+    event = getattr(gate, '_scan_found_event', None)
+    if event is not None and len(event) >= 4:
+        return event[3]
+    return gate._state.current_spool
+
+
+def known_uid_for_gate(gate, target_gate):
+    left_nfc = gate._nfc_gate_for_gate_number(target_gate)
+    if left_nfc is None:
+        return None
+    left_uid = getattr(left_nfc._state, 'current_uid', None)
+    if not left_uid:
+        return None
+
+    left_hh = hh_status.read(gate.printer, target_gate)
+    if left_hh.present and not left_hh.available:
+        return None
+    return left_uid
+
+
+def is_left_neighbor_interference(gate, uid):
+    if gate._gate <= 0 or not uid:
+        return False
+    left_uid = known_uid_for_gate(gate, gate._gate - 1)
+    return left_uid is not None and left_uid == uid
+
+
+def left_neighbor_already_shifted(gate, left_gate, uid):
+    return (
+        getattr(gate, '_scan_left_neighbor_shifted', False)
+        and getattr(gate, '_scan_left_neighbor_gate', -1) == left_gate
+        and getattr(gate, '_scan_left_neighbor_uid', None) == uid)
+
+
+def clear_false_scan_result(gate):
+    gate._scan_found_event = None
+    gate._state.current_uid = None
+    gate._state.current_spool = None
+    gate._state.current_tag = None
+    gate._state.miss_count = 0
+    gate._scan_decode_retry_attempts = 0
+    gate._scan_decode_retry_uid = None
+    gate._scan_decode_retry_offset = 0.0
+
+
+def shift_left_neighbor(gate, left_gate, uid):
+    gcode = gate.printer.lookup_object('gcode', None)
+    if gcode is None:
+        return False
+    try:
+        gcode.run_script(
+            "MMU_SELECT GATE=%d\n"
+            "MMU_TEST_MOVE MOVE=%.2f QUIET=1\n"
+            "M400\n"
+            "MMU_SELECT GATE=%d"
+            % (left_gate, LEFT_NEIGHBOR_CLEARANCE_MM, gate._gate))
+    except Exception as e:
+        logger.warning(
+            "nfc_gate: [%s] gate %d scan mode — failed to clear left "
+            "neighbor gate %d from reader field: %s",
+            gate._name, gate._gate, left_gate, e)
+        return False
+    gate._scan_left_neighbor_gate = left_gate
+    gate._scan_left_neighbor_shift_mm = LEFT_NEIGHBOR_CLEARANCE_MM
+    gate._scan_left_neighbor_shifted = True
+    gate._scan_left_neighbor_uid = uid
+    return True
+
+
+def restore_left_neighbor(gate):
+    if not getattr(gate, '_scan_left_neighbor_shifted', False):
+        return
+    left_gate = getattr(gate, '_scan_left_neighbor_gate', -1)
+    shift_mm = getattr(gate, '_scan_left_neighbor_shift_mm', 0.0)
+    gate._scan_left_neighbor_gate = -1
+    gate._scan_left_neighbor_shift_mm = 0.0
+    gate._scan_left_neighbor_shifted = False
+    gate._scan_left_neighbor_uid = None
+    if left_gate < 0 or shift_mm <= 0.0:
+        return
+    gcode = gate.printer.lookup_object('gcode', None)
+    if gcode is None:
+        return
+    try:
+        gcode.run_script(
+            "MMU_SELECT GATE=%d\n"
+            "MMU_TEST_MOVE MOVE=%.2f QUIET=1\n"
+            "M400\n"
+            "MMU_SELECT GATE=%d"
+            % (left_gate, -shift_mm, gate._gate))
+    except Exception as e:
+        logger.warning(
+            "nfc_gate: [%s] gate %d scan mode — failed to restore left "
+            "neighbor gate %d by %.1fmm: %s",
+            gate._name, gate._gate, left_gate, shift_mm, e)
+
+
+def handle_left_neighbor_interference(gate, now):
+    if not getattr(gate, '_scan_mode', False) or gate._gate <= 0:
+        return False
+
+    uid = read_uid_from_scan_event(gate)
+    if not uid or not is_left_neighbor_interference(gate, uid):
+        return False
+
+    left_gate = gate._gate - 1
+    spool = read_spool_from_scan_event(gate)
+    if left_neighbor_already_shifted(gate, left_gate, uid):
+        msg = (
+            "NFC[%d]: still reading left neighbor gate %d after %.0fmm "
+            "clearance; check reader position, tag placement, or lane spacing"
+            % (gate._gate, left_gate,
+               getattr(gate, '_scan_left_neighbor_shift_mm',
+                       LEFT_NEIGHBOR_CLEARANCE_MM)))
+        logger.warning("[WARN] %s", msg)
+        gate._console("[WARN] " + msg)
+        clear_false_scan_result(gate)
+        gate._rewind_and_exit_scan()
+        return True
+
+    logger.warning(
+        "nfc_gate: [%s] gate %d scan mode — uid=%s spool=%s belongs to "
+        "left neighbor gate %d; moving neighbor out of reader field",
+        gate._name, gate._gate, uid, spool, left_gate)
+    gate._console(
+        "[WARN] NFC[%d]: read left neighbor gate %d; clearing neighbor "
+        "from reader field" % (gate._gate, left_gate))
+    if not shift_left_neighbor(gate, left_gate, uid):
+        return False
+    clear_false_scan_result(gate)
+    gate._scan_next_chunk_time = (
+        gate.reactor.monotonic() + DECODE_RETRY_SETTLE_DELAY)
+    return True
 
 
 def reset_uid_only_read(gate, uid):
@@ -601,6 +755,7 @@ def finish(gate):
     logger.info(msg)
     gate._console(msg)
     gate._run_rewind()
+    restore_left_neighbor(gate)
     gate.__class__._active_scan_gate = None
     # Filament is back at the gate — dispatch the event that was suppressed during the jog.
     if gate._scan_found_event is not None:
@@ -635,6 +790,10 @@ def finish(gate):
     gate._scan_decode_retry_attempts = 0
     gate._scan_decode_retry_uid = None
     gate._scan_decode_retry_offset = 0.0
+    gate._scan_left_neighbor_gate = -1
+    gate._scan_left_neighbor_shift_mm = 0.0
+    gate._scan_left_neighbor_shifted = False
+    gate._scan_left_neighbor_uid = None
     gate._resume_poll_after_rewind()
 
 
@@ -645,6 +804,7 @@ def rewind_and_exit(gate):
     logger.warning(msg)
     gate._console(msg)
     gate._run_rewind()
+    restore_left_neighbor(gate)
     gate.__class__._active_scan_gate = None
     previous_uid = getattr(gate, '_scan_previous_uid', None)
     previous_spool = getattr(gate, '_scan_previous_spool', None)
@@ -666,6 +826,10 @@ def rewind_and_exit(gate):
     gate._scan_decode_retry_attempts = 0
     gate._scan_decode_retry_uid = None
     gate._scan_decode_retry_offset = 0.0
+    gate._scan_left_neighbor_gate = -1
+    gate._scan_left_neighbor_shift_mm = 0.0
+    gate._scan_left_neighbor_shifted = False
+    gate._scan_left_neighbor_uid = None
     gate._resume_poll_after_rewind()
 
 
