@@ -101,8 +101,9 @@ SSH to the Pi and clone the repo:
 
 ```bash
 cd ~
-git clone https://github.com/cwiegert/HH-RFID-Reaader.git emu-nfc-reader
+git clone --filter=blob:none --sparse git@github.com:<your-github-username>/NFC-Reader.git emu-nfc-reader
 cd ~/emu-nfc-reader
+git sparse-checkout set klippy config
 bash install.sh
 ```
 
@@ -128,7 +129,7 @@ Add the Moonraker update block to `moonraker.conf`:
 [update_manager emu_nfc_reader]
 type:             git_repo
 path:             ~/emu-nfc-reader
-origin:           https://github.com/cwiegert/HH-RFID-Reaader.git
+origin:           https://github.com/<your-github-username>/NFC-Reader.git
 primary_branch:   main
 managed_services: klipper
 install_script:   install.sh
