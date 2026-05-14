@@ -846,9 +846,11 @@ def finish(gate):
             meta = None
         gate._scan_found_event = None
         if event_type == 'changed' and meta is not None and spool is None:
-            gate._klipper.dispatch(event_type, g, uid, spool, meta=meta)
+            gate._klipper.dispatch(event_type, g, uid, spool, meta=meta,
+                                   scan_finish=True)
         else:
-            gate._poll_klipper_dispatch(event_type, g, uid, spool)
+            gate._poll_klipper_dispatch(event_type, g, uid, spool,
+                                        scan_finish=True)
         if event_type == 'changed' and spool is not None:
             gate._hh_load_paused = True
             gate._state.miss_count = 0

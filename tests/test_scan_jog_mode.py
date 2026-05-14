@@ -1619,8 +1619,9 @@ def test_rewind_and_exit_clears_scan_mode():
 class _DispatchCapture:
     def __init__(self):
         self.calls = []
-    def dispatch(self, event_type, gate, uid, spool, meta=None, auto_created=False):
-        self.calls.append((event_type, gate, uid, spool, meta))
+    def dispatch(self, event_type, gate, uid, spool, meta=None,
+                 auto_created=False, scan_finish=False):
+        self.calls.append((event_type, gate, uid, spool, meta, scan_finish))
 
 def test_finish_scan_metadata_direct_dispatches_meta():
     """5-tuple scan_found_event with meta=dict passes meta to klipper.dispatch."""
@@ -1639,6 +1640,7 @@ def test_finish_scan_metadata_direct_dispatches_meta():
     assert ev[2] == '04AABB'
     assert ev[3] is None
     assert ev[4] == meta
+    assert ev[5] is True
 
 def test_finish_scan_spool_id_dispatches_no_meta():
     """Normal spool_id event dispatches with meta=None."""
@@ -1649,7 +1651,7 @@ def test_finish_scan_spool_id_dispatches_no_meta():
 
     g._finish_scan()
 
-    assert g._klipper.calls == [('changed', 0, '04AABB', 42, None)]
+    assert g._klipper.calls == [('changed', 0, '04AABB', 42, None, True)]
     assert g._hh_load_paused
     assert g._hh_confirmed_spool == 42
 
@@ -1673,7 +1675,7 @@ def test_finish_scan_uid_only_event_dispatches_without_meta():
 
     g._finish_scan()
 
-    assert g._klipper.calls == [('uid_only', 0, '04AABB', None, None)]
+    assert g._klipper.calls == [('uid_only', 0, '04AABB', None, None, True)]
 
 
 # ── Approx helper (avoids pytest dependency for float comparison) ─────────────

@@ -298,7 +298,7 @@ Default:
 {% else %}
     MMU_GATE_MAP GATE={gate} [NAME=..] [MATERIAL=..] [COLOR=..] [TEMP=..] AVAILABLE=1 QUIET=1
 {% endif %}
-MMU_GATE_MAP GATE={gate} APPLY=1
+MMU_GATE_MAP GATE={gate} APPLY=1 QUIET=1
 ```
 
 `AUTO_CREATED=1` is set when the spool record was just created by `spoolman_auto_create`. The macro runs `MMU_SPOOLMAN REFRESH=1 QUIET=1` first so Happy Hare's Spoolman cache includes the new spool before the gate assignment is sent.
@@ -310,7 +310,7 @@ Called after `absent_threshold` consecutive missed polls. Parameter: `GATE`.
 Default:
 ```gcode
 MMU_GATE_MAP GATE={gate} SPOOLID=-1 AVAILABLE=0 SYNC=1 QUIET=1
-MMU_GATE_MAP GATE={gate} APPLY=1
+MMU_GATE_MAP GATE={gate} APPLY=1 QUIET=1
 ```
 
 ### `_NFC_TAG_NO_SPOOL`

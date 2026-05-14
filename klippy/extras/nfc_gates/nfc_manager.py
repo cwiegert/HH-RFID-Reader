@@ -775,7 +775,7 @@ class NFCGate:
         if self._gcode is not None:
             if self._failed:
                 self._gcode.respond_info(scan_jog._color_tags(
-                    "[WARN] NFC[%s]: reader not ready — check wiring. "
+                    "[WARN] NFC[%s]: not ready — check wiring. "
                     "Run NFC GATE=%d INIT=1 after fixing."
                     % (self._name, self._gate)))
             else:
@@ -783,7 +783,7 @@ class NFCGate:
                              if self._hh_seed_spool_id is not None
                              else "  HH reports gate empty")
                 self._gcode.respond_info(scan_jog._color_tags(
-                    "[OK] NFC[%s]: reader ready.%s  %s"
+                    "[OK] NFC[%s]: ready.%s  %s"
                     % (self._name,
                        seed_note,
                        "Startup polling is enabled; first poll in %.1fs."
@@ -1128,7 +1128,8 @@ class NFCGate:
             else:
                 self._poll_klipper_dispatch(event_type, gate, uid, spool)
 
-    def _poll_klipper_dispatch(self, event_type, gate, uid, spool):
+    def _poll_klipper_dispatch(self, event_type, gate, uid, spool,
+                               scan_finish=False):
         meta = None
         auto_created = False
         if event_type == EVENT_CHANGED and self._state.current_tag is not None:
@@ -1137,7 +1138,8 @@ class NFCGate:
             if self._state.current_spool is DIRECT_METADATA_SPOOL:
                 meta = self._state.current_tag.meta
         self._klipper.dispatch(event_type, gate, uid, spool,
-                               meta=meta, auto_created=auto_created)
+                               meta=meta, auto_created=auto_created,
+                               scan_finish=scan_finish)
         if event_type == EVENT_CHANGED and spool is not None:
             self._hh_confirmed_spool = spool
         elif event_type == EVENT_REMOVED:

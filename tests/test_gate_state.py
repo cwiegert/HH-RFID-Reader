@@ -940,6 +940,14 @@ def test_klipper_interface_changed_with_spool_id():
     ki.dispatch(EVENT_CHANGED, gate=0, uid_hex='04AABB', spool_id=42)
     assert gcode.scripts == ['_NFC_SPOOL_CHANGED GATE=0 SPOOL_ID=42 UID=04AABB']
 
+def test_klipper_interface_changed_with_spool_id_scan_finish():
+    ki, gcode = _make_ki()
+    ki.dispatch(EVENT_CHANGED, gate=0, uid_hex='04AABB', spool_id=42,
+                scan_finish=True)
+    assert gcode.scripts == [
+        '_NFC_SPOOL_CHANGED GATE=0 SPOOL_ID=42 UID=04AABB SCAN_FINISH=1'
+    ]
+
 def test_klipper_interface_changed_metadata_only_full_meta():
     ki, gcode = _make_ki()
     ki.dispatch(EVENT_CHANGED, gate=1, uid_hex='04AABB', spool_id=None,
@@ -987,6 +995,14 @@ def test_klipper_interface_uid_only():
     ki, gcode = _make_ki()
     ki.dispatch(EVENT_UID_ONLY, gate=2, uid_hex='04CCDD', spool_id=None)
     assert gcode.scripts == ['_NFC_TAG_NO_SPOOL GATE=2 UID=04CCDD']
+
+def test_klipper_interface_uid_only_scan_finish():
+    ki, gcode = _make_ki()
+    ki.dispatch(EVENT_UID_ONLY, gate=2, uid_hex='04CCDD', spool_id=None,
+                scan_finish=True)
+    assert gcode.scripts == [
+        '_NFC_TAG_NO_SPOOL GATE=2 UID=04CCDD SCAN_FINISH=1'
+    ]
 
 def test_klipper_interface_removed():
     ki, gcode = _make_ki()

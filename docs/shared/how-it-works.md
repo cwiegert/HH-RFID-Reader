@@ -28,8 +28,8 @@ If the physical spool was swapped while Klipper was down, the resolved spool_id 
 ### Startup console output
 
 ```
-✅ NFC[lane0]: reader ready.  HH seed: spool_id=42  Startup polling is enabled; first poll in 0.0s.
-✅ NFC[lane1]: reader ready.  HH reports gate empty  Run NFC GATE=1 READ=1 to start polling.
+✅ NFC[lane0]: ready.  HH seed: spool_id=42  Startup polling is enabled; first poll in 0.0s.
+✅ NFC[lane1]: ready.  HH reports gate empty  Run NFC GATE=1 READ=1 to start polling.
 ```
 
 The seed is one-shot — it fires at most once per lane per boot, on the first `CHANGED` event. If Happy Hare wasn't ready when the NFC init ran, the seed step is skipped and a manual `NFC_HH_SYNC_CACHE` re-syncs all lanes.
@@ -151,7 +151,7 @@ The default macro body for `_NFC_SPOOL_CHANGED` handles both paths:
 {% else %}
     MMU_GATE_MAP GATE={gate} [NAME=..] [MATERIAL=..] [COLOR=..] [TEMP=..] AVAILABLE=1 QUIET=1
 {% endif %}
-MMU_GATE_MAP GATE={gate} APPLY=1
+MMU_GATE_MAP GATE={gate} APPLY=1 QUIET=1
 ```
 
 You can edit `nfc_macros.cfg` to match your Happy Hare version without touching any Python.
