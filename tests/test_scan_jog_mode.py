@@ -216,6 +216,8 @@ def _make_gate(gate=0, scan_jog_mm=50.0, scan_max_mm=200.0,
     g._name               = 'test'
     g._gate               = gate
     g._debug              = 0
+    g._console_output     = True
+    g._console_log_level  = 4
     g._failed             = False
     g._polling            = True
     g._poll_interval      = 30.0
@@ -239,6 +241,7 @@ def _make_gate(gate=0, scan_jog_mm=50.0, scan_max_mm=200.0,
     g._scan_left_neighbor_shift_mm = 0.0
     g._scan_left_neighbor_shifted = False
     g._scan_left_neighbor_uid = None
+    g._scan_left_neighbor_attempts = 0
     g._scan_idle_ready_time = 0.0
     g._scan_found_event     = None
     g._scan_gate_selected   = False
@@ -1029,6 +1032,44 @@ def test_scan_step_issues_one_chunk_when_due():
     assert result == pytest_approx(100.5)
 
 
+def test_scan_step_move_trace_logs_only_at_debug_four():
+    from nfc_gates import scan_jog
+
+    messages = []
+    old_info = scan_jog.logger.info
+    scan_jog.logger.info = lambda msg, *args: messages.append(
+        msg % args if args else msg)
+    try:
+        g = _make_gate(gate=1, scan_jog_mm=50.0, scan_max_mm=200.0,
+                       scan_poll_interval=0.5)
+        g._debug = 3
+        g._scan_mode = True
+        g._scan_next_chunk_time = 100.0
+        g._scan_hh_prep_pending = False
+        g.printer.set_print_state('standby')
+        g.printer.set_mmu(MockMMU(gear_short_move_speed=80.0))
+        g._poll = lambda: False
+        g._scan_step_event(100.0)
+
+        assert not any('move queued' in msg for msg in messages)
+        messages[:] = []
+
+        g = _make_gate(gate=1, scan_jog_mm=50.0, scan_max_mm=200.0,
+                       scan_poll_interval=0.5)
+        g._debug = 4
+        g._scan_mode = True
+        g._scan_next_chunk_time = 100.0
+        g._scan_hh_prep_pending = False
+        g.printer.set_print_state('standby')
+        g.printer.set_mmu(MockMMU(gear_short_move_speed=80.0))
+        g._poll = lambda: False
+        g._scan_step_event(100.0)
+
+        assert any('move queued' in msg for msg in messages)
+    finally:
+        scan_jog.logger.info = old_info
+
+
 def test_scan_reads_per_position_before_substep_move():
     """Scan-jog reads a stopped position N times before the next substep."""
     g = _make_gate(gate=1, scan_jog_mm=50.0, scan_max_mm=200.0,
@@ -1306,6 +1347,57 @@ def test_rewind_skipped_when_nothing_jogged():
     assert len(g.printer.gcode_scripts) == 0
 
 
+def test_scan_jog_console_output_false_suppresses_non_errors():
+    g = _make_gate(gate=1)
+    g._console_output = False
+
+    g._console("[WARN] NFC[1]: warning")
+    g._console("[OK] NFC[1]: ok")
+    g._console("[ERROR] NFC[1]: error")
+
+    plain = [_strip_html(msg) for msg in g.printer._gcode.responses]
+    assert plain == ["[ERROR] NFC[1]: error"]
+
+
+def test_scan_jog_console_log_level_two_shows_warnings_only():
+    g = _make_gate(gate=1)
+    g._console_output = True
+    g._console_log_level = 2
+
+    g._console("[WARN] NFC[1]: warning")
+    g._console("[OK] NFC[1]: ok")
+    g._console("NFC[1]: moving 1.0mm")
+
+    plain = [_strip_html(msg) for msg in g.printer._gcode.responses]
+    assert plain == ["[WARN] NFC[1]: warning"]
+
+
+def test_scan_jog_console_log_level_three_shows_state_changes_not_trace():
+    g = _make_gate(gate=1)
+    g._console_output = True
+    g._console_log_level = 3
+
+    g._console("[SCAN] NFC[1]: starting")
+    g._console("[REWIND] NFC[1]: rewinding")
+    g._console("NFC[1]: moving 1.0mm")
+
+    plain = [_strip_html(msg) for msg in g.printer._gcode.responses]
+    assert plain == [
+        "[SCAN] NFC[1]: starting",
+        "[REWIND] NFC[1]: rewinding",
+    ]
+
+
+def test_scan_jog_console_log_level_four_shows_trace():
+    g = _make_gate(gate=1)
+    g._console_output = True
+    g._console_log_level = 4
+
+    g._console("NFC[1]: moving 1.0mm")
+
+    assert g.printer._gcode.responses == ["NFC[1]: moving 1.0mm"]
+
+
 # ── Left-neighbor interference ────────────────────────────────────────────────
 
 def test_left_neighbor_gate_zero_falls_through_to_finish():
@@ -1352,6 +1444,8 @@ def test_left_neighbor_matching_uid_shifts_neighbor_and_continues_scan():
     assert g._scan_left_neighbor_shifted
     assert g._scan_left_neighbor_gate == 0
     assert g._scan_left_neighbor_uid == 'LEFTUID'
+    assert g._scan_left_neighbor_attempts == 1
+    assert g._scan_left_neighbor_shift_mm == 75.0
     assert g._scan_found_event is None
     assert g._state.current_uid is None
     assert g._state.current_spool is None
@@ -1512,7 +1606,7 @@ def test_rewind_and_exit_restores_shifted_left_neighbor():
     assert not g._scan_left_neighbor_shifted
 
 
-def test_repeated_left_neighbor_hit_aborts_and_does_not_stack_clearance():
+def test_repeated_left_neighbor_hit_retries_clearance_before_abort():
     left = _make_gate(gate=0)
     left._state.current_uid = 'LEFTUID'
     g = _make_gate(gate=1)
@@ -1523,6 +1617,43 @@ def test_repeated_left_neighbor_hit_aborts_and_does_not_stack_clearance():
     g._scan_left_neighbor_shift_mm = 75.0
     g._scan_left_neighbor_shifted = True
     g._scan_left_neighbor_uid = 'LEFTUID'
+    g._scan_left_neighbor_attempts = 1
+    g._scan_found_event = ('changed', 1, 'LEFTUID', 10, None)
+    g._state.current_uid = 'LEFTUID'
+    g._state.current_spool = 10
+    g.printer.set_print_state('standby')
+    g._poll = lambda: True
+
+    old_lanes = list(_lane_instances)
+    try:
+        _lane_instances[:] = [left, g]
+        result = g._scan_step_event(100.0)
+    finally:
+        _lane_instances[:] = old_lanes
+
+    assert result == pytest_approx(100.5)
+    assert g._scan_mode
+    assert g._scan_left_neighbor_attempts == 2
+    assert g._scan_left_neighbor_shift_mm == 150.0
+    assert sum('MOVE=75.00' in s for s in g.printer.gcode_scripts) == 1
+    assert not any('MOVE=-75.00' in s for s in g.printer.gcode_scripts)
+    assert not any('MOVE=-20.00' in s for s in g.printer.gcode_scripts)
+    assert any('clearance move 2/3' in msg
+               for msg in g.printer._gcode.responses)
+
+
+def test_left_neighbor_hit_after_three_clearance_moves_aborts_with_error():
+    left = _make_gate(gate=0)
+    left._state.current_uid = 'LEFTUID'
+    g = _make_gate(gate=1)
+    g.printer.set_mmu(MockMMU(gate_status=[1, 1], gate_spool_id=[10, -1]))
+    g._scan_mode = True
+    g._scan_mm_total = 50.0
+    g._scan_left_neighbor_gate = 0
+    g._scan_left_neighbor_shift_mm = 225.0
+    g._scan_left_neighbor_shifted = True
+    g._scan_left_neighbor_uid = 'LEFTUID'
+    g._scan_left_neighbor_attempts = 3
     g._scan_found_event = ('changed', 1, 'LEFTUID', 10, None)
     g._state.current_uid = 'LEFTUID'
     g._state.current_spool = 10
@@ -1539,10 +1670,13 @@ def test_repeated_left_neighbor_hit_aborts_and_does_not_stack_clearance():
     assert result == g.reactor.NEVER
     assert not g._scan_mode
     assert sum('MOVE=75.00' in s for s in g.printer.gcode_scripts) == 0
-    assert any('MOVE=-75.00' in s for s in g.printer.gcode_scripts)
+    assert any('MOVE=-225.00' in s for s in g.printer.gcode_scripts)
     assert any('MOVE=-20.00' in s for s in g.printer.gcode_scripts)
-    assert any('still reading left neighbor gate 0' in msg
-               for msg in g.printer._gcode.responses)
+    plain_responses = [_strip_html(msg) for msg in g.printer._gcode.responses]
+    assert any('[ERROR] NFC[1]: left lane gate 0 is interfering' in msg
+               for msg in plain_responses)
+    assert any('[REWIND]' in msg and 'left neighbor gate 0' in msg
+               for msg in plain_responses)
 
 
 def test_disconnect_cleans_scan_state_and_restores_shifted_left_neighbor():

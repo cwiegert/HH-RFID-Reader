@@ -305,6 +305,8 @@ class NFCGate:
             config,
             d.console_output if d else False,
             d.console_log_level if d else 'warning')
+        self._console_output = console_output
+        self._console_log_level = console_log_level
         if d is None:
             log_file = config.get('log_file', '')
             configure(log_file, printer=self.printer,
@@ -419,6 +421,7 @@ class NFCGate:
         self._scan_left_neighbor_shift_mm = 0.0
         self._scan_left_neighbor_shifted = False
         self._scan_left_neighbor_uid = None
+        self._scan_left_neighbor_attempts = 0
         self._scan_idle_ready_time = 0.0
         self._scan_found_event     = None  # cached event suppressed during jog; dispatched after rewind
         self._prev_gate_status     = -1   # -1 = unknown; prevents false trigger on cold start

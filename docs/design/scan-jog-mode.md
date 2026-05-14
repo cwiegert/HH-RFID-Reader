@@ -132,6 +132,7 @@ self._scan_left_neighbor_gate = -1
 self._scan_left_neighbor_shift_mm = 0.0
 self._scan_left_neighbor_shifted = False
 self._scan_left_neighbor_uid = None
+self._scan_left_neighbor_attempts = 0
 
 # Trigger detection
 self._prev_gate_status     = -1        # -1 = cold start (no 0→1 false trigger)
@@ -260,12 +261,14 @@ left side of each lane, gate `N` can occasionally see the parked spool on gate
 
 When the match is confirmed, scan-jog selects the left gate, moves it forward
 75 mm, waits with `M400`, reselects the current gate, clears the false scan
-result, and continues scanning gate `N`. The current gate's
+result, and reads again. If the same left-neighbor UID is still visible, it may
+repeat that clearance move up to three total times. The current gate's
 `_scan_mm_total` is unchanged because the current spool did not move.
 
-If the same scan still reads the same left-neighbor UID after one clearance
-move, scan-jog warns, exits through the normal rewind path, and restores the
-left neighbor. It does not stack additional positive moves.
+If the reader still sees the same left-neighbor UID after the third clearance
+move and follow-up read, scan-jog emits an `[ERROR]`, exits through the normal
+rewind path, and restores the left neighbor by the accumulated clearance
+distance. It does not assign the neighbor spool to the current lane.
 
 Both successful and aborted scan exits call `restore_left_neighbor()` after the
 current gate rewind is queued:

@@ -79,6 +79,7 @@ from nfc_gates.gate_state import (
     CurrentTag, GateState, DIRECT_METADATA_SPOOL,
     EVENT_CHANGED, EVENT_UID_ONLY, EVENT_REMOVED)
 from nfc_gates.klipper_interface import KlipperInterface
+import nfc_gates.klipper_interface as klipper_interface
 from nfc_gates.nfc_manager import NFCGate
 import nfc_gates.tag_handler as tag_handler
 
@@ -947,6 +948,21 @@ def test_klipper_interface_changed_with_spool_id_scan_finish():
     assert gcode.scripts == [
         '_NFC_SPOOL_CHANGED GATE=0 SPOOL_ID=42 UID=04AABB SCAN_FINISH=1'
     ]
+
+def test_klipper_interface_debug_two_suppresses_info_log_file_chatter():
+    p = _MockPrinterKI()
+    ki = KlipperInterface(p, _ImmediateReactor(), debug=2)
+    messages = []
+    old_info = klipper_interface.logger.info
+    klipper_interface.logger.info = lambda msg, *args: messages.append(
+        msg % args if args else msg)
+    try:
+        ki.dispatch(EVENT_CHANGED, gate=0, uid_hex='04AABB', spool_id=42)
+    finally:
+        klipper_interface.logger.info = old_info
+
+    assert p._gcode.scripts == ['_NFC_SPOOL_CHANGED GATE=0 SPOOL_ID=42 UID=04AABB']
+    assert messages == []
 
 def test_klipper_interface_changed_metadata_only_full_meta():
     ki, gcode = _make_ki()
