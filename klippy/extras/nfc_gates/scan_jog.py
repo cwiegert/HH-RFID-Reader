@@ -168,6 +168,19 @@ def run_pending_hh_prep(gate):
     sync_spoolman_before_scan(gate)
 
 
+def clear_unresolved_scan(gate):
+    """Clear stale HH metadata when scan-jog ends without a spool id."""
+    gcode = gate.printer.lookup_object('gcode', None)
+    if gcode is None:
+        return
+    try:
+        gcode.run_script("_NFC_SCAN_UNRESOLVED GATE=%d" % gate._gate)
+    except Exception as e:
+        logger.warning(
+            "nfc_gate: [%s] gate %d scan mode — _NFC_SCAN_UNRESOLVED failed: %s",
+            gate._name, gate._gate, e)
+
+
 def get_active_gate(gate):
     """Return Happy Hare's currently selected gate, or -1 if unavailable."""
     hh = gate._read_hh_status()
@@ -886,6 +899,7 @@ def rewind_and_exit(gate):
     gate._console(msg)
     gate._run_rewind()
     restore_left_neighbor(gate)
+    clear_unresolved_scan(gate)
     gate.__class__._active_scan_gate = None
     previous_uid = getattr(gate, '_scan_previous_uid', None)
     previous_spool = getattr(gate, '_scan_previous_spool', None)

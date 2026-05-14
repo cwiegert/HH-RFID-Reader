@@ -379,7 +379,7 @@ Parameters:
 - `SPOOL_ID` — Spoolman spool ID (integer); present on Spoolman path only
 - `UID` — NFC tag UID (hex string); always present
 - `AUTO_CREATED` — `1` when `spoolman_auto_create` just created the spool record; absent otherwise
-- `SCAN_FINISH` — `1` when the event came from scan-jog after rewind; causes `_NFC_SCAN_FINISH` to list the HH gate map after the update
+- `SCAN_FINISH` — `1` when the event came from scan-jog after rewind; causes `_NFC_SCAN_FINISH` to dwell briefly, then list the HH gate map after the update
 - `NAME` — display name from `material_detail` or `material`, prefixed with brand/vendor/tag format when present; metadata path only
 - `MATERIAL` — filament material string from tag metadata (e.g. `PLA`, `ABS`); metadata path only
 - `COLOR` — color hex string from tag metadata (e.g. `FF0000`); metadata path only
@@ -439,13 +439,30 @@ _NFC_TAG_NO_SPOOL GATE=<gate> UID=<uid> [SCAN_FINISH=1]
 Parameters:
 - `GATE` — Happy Hare gate number
 - `UID` — the unrecognized tag UID
-- `SCAN_FINISH` — `1` when the event came from scan-jog after rewind; causes `_NFC_SCAN_FINISH` to list the HH gate map after the update
+- `SCAN_FINISH` — `1` when the event came from scan-jog after rewind; causes `_NFC_SCAN_FINISH` to dwell briefly, then list the HH gate map after the update
 
-Default behavior: prints a message to the console with the UID and instructions to register it.
+Default behavior: prints a message to the console with the UID and instructions to register it, clears stale visible filament fields, and keeps the gate loaded/available.
 
-**Optional:** If you want unregistered tags to clear the Happy Hare gate instead of just logging, add this line to the macro body:
 ```gcode
-MMU_GATE_MAP GATE={gate} SPOOLID=-1 SYNC=1 QUIET=1
+MMU_GATE_MAP GATE={gate} SPOOLID=-1 NAME=Unknown MATERIAL=Unknown COLOR=FFFFFF TEMP=0 AVAILABLE=1 SYNC=1 QUIET=1
+MMU_GATE_MAP GATE={gate} APPLY=1 QUIET=1
+```
+
+---
+
+### `_NFC_SCAN_UNRESOLVED`
+
+Fires after scan-jog rewinds when no tag/spool could be resolved. It clears stale visible Happy Hare filament metadata while keeping the gate loaded/available, then lists the gate map.
+
+```gcode
+_NFC_SCAN_UNRESOLVED GATE=<gate>
+```
+
+Default behavior:
+```gcode
+MMU_GATE_MAP GATE={gate} SPOOLID=-1 NAME=Unknown MATERIAL=Unknown COLOR=FFFFFF TEMP=0 AVAILABLE=1 SYNC=1 QUIET=1
+MMU_GATE_MAP GATE={gate} APPLY=1 QUIET=1
+_NFC_SCAN_FINISH GATE={gate}
 ```
 
 ---
@@ -463,6 +480,7 @@ _NFC_SPOOL_CHANGED GATE=0 UID=04AABBCCDD MATERIAL=PLA COLOR=FF0000 TEMP=215
 
 _NFC_SPOOL_REMOVED GATE=0
 _NFC_TAG_NO_SPOOL GATE=0 UID=04AABBCCDD
+_NFC_SCAN_UNRESOLVED GATE=0
 ```
 
 If Happy Hare updates correctly, the pipeline from macro inward is working. If it doesn't, check:

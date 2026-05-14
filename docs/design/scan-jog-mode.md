@@ -188,7 +188,9 @@ def start(gate, max_mm=None):
 
 `start()` marks HH prep pending instead of running it synchronously. The first scan timer step consumes `_scan_hh_prep_pending`, then calls `clear_hh_gate_cache` and `sync_spoolman_before_scan` before polling and before the first jog move. This keeps the required HH state updates while avoiding reentrant `gcode.run_script()` calls from inside the Happy Hare hook stack.
 
-`clear_hh_gate_cache` issues `_NFC_GATE_CLEAR_CACHE GATE=N`. That macro calls `MMU_GATE_MAP GATE=N SPOOLID=-1 NAME=Unknown MATERIAL=Unknown COLOR=FFFFFF00 AVAILABLE=1 QUIET=1`, so Happy Hare keeps the gate loaded while clearing stale spool metadata before scan-jog resolves the current spool.
+`clear_hh_gate_cache` issues `_NFC_GATE_CLEAR_CACHE GATE=N`. That macro calls `MMU_GATE_MAP GATE=N SPOOLID=-1 AVAILABLE=1 QUIET=1`, so Happy Hare keeps the gate loaded while clearing the stale spool assignment before scan-jog resolves the current spool. It deliberately does not write placeholder `NAME`, `MATERIAL`, or `COLOR` fields, because those can persist in Happy Hare after the real spool id is assigned.
+
+If scan-jog cannot resolve a spool id, stale filament metadata is cleared at the unresolved exit instead of at scan start. A tag that reads but has no Spoolman match dispatches `_NFC_TAG_NO_SPOOL ... SCAN_FINISH=1`; a scan that finds no tag calls `_NFC_SCAN_UNRESOLVED GATE=N` after rewind. Both paths clear `NAME`, `MATERIAL`, `COLOR`, and `TEMP`, then list the Happy Hare gate map.
 
 `sync_spoolman_before_scan` pushes the cleared HH gate state to Spoolman via `MMU_SPOOLMAN SYNC=1`, vacating the spool's location field before the jog begins.
 

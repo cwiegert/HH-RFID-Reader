@@ -31,10 +31,7 @@ def test_scan_jog_clear_cache_macro_is_defined():
     text = _macro_text()
 
     assert '[gcode_macro _NFC_GATE_CLEAR_CACHE]' in text
-    assert (
-        'MMU_GATE_MAP GATE={gate} SPOOLID=-1 NAME=Unknown '
-        'MATERIAL=Unknown COLOR=FFFFFF00 AVAILABLE=1 QUIET=1'
-    ) in text
+    assert 'MMU_GATE_MAP GATE={gate} SPOOLID=-1 AVAILABLE=1 QUIET=1' in text
 
 
 def test_core_nfc_event_macros_are_defined():
@@ -45,6 +42,7 @@ def test_core_nfc_event_macros_are_defined():
             '_NFC_SPOOL_REMOVED',
             '_NFC_TAG_NO_SPOOL',
             '_NFC_GATE_CLEAR_CACHE',
+            '_NFC_SCAN_UNRESOLVED',
             '_NFC_SCAN_FINISH'):
         assert '[gcode_macro %s]' % macro in text
 
@@ -60,12 +58,27 @@ def test_scan_finish_macro_lists_hh_gate_map():
     text = _macro_text()
 
     assert '_NFC_SCAN_FINISH GATE={gate}' in text
+    assert 'DWELL_MS' not in text
+    assert 'G4 P{dwell_ms}' not in text
     assert 'RESPOND PREFIX="NFC" MSG="scan-jog finished for gate {gate}; Happy Hare gate map:"' in text
     assert '\n    MMU_GATE_MAP\n' in text
 
 
-def test_ok_macro_messages_are_colorized():
+def test_scan_unresolved_macro_clears_stale_filament_fields():
     text = _macro_text()
 
-    assert '<span style="color:#90EE90">[OK]</span> NFC gate %d: spool %d detected' in text
-    assert '<span style="color:#90EE90">[OK]</span> NFC gate %d: tag metadata detected' in text
+    assert '[gcode_macro _NFC_SCAN_UNRESOLVED]' in text
+    assert (
+        'MMU_GATE_MAP GATE={gate} SPOOLID=-1 NAME=Unknown '
+        'MATERIAL=Unknown COLOR=FFFFFF TEMP=0 AVAILABLE=1 SYNC=1 QUIET=1'
+    ) in text
+    assert 'MMU_GATE_MAP GATE={gate} APPLY=1 QUIET=1' in text
+    assert '_NFC_SCAN_FINISH GATE={gate}' in text
+
+
+def test_ok_macro_messages_remain_plain_gcode_safe_text():
+    text = _macro_text()
+
+    assert '[OK] NFC gate %d: spool %d detected' in text
+    assert '[OK] NFC gate %d: tag metadata detected' in text
+    assert '<span' not in text

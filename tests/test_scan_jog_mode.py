@@ -320,6 +320,7 @@ def test_no_tag_scan_restores_previous_nfc_spool():
     assert g._state.current_uid == '04C19F92D32A81'
     assert g._state.current_spool == 55
     assert g._hh_load_paused
+    assert '_NFC_SCAN_UNRESOLVED GATE=0' in g.printer.gcode_scripts
 
 def test_finish_holds_lock_until_rewind_check_gate_runs():
     g = _make_gate(gate=2)
