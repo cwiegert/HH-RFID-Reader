@@ -16,6 +16,7 @@ LEFT_NEIGHBOR_CLEARANCE_RETRIES = 3
 def _color_tags(text):
     """Wrap console bracket tags with HTML color spans for the Klipper UI."""
     text = text.replace('[SCAN]',   '<span style="color:#FFA040">[SCAN]</span>')
+    text = text.replace('[MOVE]',   '<span style="color:#FFA040">[MOVE]</span>')
     text = text.replace('[WARN]',   '<span style="color:#FFFF00">[WARN]</span>')
     text = text.replace('[OK]',     '<span style="color:#90EE90">[OK]</span>')
     text = text.replace('[REWIND]', '<span style="color:#90EE90">[REWIND]</span>')
@@ -511,33 +512,31 @@ def restore_left_neighbor(gate):
     if not getattr(gate, '_scan_left_neighbor_shifted', False):
         return
     left_gate = getattr(gate, '_scan_left_neighbor_gate', -1)
-    shift_mm = getattr(gate, '_scan_left_neighbor_shift_mm', 0.0)
     gate._scan_left_neighbor_gate = -1
     gate._scan_left_neighbor_shift_mm = 0.0
     gate._scan_left_neighbor_shifted = False
     gate._scan_left_neighbor_uid = None
     gate._scan_left_neighbor_attempts = 0
-    if left_gate < 0 or shift_mm <= 0.0:
+    if left_gate < 0:
         return
     gcode = gate.printer.lookup_object('gcode', None)
     if gcode is None:
         return
-    msg = ("[REWIND] NFC[%d]: left neighbor gate %d rewinding %.1fmm "
-           "to park position" % (gate._gate, left_gate, shift_mm))
+    msg = ("[REWIND] NFC[%d]: parking left neighbor gate %d at gate sensor"
+           % (gate._gate, left_gate))
     logger.info(msg)
     gate._console(msg)
     try:
         gcode.run_script(
             "MMU_SELECT GATE=%d\n"
-            "MMU_TEST_MOVE MOVE=%.2f QUIET=1\n"
-            "M400\n"
+            "_MMU_STEP_UNLOAD_GATE\n"
             "MMU_SELECT GATE=%d"
-            % (left_gate, -shift_mm, gate._gate))
+            % (left_gate, gate._gate))
     except Exception as e:
         logger.warning(
             "nfc_gate: [%s] gate %d scan mode — failed to restore left "
-            "neighbor gate %d by %.1fmm: %s",
-            gate._name, gate._gate, left_gate, shift_mm, e)
+            "neighbor gate %d: %s",
+            gate._name, gate._gate, left_gate, e)
         gate._console(
             "[WARN] NFC[%d]: failed to restore left neighbor gate %d — "
             "move it back manually" % (gate._gate, left_gate))
@@ -545,8 +544,8 @@ def restore_left_neighbor(gate):
     if gate._debug >= 3:
         logger.info(
             "nfc_gate: [%s] gate %d scan mode — left neighbor gate %d "
-            "restored by %.1fmm",
-            gate._name, gate._gate, left_gate, shift_mm)
+            "parked at gate sensor",
+            gate._name, gate._gate, left_gate)
 
 
 def handle_left_neighbor_interference(gate):
@@ -588,9 +587,9 @@ def handle_left_neighbor_interference(gate):
         "left neighbor gate %d; moving neighbor out of reader field",
         gate._name, gate._gate, uid, spool, left_gate)
     gate._console(
-        "[WARN] NFC[%d]: read left neighbor gate %d; clearance move %d/%d "
-        "to clear neighbor from reader field"
-        % (gate._gate, left_gate, attempts + 1,
+        "[MOVE] NFC[%d]: uid=%s spool=%s belongs to left neighbor gate %d; "
+        "clearance move %d/%d to clear neighbor from reader field"
+        % (gate._gate, uid, spool, left_gate, attempts + 1,
            LEFT_NEIGHBOR_CLEARANCE_RETRIES))
     if not shift_left_neighbor(gate, left_gate, uid):
         msg = (
