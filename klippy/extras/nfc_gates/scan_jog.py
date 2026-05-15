@@ -604,6 +604,10 @@ def handle_left_neighbor_interference(gate):
     clear_false_scan_result(gate)
     gate._scan_next_chunk_time = (
         gate.reactor.monotonic() + DECODE_RETRY_SETTLE_DELAY)
+    msg = ("[SCAN] NFC[%s]: re-polling at position %.1fmm after left lane clearance"
+           % (gate._name.capitalize(), gate._scan_mm_total))
+    logger.info(msg)
+    gate._console(msg)
     return True
 
 

@@ -328,11 +328,11 @@ path = sys.argv[1]
 try:
     text = open(path, 'r').read()
 except FileNotFoundError:
-    print(5)
+    print(4)
     raise SystemExit
 
 count = len(re.findall(r'^\[nfc_gate lane\d+\]\s*$', text, flags=re.M))
-print(count or 5)
+print(count or 4)
 PYEOF
 }
 
