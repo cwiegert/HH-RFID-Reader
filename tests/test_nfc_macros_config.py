@@ -42,8 +42,7 @@ def test_core_nfc_event_macros_are_defined():
             '_NFC_SPOOL_REMOVED',
             '_NFC_TAG_NO_SPOOL',
             '_NFC_GATE_CLEAR_CACHE',
-            '_NFC_SCAN_UNRESOLVED',
-            '_NFC_SCAN_FINISH'):
+            '_NFC_SCAN_UNRESOLVED'):
         assert '[gcode_macro %s]' % macro in text
 
 
@@ -54,14 +53,14 @@ def test_state_changing_mmu_gate_map_calls_are_quiet():
             assert 'QUIET=1' in stripped
 
 
-def test_scan_finish_macro_lists_hh_gate_map():
+def test_scan_finish_does_not_dump_hh_gate_map():
     text = _macro_text()
 
-    assert '_NFC_SCAN_FINISH GATE={gate}' in text
+    assert '_NFC_SCAN_FINISH' not in text
     assert 'DWELL_MS' not in text
     assert 'G4 P{dwell_ms}' not in text
-    assert 'RESPOND PREFIX="NFC" MSG="scan-jog finished for gate {gate}; Happy Hare gate map:"' in text
-    assert '\n    MMU_GATE_MAP\n' in text
+    assert 'scan-jog finished for gate {gate}; Happy Hare gate map:' not in text
+    assert '\n    MMU_GATE_MAP\n' not in text
 
 
 def test_scan_unresolved_macro_clears_stale_filament_fields():
@@ -73,7 +72,6 @@ def test_scan_unresolved_macro_clears_stale_filament_fields():
         'MATERIAL=Unknown COLOR=FFFFFF TEMP=0 AVAILABLE=1 SYNC=1 QUIET=1'
     ) in text
     assert 'MMU_GATE_MAP GATE={gate} APPLY=1 QUIET=1' in text
-    assert '_NFC_SCAN_FINISH GATE={gate}' in text
 
 
 def test_ok_macro_messages_remain_plain_gcode_safe_text():

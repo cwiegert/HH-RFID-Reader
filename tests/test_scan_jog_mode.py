@@ -338,6 +338,28 @@ def test_finish_holds_lock_until_rewind_check_gate_runs():
     assert observed == [2]
     assert NFCGate._active_scan_gate is None
 
+def test_finish_reports_rewind_complete_to_console():
+    g = _make_gate(gate=2)
+    g._start_scan_mode()
+    g._scan_mm_total = 100.0
+
+    g._finish_scan()
+
+    responses = [_strip_html(r) for r in g.printer._gcode.responses]
+    assert any('NFC[Test]: rewind complete; gate parking handed to Happy Hare'
+               in r for r in responses)
+
+def test_rewind_and_exit_reports_rewind_complete_to_console():
+    g = _make_gate(gate=2)
+    g._start_scan_mode()
+    g._scan_mm_total = 100.0
+
+    g._rewind_and_exit_scan()
+
+    responses = [_strip_html(r) for r in g.printer._gcode.responses]
+    assert any('NFC[Test]: rewind complete; gate parking handed to Happy Hare'
+               in r for r in responses)
+
 def test_second_gate_blocked_when_lock_held():
     """When gate 0 holds the lock, gate 1 must not acquire it."""
     g0 = _make_gate(gate=0)
@@ -1490,12 +1512,8 @@ def test_finish_scan_restores_shifted_left_neighbor():
 
     g._finish_scan()
 
-    assert any(script == (
-        'MMU_SELECT GATE=1\n'
-        'MMU_TEST_MOVE MOVE=-75.00 QUIET=1\n'
-        'M400\n'
-        'MMU_SELECT GATE=2')
-        for script in g.printer.gcode_scripts)
+    assert 'MMU_SELECT GATE=1' in g.printer.gcode_scripts
+    assert '_MMU_STEP_UNLOAD_GATE\nMMU_SELECT GATE=2' in g.printer.gcode_scripts
     assert not g._scan_left_neighbor_shifted
 
 
@@ -1509,12 +1527,8 @@ def test_rewind_and_exit_restores_shifted_left_neighbor():
 
     g._rewind_and_exit_scan()
 
-    assert any(script == (
-        'MMU_SELECT GATE=1\n'
-        'MMU_TEST_MOVE MOVE=-75.00 QUIET=1\n'
-        'M400\n'
-        'MMU_SELECT GATE=2')
-        for script in g.printer.gcode_scripts)
+    assert 'MMU_SELECT GATE=1' in g.printer.gcode_scripts
+    assert '_MMU_STEP_UNLOAD_GATE\nMMU_SELECT GATE=2' in g.printer.gcode_scripts
     assert not g._scan_left_neighbor_shifted
 
 
@@ -1582,12 +1596,13 @@ def test_left_neighbor_hit_after_three_clearance_moves_aborts_with_error():
     assert result == g.reactor.NEVER
     assert not g._scan_mode
     assert sum('MOVE=75.00' in s for s in g.printer.gcode_scripts) == 0
-    assert any('MOVE=-225.00' in s for s in g.printer.gcode_scripts)
     assert any('MOVE=-20.00' in s for s in g.printer.gcode_scripts)
+    assert 'MMU_SELECT GATE=0' in g.printer.gcode_scripts
+    assert '_MMU_STEP_UNLOAD_GATE\nMMU_SELECT GATE=1' in g.printer.gcode_scripts
     plain_responses = [_strip_html(msg) for msg in g.printer._gcode.responses]
-    assert any('[ERROR] NFC[1]: left lane gate 0 is interfering' in msg
+    assert any('[ERROR] NFC[Test]: left lane gate 0 is interfering' in msg
                for msg in plain_responses)
-    assert any('[REWIND]' in msg and 'left neighbor gate 0' in msg
+    assert any('[REWIND]' in msg and 'NFC[Lane0]: parking at gate sensor' in msg
                for msg in plain_responses)
 
 
@@ -1611,12 +1626,8 @@ def test_disconnect_cleans_scan_state_and_restores_shifted_left_neighbor():
     assert g.reactor.timers[g._poll_timer][1] == g.reactor.NEVER
     assert g.reactor.timers[timer][1] == g.reactor.NEVER
     assert NFCGate._active_scan_gate is None
-    assert any(script == (
-        'MMU_SELECT GATE=1\n'
-        'MMU_TEST_MOVE MOVE=-75.00 QUIET=1\n'
-        'M400\n'
-        'MMU_SELECT GATE=2')
-        for script in g.printer.gcode_scripts)
+    assert 'MMU_SELECT GATE=1' in g.printer.gcode_scripts
+    assert '_MMU_STEP_UNLOAD_GATE\nMMU_SELECT GATE=2' in g.printer.gcode_scripts
 
 
 # ── Poll timer resume ─────────────────────────────────────────────────────────

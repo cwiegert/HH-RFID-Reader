@@ -867,6 +867,9 @@ def finish(gate):
     logger.info(msg)
     gate._console(msg)
     gate._run_rewind()
+    msg = _rewind_complete_message(gate)
+    logger.info(msg)
+    gate._console(msg)
     restore_left_neighbor(gate)
     gate.__class__._active_scan_gate = None
     # Filament is back at the gate — dispatch the event that was suppressed during the jog.
@@ -919,6 +922,9 @@ def rewind_and_exit(gate):
     logger.info(msg)
     gate._console(msg)
     gate._run_rewind()
+    msg = _rewind_complete_message(gate)
+    logger.info(msg)
+    gate._console(msg)
     restore_left_neighbor(gate)
     clear_unresolved_scan(gate)
     gate.__class__._active_scan_gate = None
@@ -990,6 +996,13 @@ def _rewind_message(gate, level, prefix=""):
     return ("%s NFC[%s]: %srewind fast move skipped "
             "(scan=%.1fmm buffer=%.1fmm)" % (
                 level, gate._name.capitalize(), prefix, scan_mm, buffer_mm))
+
+
+def _rewind_complete_message(gate):
+    scan_mm, buffer_mm, fast_rewind = _rewind_parts(gate)
+    return ("[REWIND] NFC[%s]: rewind complete; gate parking handed to "
+            "Happy Hare (rewound=%.1fmm scan=%.1fmm buffer=%.1fmm)" % (
+                gate._name.capitalize(), fast_rewind, scan_mm, buffer_mm))
 
 
 def run_rewind(gate):

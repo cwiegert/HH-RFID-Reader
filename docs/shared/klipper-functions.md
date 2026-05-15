@@ -379,7 +379,7 @@ Parameters:
 - `SPOOL_ID` — Spoolman spool ID (integer); present on Spoolman path only
 - `UID` — NFC tag UID (hex string); always present
 - `AUTO_CREATED` — `1` when `spoolman_auto_create` just created the spool record; absent otherwise
-- `SCAN_FINISH` — `1` when the event came from scan-jog after rewind; causes `_NFC_SCAN_FINISH` to dwell briefly, then list the HH gate map after the update
+- `SCAN_FINISH` — `1` when the event came from scan-jog after rewind; accepted as a compatibility marker by the default macros
 - `NAME` — display name from `material_detail` or `material`, prefixed with brand/vendor/tag format when present; metadata path only
 - `MATERIAL` — filament material string from tag metadata (e.g. `PLA`, `ABS`); metadata path only
 - `COLOR` — color hex string from tag metadata (e.g. `FF0000`); metadata path only
@@ -396,9 +396,6 @@ Default behavior:
     MMU_GATE_MAP GATE={gate} [NAME=..] [MATERIAL=..] [COLOR=..] [TEMP=..] AVAILABLE=1 QUIET=1
 {% endif %}
 MMU_GATE_MAP GATE={gate} APPLY=1 QUIET=1
-{% if scan_finish %}
-    _NFC_SCAN_FINISH GATE={gate}
-{% endif %}
 ```
 
 On the Spoolman path, `AVAILABLE=1` marks the gate as loaded and `SYNC=1` lets Happy Hare push the update to Spoolman. When `AUTO_CREATED=1`, `MMU_SPOOLMAN REFRESH=1 QUIET=1` runs first so Happy Hare's Spoolman cache includes the new spool before the gate assignment is sent. On the metadata path, whatever fields are present on the tag are forwarded to `MMU_GATE_MAP`. `APPLY=1` applies the updated map immediately on both paths.
@@ -439,7 +436,7 @@ _NFC_TAG_NO_SPOOL GATE=<gate> UID=<uid> [SCAN_FINISH=1]
 Parameters:
 - `GATE` — Happy Hare gate number
 - `UID` — the unrecognized tag UID
-- `SCAN_FINISH` — `1` when the event came from scan-jog after rewind; causes `_NFC_SCAN_FINISH` to dwell briefly, then list the HH gate map after the update
+- `SCAN_FINISH` — `1` when the event came from scan-jog after rewind; accepted as a compatibility marker by the default macro
 
 Default behavior: prints a message to the console with the UID and instructions to register it, clears stale visible filament fields, and keeps the gate loaded/available.
 
@@ -452,7 +449,7 @@ MMU_GATE_MAP GATE={gate} APPLY=1 QUIET=1
 
 ### `_NFC_SCAN_UNRESOLVED`
 
-Fires after scan-jog rewinds when no tag/spool could be resolved. It clears stale visible Happy Hare filament metadata while keeping the gate loaded/available, then lists the gate map.
+Fires after scan-jog rewinds when no tag/spool could be resolved. It clears stale visible Happy Hare filament metadata while keeping the gate loaded/available.
 
 ```gcode
 _NFC_SCAN_UNRESOLVED GATE=<gate>
@@ -462,7 +459,6 @@ Default behavior:
 ```gcode
 MMU_GATE_MAP GATE={gate} SPOOLID=-1 NAME=Unknown MATERIAL=Unknown COLOR=FFFFFF TEMP=0 AVAILABLE=1 SYNC=1 QUIET=1
 MMU_GATE_MAP GATE={gate} APPLY=1 QUIET=1
-_NFC_SCAN_FINISH GATE={gate}
 ```
 
 ---

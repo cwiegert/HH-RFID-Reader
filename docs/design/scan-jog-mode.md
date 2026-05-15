@@ -191,7 +191,7 @@ def start(gate, max_mm=None):
 
 `clear_hh_gate_cache` issues `_NFC_GATE_CLEAR_CACHE GATE=N`. That macro calls `MMU_GATE_MAP GATE=N SPOOLID=-1 AVAILABLE=1 QUIET=1`, so Happy Hare keeps the gate loaded while clearing the stale spool assignment before scan-jog resolves the current spool. It deliberately does not write placeholder `NAME`, `MATERIAL`, or `COLOR` fields, because those can persist in Happy Hare after the real spool id is assigned.
 
-If scan-jog cannot resolve a spool id, stale filament metadata is cleared at the unresolved exit instead of at scan start. A tag that reads but has no Spoolman match dispatches `_NFC_TAG_NO_SPOOL ... SCAN_FINISH=1`; a scan that finds no tag calls `_NFC_SCAN_UNRESOLVED GATE=N` after rewind. Both paths clear `NAME`, `MATERIAL`, `COLOR`, and `TEMP`, then list the Happy Hare gate map.
+If scan-jog cannot resolve a spool id, stale filament metadata is cleared at the unresolved exit instead of at scan start. A tag that reads but has no Spoolman match dispatches `_NFC_TAG_NO_SPOOL ... SCAN_FINISH=1`; a scan that finds no tag calls `_NFC_SCAN_UNRESOLVED GATE=N` after rewind. Both paths clear `NAME`, `MATERIAL`, `COLOR`, and `TEMP` without dumping the full Happy Hare gate map.
 
 `sync_spoolman_before_scan` pushes the cleared HH gate state to Spoolman via `MMU_SPOOLMAN SYNC=1`, vacating the spool's location field before the jog begins.
 
@@ -201,7 +201,7 @@ If scan-jog cannot resolve a spool id, stale filament metadata is cleared at the
 | Manual `NFC JOG_SCAN=1` | runs from scan timer | runs from scan timer |
 | HH post-preload hook | runs from scan timer | runs from scan timer |
 
-When the scan succeeds, `finish()` dispatches `_NFC_SPOOL_CHANGED ... SCAN_FINISH=1` after rewind. The macro assigns the identified spool, runs `MMU_SPOOLMAN SYNC=1`, then calls `_NFC_SCAN_FINISH`, which prints the current Happy Hare gate map via `MMU_GATE_MAP`.
+When the scan succeeds, `finish()` dispatches `_NFC_SPOOL_CHANGED ... SCAN_FINISH=1` after rewind. The macro assigns the identified spool and runs `MMU_SPOOLMAN SYNC=1`. `SCAN_FINISH` remains on the event as a compatibility marker, but the default macros do not print the full Happy Hare gate map.
 
 ### `step_event(gate, eventtime)` — the loop body
 
@@ -373,6 +373,7 @@ Scan-jog messages follow the standard debug level conventions:
 | `starting scan-jog (max=Xmm poll=Ys)` | `debug >= 3`; console always | ✅ | ❌ |
 | `scan-jog not available while reason` | warning (always) | ✅ | ✅ |
 | `tag identified — rewinding Xmm` | `info` (always) | ✅ | ❌ |
+| `rewind complete; gate parking handed to Happy Hare` | `info` (always) | ✅ | ❌ |
 | `no tag — jogged Xmm / Xmm` | `info` (always at each step) | ✅ | ❌ |
 | `print started — aborting` | warning (always) | ✅ | ✅ |
 | `no tag after Xmm — rewinding` | warning (always) | ✅ | ✅ |
