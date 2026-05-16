@@ -28,8 +28,8 @@ If the physical spool was swapped while Klipper was down, the resolved spool_id 
 ### Startup console output
 
 ```
-[OK] NFC[lane0]: reader ready.  HH seed: spool_id=42  Startup polling is enabled; first poll in 0.0s.
-[OK] NFC[lane1]: reader ready.  HH reports gate empty  Run NFC GATE=1 READ=1 to start polling.
+✅ NFC[lane0]: ready.  HH seed: spool_id=42  Startup polling is enabled; first poll in 0.0s.
+✅ NFC[lane1]: ready.  HH reports gate empty  Run NFC GATE=1 READ=1 to start polling.
 ```
 
 The seed is one-shot — it fires at most once per lane per boot, on the first `CHANGED` event. If Happy Hare wasn't ready when the NFC init ran, the seed step is skipped and a manual `NFC_HH_SYNC_CACHE` re-syncs all lanes.
@@ -68,6 +68,12 @@ The `(uid, spool_id)` combination check means that if the same physical tag is r
 ## Scan-and-Jog Flow
 
 When a spool is loaded, the NFC tag is on the hub face — it may be pointing any direction. The scan-jog loop rotates the spool until the tag comes within read range of the PN532 antenna.
+
+During this scan, the current gate also checks for a narrow physical edge case:
+if gate `N` reads a UID already cached on gate `N - 1`, the read is treated as
+left-neighbor interference. NFC briefly shifts the left neighbor out of the
+reader field, clears the false read, continues scanning gate `N`, and restores
+the neighbor when the scan exits.
 
 ### Trigger
 
@@ -131,7 +137,7 @@ NFC_Manager fires exactly one of these on a state change. They live in `nfc_macr
 
 | Macro | When | Parameters |
 |---|---|---|
-| `_NFC_SPOOL_CHANGED` | Tag resolved to a spool (Spoolman or metadata-direct) | `GATE`, `UID`; plus `SPOOL_ID` (Spoolman path) or `MATERIAL`/`COLOR`/`TEMP` (metadata path, each optional); `AUTO_CREATED=1` when spool was just created |
+| `_NFC_SPOOL_CHANGED` | Tag resolved to a spool (Spoolman or metadata-direct) | `GATE`, `UID`; plus `SPOOL_ID` (Spoolman path) or `NAME`/`MATERIAL`/`COLOR`/`TEMP` (metadata path, each optional); `AUTO_CREATED=1` when spool was just created |
 | `_NFC_SPOOL_REMOVED` | Tag absent for `absent_threshold` consecutive polls | `GATE` |
 | `_NFC_TAG_NO_SPOOL` | Tag read but UID not registered in Spoolman | `GATE`, `UID` |
 
@@ -143,9 +149,9 @@ The default macro body for `_NFC_SPOOL_CHANGED` handles both paths:
     {% endif %}
     MMU_GATE_MAP GATE={gate} SPOOLID={spool_id} AVAILABLE=1 SYNC=1 QUIET=1
 {% else %}
-    MMU_GATE_MAP GATE={gate} [MATERIAL=..] [COLOR=..] [TEMP=..] AVAILABLE=1 QUIET=1
+    MMU_GATE_MAP GATE={gate} [NAME=..] [MATERIAL=..] [COLOR=..] [TEMP=..] AVAILABLE=1 QUIET=1
 {% endif %}
-MMU_GATE_MAP GATE={gate} APPLY=1
+MMU_GATE_MAP GATE={gate} APPLY=1 QUIET=1
 ```
 
 You can edit `nfc_macros.cfg` to match your Happy Hare version without touching any Python.

@@ -25,6 +25,10 @@ class CurrentTag:
     meta: dict = field(default_factory=dict)
     parse_error: object = None
     resolution: object = None
+    read_incomplete: bool = False
+    read_retry_reason: object = None
+    mifare_auth_failed_sectors: object = field(default_factory=list)
+    mifare_read_failed_blocks: object = field(default_factory=list)
 
 
 class GateState:
@@ -53,12 +57,6 @@ class GateState:
     def current_spool(self, spool_id):
         self._current_spool = spool_id
         self._sync_current_tag()
-
-    def reset(self):
-        self._current_uid   = None
-        self._current_spool = None
-        self.current_tag    = None
-        self.miss_count     = 0
 
     def _sync_current_tag(self):
         if self._current_uid is None:
