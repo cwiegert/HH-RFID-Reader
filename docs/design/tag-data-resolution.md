@@ -380,9 +380,15 @@ current_tag.spool_id         # resolved Spoolman ID, or None
 current_tag.target_info      # PN532 target identity: ATQA/SAK/UID length/etc.
 current_tag.raw_tag_data     # raw pages or authenticated blocks when captured
 current_tag.meta             # adapted lameandboard/rfid metadata dict
+current_tag.spool_identity   # optional spool-level identity from metadata
 current_tag.parse_error      # parser/auth/read error summary when applicable
 current_tag.resolution       # final resolution path/result for debugging
 ```
+
+`spool_identity` is not the physical tag UID. It is an optional normalized value
+for factory formats that expose a stable spool-level identity across multiple
+physical tags on the same spool. Bambu stores this as `tray_uid`; the parser
+also exposes it as `spool_identity` with a `bambu_` prefix.
 
 With `tag_parsing: False`, `current_tag` only needs UID and resolved spool ID, matching today's behavior. Future metadata fields are additive; existing UID-only logic can ignore them.
 
