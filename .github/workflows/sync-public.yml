@@ -1,4 +1,4 @@
-name: NFC-Reader sych to Public Repo
+name: NFC-Reader sync to Public Repo
 
 on:
   push:
@@ -30,7 +30,7 @@ jobs:
           rm -f PR.md
 
       - name: Push to public repo
-        if: ${{ github.event.inputs.dry_run != 'true' }}
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.dry_run != true }}
         run: |
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
@@ -40,7 +40,7 @@ jobs:
           git push public main --force
 
       - name: Dry run — show files that would be pushed
-        if: ${{ github.event.inputs.dry_run == 'true' }}
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run == true }}
         run: |
           echo "=== Files that would be pushed to public repo ==="
           find . -not -path './.git/*' -not -name '.git' | sort
