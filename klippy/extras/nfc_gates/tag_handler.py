@@ -121,7 +121,7 @@ _META_SUMMARY_KEYS = (
     'tag_format', 'brand', 'vendor', 'material', 'material_detail',
     'material_id', 'material_variant_id', 'sku', 'color_hex',
     'diameter_mm', 'weight_g', 'spool_weight_g', 'min_temp', 'max_temp',
-    'bed_temp', 'drying_temp', 'drying_time_h', 'tray_uid',
+    'bed_temp', 'drying_temp', 'drying_time_h', 'tray_uid', 'spool_identity',
     'spoolman_id', 'parse_warning', 'parse_error', 'error',
 )
 
@@ -199,6 +199,13 @@ def _accepts_kwarg(callable_obj, name):
         if param.name == name:
             return True
     return False
+
+
+def _spool_identity_from_meta(meta):
+    if not isinstance(meta, dict):
+        return None
+    value = str(meta.get('spool_identity') or '').strip()
+    return value or None
 
 
 # ── Tag classification ────────────────────────────────────────────────────────
@@ -325,6 +332,7 @@ def parse_current_tag(gate, tag):
             info['uid'] = uid_hex
         if info is None:
             tag.meta = {'uid': uid_hex}
+            tag.spool_identity = None
             tag.parse_error = None
             if gate._debug >= 3:
                 logger.info(
@@ -332,6 +340,7 @@ def parse_current_tag(gate, tag):
                     gate._name, gate._gate, uid_hex)
         else:
             tag.meta = info
+            tag.spool_identity = _spool_identity_from_meta(info)
             tag.parse_error = info.get('parse_error') or info.get('error')
         if gate._debug >= 3:
             logger.info("nfc_gate: [%s] gate %d — uid=%s  parsed tag meta: %s",

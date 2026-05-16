@@ -11,6 +11,7 @@ No network calls are made. Method signatures are checked via inspect.
 parse_tag is exercised with synthetic in-process inputs only.
 """
 import inspect
+import importlib.util
 import json
 import sys
 import os
@@ -19,6 +20,18 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'klippy', 'extr
 
 from nfc_gates.vendor.rfid_tag_parser import parse_tag, is_parse_error
 from nfc_gates.vendor.lameandboard_spoolman import SpoolmanClient
+
+
+_EXTRAS = os.path.join(os.path.dirname(__file__), '..', 'klippy', 'extras')
+
+
+def _load_real_rfid_tag_parser():
+    path = os.path.join(_EXTRAS, 'nfc_gates', 'vendor', 'rfid_tag_parser.py')
+    spec = importlib.util.spec_from_file_location(
+        '_nfc_reader_real_rfid_tag_parser', path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 # ---------------------------------------------------------------------------
@@ -84,6 +97,22 @@ class TestParseTagContract:
     def test_parse_tag_result_is_dict_or_none(self):
         result = parse_tag(bytes(64), uid_hex='04001122334455')
         assert result is None or isinstance(result, dict)
+
+    def test_parse_tag_bambu_blocks_expose_spool_identity(self):
+        parser = _load_real_rfid_tag_parser()
+        tray_uid = 'BB9B88E7ED544C1B8FAA92972900E77B'
+        result = parser.parse_tag({
+            'uid_bytes': bytes.fromhex('6317B1A1'),
+            'blocks': {
+                1: b'A00-W1\x00\x00' + b'GFA00\x00\x00\x00',
+                2: b'PLA' + (b'\x00' * 13),
+                9: bytes.fromhex(tray_uid),
+            },
+        }, uid_hex='6317B1A1')
+
+        assert result['tag_format'] == 'bambu'
+        assert result['tray_uid'] == tray_uid
+        assert result['spool_identity'] == 'bambu_' + tray_uid
 
     def test_parse_tag_trace_callback_is_optional(self):
         events = []

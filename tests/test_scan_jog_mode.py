@@ -240,7 +240,7 @@ def _make_gate(gate=0, scan_jog_mm=50.0, scan_max_mm=200.0,
     g._scan_left_neighbor_gate = -1
     g._scan_left_neighbor_shift_mm = 0.0
     g._scan_left_neighbor_shifted = False
-    g._scan_left_neighbor_uid = None
+    g._scan_left_neighbor_identity = None
     g._scan_left_neighbor_attempts = 0
     g._scan_idle_ready_time = 0.0
     g._scan_found_event     = None
@@ -442,6 +442,34 @@ def test_status_line_colors_hh_available_with_html_span():
 
     assert '<span style="color:#90EE90">available</span>' in line
     assert 'HH: spool 55  available' in _strip_html(line)
+
+def test_status_line_metadata_direct_shows_spool_identity():
+    g = _make_gate()
+    g.printer.set_mmu(MockMMU(gate_status=[1], gate_spool_id=[-1]))
+    g._state.current_uid = '6317B1A1'
+    g._state.current_spool = DIRECT_METADATA_SPOOL
+    g._state.current_tag = CurrentTag(
+        uid='6317B1A1',
+        meta={'material': 'PLA', 'color_hex': 'FFFFFF',
+              'spool_identity': 'bambu_BB9B88'})
+    g._state.current_tag.spool_identity = 'bambu_BB9B88'
+
+    line = _strip_html(g.status_line())
+
+    assert 'metadata material=PLA color=FFFFFF spool_identity=bambu_BB9B88' in line
+
+def test_status_line_metadata_direct_shows_none_without_spool_identity():
+    g = _make_gate()
+    g.printer.set_mmu(MockMMU(gate_status=[1], gate_spool_id=[-1]))
+    g._state.current_uid = '04C19F92'
+    g._state.current_spool = DIRECT_METADATA_SPOOL
+    g._state.current_tag = CurrentTag(
+        uid='04C19F92',
+        meta={'material': 'PLA', 'color_hex': 'FF5500'})
+
+    line = _strip_html(g.status_line())
+
+    assert 'metadata material=PLA color=FF5500 spool_identity=None' in line
 
 def test_hh_found_without_spool_does_not_clear_nfc_cache():
     g = _make_gate()
@@ -1353,16 +1381,21 @@ def test_left_neighbor_gate_zero_falls_through_to_finish():
     assert not any('MOVE=75.00' in s for s in g.printer.gcode_scripts)
 
 
-def test_left_neighbor_matching_uid_shifts_neighbor_and_continues_scan():
+def test_left_neighbor_matching_spool_identity_shifts_neighbor_and_continues_scan():
     left = _make_gate(gate=0)
     left._state.current_uid = 'LEFTUID'
+    left._state.current_tag = CurrentTag(
+        uid='LEFTUID', meta={'spool_identity': 'bambu_TRAY'})
+    left._state.current_tag.spool_identity = 'bambu_TRAY'
     g = _make_gate(gate=1)
     g.printer.set_mmu(MockMMU(gate_status=[1, 1], gate_spool_id=[10, -1]))
     g._scan_mode = True
-    g._scan_found_event = ('changed', 1, 'LEFTUID', 10, None)
-    g._state.current_uid = 'LEFTUID'
+    g._scan_found_event = ('changed', 1, 'RIGHTUID', 10, None)
+    g._state.current_uid = 'RIGHTUID'
     g._state.current_spool = 10
-    g._state.current_tag = CurrentTag(uid='LEFTUID', spool_id=10)
+    g._state.current_tag = CurrentTag(
+        uid='RIGHTUID', spool_id=10, meta={'spool_identity': 'bambu_TRAY'})
+    g._state.current_tag.spool_identity = 'bambu_TRAY'
     g.printer.set_print_state('standby')
     g._poll = lambda: True
     finished = []
@@ -1379,7 +1412,7 @@ def test_left_neighbor_matching_uid_shifts_neighbor_and_continues_scan():
     assert result == pytest_approx(100.5)
     assert g._scan_left_neighbor_shifted
     assert g._scan_left_neighbor_gate == 0
-    assert g._scan_left_neighbor_uid == 'LEFTUID'
+    assert g._scan_left_neighbor_identity == 'bambu_TRAY'
     assert g._scan_left_neighbor_attempts == 1
     assert g._scan_left_neighbor_shift_mm == 75.0
     assert g._scan_found_event is None
@@ -1398,14 +1431,20 @@ def test_left_neighbor_matching_uid_shifts_neighbor_and_continues_scan():
 def test_left_neighbor_clearance_failure_aborts_without_assignment():
     left = _make_gate(gate=0)
     left._state.current_uid = 'LEFTUID'
+    left._state.current_tag = CurrentTag(
+        uid='LEFTUID', meta={'spool_identity': 'bambu_TRAY'})
+    left._state.current_tag.spool_identity = 'bambu_TRAY'
     g = _make_gate(gate=1)
     g.printer.set_mmu(MockMMU(gate_status=[1, 1], gate_spool_id=[10, -1]))
     g.printer._gcode.fail_on = 'MOVE=75.00'
     g._scan_mode = True
     g._scan_mm_total = 50.0
-    g._scan_found_event = ('changed', 1, 'LEFTUID', 10, None)
-    g._state.current_uid = 'LEFTUID'
+    g._scan_found_event = ('changed', 1, 'RIGHTUID', 10, None)
+    g._state.current_uid = 'RIGHTUID'
     g._state.current_spool = 10
+    g._state.current_tag = CurrentTag(
+        uid='RIGHTUID', spool_id=10, meta={'spool_identity': 'bambu_TRAY'})
+    g._state.current_tag.spool_identity = 'bambu_TRAY'
     g.printer.set_print_state('standby')
     g._poll = lambda: True
     dispatched = []
@@ -1430,14 +1469,20 @@ def test_left_neighbor_clearance_failure_aborts_without_assignment():
                for msg in g.printer._gcode.responses)
 
 
-def test_left_neighbor_nonmatching_uid_finishes_normally():
+def test_left_neighbor_nonmatching_spool_identity_finishes_normally():
     left = _make_gate(gate=0)
     left._state.current_uid = 'LEFTUID'
+    left._state.current_tag = CurrentTag(
+        uid='LEFTUID', meta={'spool_identity': 'bambu_LEFT'})
+    left._state.current_tag.spool_identity = 'bambu_LEFT'
     g = _make_gate(gate=1)
     g.printer.set_mmu(MockMMU(gate_status=[1, 1], gate_spool_id=[10, 20]))
     g._scan_mode = True
     g._scan_found_event = ('changed', 1, 'RIGHTUID', 20, None)
     g._state.current_uid = 'RIGHTUID'
+    g._state.current_tag = CurrentTag(
+        uid='RIGHTUID', meta={'spool_identity': 'bambu_RIGHT'})
+    g._state.current_tag.spool_identity = 'bambu_RIGHT'
     g.printer.set_print_state('standby')
     g._poll = lambda: True
     finished = []
@@ -1455,13 +1500,16 @@ def test_left_neighbor_nonmatching_uid_finishes_normally():
     assert not any('MOVE=75.00' in s for s in g.printer.gcode_scripts)
 
 
-def test_left_neighbor_without_cached_uid_finishes_normally():
+def test_left_neighbor_without_cached_spool_identity_finishes_normally():
     left = _make_gate(gate=0)
     g = _make_gate(gate=1)
     g.printer.set_mmu(MockMMU(gate_status=[1, 1], gate_spool_id=[10, 20]))
     g._scan_mode = True
     g._scan_found_event = ('changed', 1, 'RIGHTUID', 20, None)
     g._state.current_uid = 'RIGHTUID'
+    g._state.current_tag = CurrentTag(
+        uid='RIGHTUID', meta={'spool_identity': 'bambu_RIGHT'})
+    g._state.current_tag.spool_identity = 'bambu_RIGHT'
     g.printer.set_print_state('standby')
     g._poll = lambda: True
     finished = []
@@ -1479,14 +1527,20 @@ def test_left_neighbor_without_cached_uid_finishes_normally():
     assert not any('MOVE=75.00' in s for s in g.printer.gcode_scripts)
 
 
-def test_left_neighbor_hh_empty_vetoes_stale_cached_uid():
+def test_left_neighbor_hh_empty_vetoes_stale_cached_spool_identity():
     left = _make_gate(gate=0)
     left._state.current_uid = 'LEFTUID'
+    left._state.current_tag = CurrentTag(
+        uid='LEFTUID', meta={'spool_identity': 'bambu_TRAY'})
+    left._state.current_tag.spool_identity = 'bambu_TRAY'
     g = _make_gate(gate=1)
     g.printer.set_mmu(MockMMU(gate_status=[0, 1], gate_spool_id=[10, 20]))
     g._scan_mode = True
-    g._scan_found_event = ('changed', 1, 'LEFTUID', 10, None)
-    g._state.current_uid = 'LEFTUID'
+    g._scan_found_event = ('changed', 1, 'RIGHTUID', 10, None)
+    g._state.current_uid = 'RIGHTUID'
+    g._state.current_tag = CurrentTag(
+        uid='RIGHTUID', meta={'spool_identity': 'bambu_TRAY'})
+    g._state.current_tag.spool_identity = 'bambu_TRAY'
     g.printer.set_print_state('standby')
     g._poll = lambda: True
     finished = []
@@ -1510,7 +1564,7 @@ def test_finish_scan_restores_shifted_left_neighbor():
     g._scan_left_neighbor_gate = 1
     g._scan_left_neighbor_shift_mm = 75.0
     g._scan_left_neighbor_shifted = True
-    g._scan_left_neighbor_uid = 'LEFTUID'
+    g._scan_left_neighbor_identity = 'bambu_TRAY'
 
     g._finish_scan()
 
@@ -1525,7 +1579,7 @@ def test_rewind_and_exit_restores_shifted_left_neighbor():
     g._scan_left_neighbor_gate = 1
     g._scan_left_neighbor_shift_mm = 75.0
     g._scan_left_neighbor_shifted = True
-    g._scan_left_neighbor_uid = 'LEFTUID'
+    g._scan_left_neighbor_identity = 'bambu_TRAY'
 
     g._rewind_and_exit_scan()
 
@@ -1537,6 +1591,9 @@ def test_rewind_and_exit_restores_shifted_left_neighbor():
 def test_repeated_left_neighbor_hit_retries_clearance_before_abort():
     left = _make_gate(gate=0)
     left._state.current_uid = 'LEFTUID'
+    left._state.current_tag = CurrentTag(
+        uid='LEFTUID', meta={'spool_identity': 'bambu_TRAY'})
+    left._state.current_tag.spool_identity = 'bambu_TRAY'
     g = _make_gate(gate=1)
     g.printer.set_mmu(MockMMU(gate_status=[1, 1], gate_spool_id=[10, -1]))
     g._scan_mode = True
@@ -1544,11 +1601,14 @@ def test_repeated_left_neighbor_hit_retries_clearance_before_abort():
     g._scan_left_neighbor_gate = 0
     g._scan_left_neighbor_shift_mm = 75.0
     g._scan_left_neighbor_shifted = True
-    g._scan_left_neighbor_uid = 'LEFTUID'
+    g._scan_left_neighbor_identity = 'bambu_TRAY'
     g._scan_left_neighbor_attempts = 1
-    g._scan_found_event = ('changed', 1, 'LEFTUID', 10, None)
-    g._state.current_uid = 'LEFTUID'
+    g._scan_found_event = ('changed', 1, 'RIGHTUID', 10, None)
+    g._state.current_uid = 'RIGHTUID'
     g._state.current_spool = 10
+    g._state.current_tag = CurrentTag(
+        uid='RIGHTUID', spool_id=10, meta={'spool_identity': 'bambu_TRAY'})
+    g._state.current_tag.spool_identity = 'bambu_TRAY'
     g.printer.set_print_state('standby')
     g._poll = lambda: True
 
@@ -1573,6 +1633,9 @@ def test_repeated_left_neighbor_hit_retries_clearance_before_abort():
 def test_left_neighbor_hit_after_three_clearance_moves_aborts_with_error():
     left = _make_gate(gate=0)
     left._state.current_uid = 'LEFTUID'
+    left._state.current_tag = CurrentTag(
+        uid='LEFTUID', meta={'spool_identity': 'bambu_TRAY'})
+    left._state.current_tag.spool_identity = 'bambu_TRAY'
     g = _make_gate(gate=1)
     g.printer.set_mmu(MockMMU(gate_status=[1, 1], gate_spool_id=[10, -1]))
     g._scan_mode = True
@@ -1580,11 +1643,14 @@ def test_left_neighbor_hit_after_three_clearance_moves_aborts_with_error():
     g._scan_left_neighbor_gate = 0
     g._scan_left_neighbor_shift_mm = 225.0
     g._scan_left_neighbor_shifted = True
-    g._scan_left_neighbor_uid = 'LEFTUID'
+    g._scan_left_neighbor_identity = 'bambu_TRAY'
     g._scan_left_neighbor_attempts = 3
-    g._scan_found_event = ('changed', 1, 'LEFTUID', 10, None)
-    g._state.current_uid = 'LEFTUID'
+    g._scan_found_event = ('changed', 1, 'RIGHTUID', 10, None)
+    g._state.current_uid = 'RIGHTUID'
     g._state.current_spool = 10
+    g._state.current_tag = CurrentTag(
+        uid='RIGHTUID', spool_id=10, meta={'spool_identity': 'bambu_TRAY'})
+    g._state.current_tag.spool_identity = 'bambu_TRAY'
     g.printer.set_print_state('standby')
     g._poll = lambda: True
 
@@ -1615,7 +1681,7 @@ def test_disconnect_cleans_scan_state_and_restores_shifted_left_neighbor():
     g._scan_left_neighbor_gate = 1
     g._scan_left_neighbor_shift_mm = 75.0
     g._scan_left_neighbor_shifted = True
-    g._scan_left_neighbor_uid = 'LEFTUID'
+    g._scan_left_neighbor_identity = 'bambu_TRAY'
     g._scan_found_event = ('changed', 2, 'LEFTUID', 10, None)
 
     g._handle_disconnect()

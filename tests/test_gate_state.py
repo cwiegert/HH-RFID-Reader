@@ -118,6 +118,7 @@ def test_current_tag_tracks_spool_placed():
     assert isinstance(gs.current_tag, CurrentTag)
     assert gs.current_tag.uid == 'A3F200CC'
     assert gs.current_tag.spool_id == 1042
+    assert gs.current_tag.spool_identity is None
     assert gs.current_tag.meta == {}
 
 def test_same_spool_stays_silent():
@@ -667,6 +668,8 @@ def test_read_current_tag_mifare_reads_authenticated_blocks_when_keys_exist(monk
             'material': 'PLA',
             'brand': 'Bambu Lab',
             'tag_format': 'bambu',
+            'tray_uid': 'ABC123',
+            'spool_identity': 'bambu_ABC123',
         }
     monkeypatch.setattr(parser, 'parse_tag', _parse)
 
@@ -688,6 +691,7 @@ def test_read_current_tag_mifare_reads_authenticated_blocks_when_keys_exist(monk
     assert read_calls[0][3] == bytes([0x04, 0xAA, 0xBB, 0xCC])
     assert gate._state.current_tag.raw_tag_data is block_dump
     assert gate._state.current_tag.meta['tag_format'] == 'bambu'
+    assert gate._state.current_tag.spool_identity == 'bambu_ABC123'
     assert gate._state.current_tag.parse_error is None
 
 
@@ -841,6 +845,7 @@ def test_parse_tag_returns_none_yields_uid_only_meta():
     assert gate._read_current_tag() == '04AABB'
     tag = gate._state.current_tag
     assert tag.meta == {'uid': '04AABB'}
+    assert tag.spool_identity is None
     assert tag.parse_error is None
 
 

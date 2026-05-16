@@ -95,13 +95,15 @@ Scan-jog must not move the spool between UID detection and raw read completion.
 
 parse_tag(current_tag.raw_tag_data, uid_hex=uid)
   → metadata dict: { material, color_hex, min_temp, max_temp,
-                     bed_temp, spoolman_id?, brand?, ... }
+                     bed_temp, spoolman_id?, brand?, spool_identity?, ... }
   stored in current_tag.meta
 
 Parser runs from cached data — hardware no longer required.
 ```
 
 The metadata dict field names are the vendor library's output names. The adapter in `tag_handler.py` reads them by key and does not transform them before storing on `current_tag.meta`.
+
+`spool_identity` is an optional parser-supplied, spool-level identity string. It is distinct from the physical NFC tag UID: a single factory spool may carry multiple physical tags with different UIDs but the same spool identity. For Bambu tags this is derived from the structured `tray_uid` as `bambu_<tray_uid>`.
 
 ---
 
