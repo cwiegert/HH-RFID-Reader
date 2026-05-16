@@ -139,7 +139,9 @@ cd ~/emu-nfc-reader
 bash install.sh
 ```
 
-Add to `printer.cfg` — **order matters**:
+Add the matching includes to `printer.cfg` — **order matters**.
+
+Per-lane readers:
 
 ```ini
 [include nfc/nfc_reader.cfg]
@@ -147,12 +149,20 @@ Add to `printer.cfg` — **order matters**:
 [include nfc/nfc_reader_hw.cfg]
 ```
 
-For a shared-reader-only install, include `nfc_reader_shared.cfg` instead of
-`nfc_reader_hw.cfg`:
+Shared-reader-only:
 
 ```ini
 [include nfc/nfc_reader.cfg]
 [include nfc/nfc_macros.cfg]
+[include nfc/nfc_reader_shared.cfg]
+```
+
+Hybrid install with per-lane readers and a shared reader:
+
+```ini
+[include nfc/nfc_reader.cfg]
+[include nfc/nfc_macros.cfg]
+[include nfc/nfc_reader_hw.cfg]
 [include nfc/nfc_reader_shared.cfg]
 ```
 
@@ -170,7 +180,7 @@ Add the Moonraker update block to `moonraker.conf`:
 [update_manager emu_nfc_reader]
 type:             git_repo
 path:             ~/emu-nfc-reader
-origin:           https://github.com/cwiegert/HH-RFID-Reaader.git
+origin:           https://github.com/cwiegert/HH-RFID-Reader.git
 primary_branch:   main
 managed_services: klipper
 install_script:   install.sh

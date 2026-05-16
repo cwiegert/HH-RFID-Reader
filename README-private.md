@@ -107,12 +107,31 @@ git sparse-checkout set klippy config
 bash install.sh
 ```
 
-Add to `printer.cfg` — **order matters**:
+Add the matching includes to `printer.cfg` — **order matters**.
+
+Per-lane readers:
 
 ```ini
 [include nfc/nfc_reader.cfg]
 [include nfc/nfc_macros.cfg]
 [include nfc/nfc_reader_hw.cfg]
+```
+
+Shared-reader-only:
+
+```ini
+[include nfc/nfc_reader.cfg]
+[include nfc/nfc_macros.cfg]
+[include nfc/nfc_reader_shared.cfg]
+```
+
+Hybrid install with per-lane readers and a shared reader:
+
+```ini
+[include nfc/nfc_reader.cfg]
+[include nfc/nfc_macros.cfg]
+[include nfc/nfc_reader_hw.cfg]
+[include nfc/nfc_reader_shared.cfg]
 ```
 
 Set your Spoolman URL in `~/printer_data/config/nfc/nfc_reader.cfg`:
