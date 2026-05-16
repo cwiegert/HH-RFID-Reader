@@ -250,6 +250,8 @@ def _make_gate(gate=0, scan_jog_mm=50.0, scan_max_mm=200.0,
     g._scan_timer         = None
     g._prev_gate_status   = -1
     g._scan_pending      = False
+    g._shared             = False
+    g._shared_read_deadline = 0.0
     g._hh_load_paused     = False
     g._hh_confirmed_spool = None
     g._state              = GateState(gate)
