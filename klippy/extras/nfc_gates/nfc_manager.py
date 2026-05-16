@@ -420,7 +420,7 @@ class NFCGate:
         self._scan_left_neighbor_gate = -1
         self._scan_left_neighbor_shift_mm = 0.0
         self._scan_left_neighbor_shifted = False
-        self._scan_left_neighbor_uid = None
+        self._scan_left_neighbor_identity = None
         self._scan_left_neighbor_attempts = 0
         self._scan_idle_ready_time = 0.0
         self._scan_found_event     = None  # cached event suppressed during jog; dispatched after rewind

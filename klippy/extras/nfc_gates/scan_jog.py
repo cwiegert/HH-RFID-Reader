@@ -235,7 +235,7 @@ def start(gate, max_mm=None):
     gate._scan_left_neighbor_gate = -1
     gate._scan_left_neighbor_shift_mm = 0.0
     gate._scan_left_neighbor_shifted = False
-    gate._scan_left_neighbor_uid = None
+    gate._scan_left_neighbor_identity = None
     gate._scan_left_neighbor_attempts = 0
     gate._hh_seed_spool_id = None
     gate._hh_seed_available = False
@@ -420,17 +420,27 @@ def read_spool_from_scan_event(gate):
     return gate._state.current_spool
 
 
-def known_uid_for_gate(gate, target_gate):
+def current_spool_identity(gate):
+    tag = gate._state.current_tag
+    if tag is None:
+        return None
+    return getattr(tag, 'spool_identity', None) or None
+
+
+def spool_identity_for_gate(gate, target_gate):
     left_nfc = gate._nfc_gate_for_gate_number(target_gate)
     if left_nfc is None:
         if gate._debug >= 4:
             logger.debug("NFC[%s]: left gate %d has no NFC instance",
                          gate._name.capitalize(), target_gate)
         return None
-    left_uid = getattr(left_nfc._state, 'current_uid', None)
-    if not left_uid:
+    left_tag = getattr(left_nfc._state, 'current_tag', None)
+    left_identity = (
+        getattr(left_tag, 'spool_identity', None)
+        if left_tag is not None else None)
+    if not left_identity:
         if gate._debug >= 4:
-            logger.debug("NFC[%s]: left gate %d NFC cache has no uid",
+            logger.debug("NFC[%s]: left gate %d NFC cache has no spool_identity",
                          gate._name.capitalize(), target_gate)
         return None
 
@@ -438,27 +448,36 @@ def known_uid_for_gate(gate, target_gate):
     if left_hh.present and not left_hh.available:
         if gate._debug >= 3:
             logger.info(
-                "nfc_gate: [%s] gate %d — left gate %d uid=%s suppressed: "
-                "HH reports gate empty (status=%d)",
-                gate._name, gate._gate, target_gate, left_uid, left_hh.status)
+                "nfc_gate: [%s] gate %d - left gate %d spool_identity=%s "
+                "suppressed: HH reports gate empty (status=%d)",
+                gate._name, gate._gate, target_gate, left_identity,
+                left_hh.status)
         return None
     if gate._debug >= 4:
         logger.debug(
-            "NFC[%s]: left gate %d uid=%s hh_available=%s",
-            gate._name.capitalize(), target_gate, left_uid,
+            "NFC[%s]: left gate %d spool_identity=%s hh_available=%s",
+            gate._name.capitalize(), target_gate, left_identity,
             left_hh.available if left_hh.present else "hh-absent")
-    return left_uid
+    return left_identity
 
 
-def is_left_neighbor_interference(gate, uid):
-    if gate._gate <= 0 or not uid:
+def is_left_neighbor_spool_identity_match(gate):
+    if gate._gate <= 0:
         return False
-    left_uid = known_uid_for_gate(gate, gate._gate - 1)
-    result = left_uid is not None and left_uid == uid
+    identity = current_spool_identity(gate)
+    if not identity:
+        if gate._debug >= 4:
+            logger.debug(
+                "NFC[%s]: interference check skipped; current spool_identity unavailable",
+                gate._name.capitalize())
+        return False
+    left_identity = spool_identity_for_gate(gate, gate._gate - 1)
+    result = left_identity is not None and left_identity == identity
     if gate._debug >= 4:
         logger.debug(
-            "NFC[%s]: interference check uid=%s left_uid=%s → %s",
-            gate._name.capitalize(), uid, left_uid, "match" if result else "no match")
+            "NFC[%s]: interference check spool_identity=%s left_spool_identity=%s -> %s",
+            gate._name.capitalize(), identity, left_identity,
+            "match" if result else "no match")
     return result
 
 
@@ -473,7 +492,7 @@ def clear_false_scan_result(gate):
     gate._scan_decode_retry_offset = 0.0
 
 
-def shift_left_neighbor(gate, left_gate, uid):
+def shift_left_neighbor(gate, left_gate, identity):
     gcode = gate.printer.lookup_object('gcode', None)
     if gcode is None:
         return False
@@ -495,7 +514,7 @@ def shift_left_neighbor(gate, left_gate, uid):
         getattr(gate, '_scan_left_neighbor_shift_mm', 0.0)
         + LEFT_NEIGHBOR_CLEARANCE_MM)
     gate._scan_left_neighbor_shifted = True
-    gate._scan_left_neighbor_uid = uid
+    gate._scan_left_neighbor_identity = identity
     gate._scan_left_neighbor_attempts = (
         getattr(gate, '_scan_left_neighbor_attempts', 0) + 1)
     if gate._debug >= 3:
@@ -515,7 +534,7 @@ def restore_left_neighbor(gate):
     gate._scan_left_neighbor_gate = -1
     gate._scan_left_neighbor_shift_mm = 0.0
     gate._scan_left_neighbor_shifted = False
-    gate._scan_left_neighbor_uid = None
+    gate._scan_left_neighbor_identity = None
     gate._scan_left_neighbor_attempts = 0
     if left_gate < 0:
         return
@@ -552,22 +571,23 @@ def handle_left_neighbor_interference(gate):
         return False
 
     uid = read_uid_from_scan_event(gate)
-    if not uid or not is_left_neighbor_interference(gate, uid):
+    identity = current_spool_identity(gate)
+    if not uid or not is_left_neighbor_spool_identity_match(gate):
         if gate._debug >= 3 and uid:
             logger.info(
-                "nfc_gate: [%s] gate %d scan mode — read uid=%s, "
-                "no left-neighbor interference",
-                gate._name, gate._gate, uid)
+                "nfc_gate: [%s] gate %d scan mode — read uid=%s "
+                "spool_identity=%s, no left-neighbor interference",
+                gate._name, gate._gate, uid, identity)
         return False
 
     left_gate = gate._gate - 1
     spool = read_spool_from_scan_event(gate)
-    already_tracking_same_uid = (
+    already_tracking_same_identity = (
         getattr(gate, '_scan_left_neighbor_shifted', False)
         and getattr(gate, '_scan_left_neighbor_gate', -1) == left_gate
-        and getattr(gate, '_scan_left_neighbor_uid', None) == uid)
+        and getattr(gate, '_scan_left_neighbor_identity', None) == identity)
     attempts = getattr(gate, '_scan_left_neighbor_attempts', 0)
-    if already_tracking_same_uid and attempts >= LEFT_NEIGHBOR_CLEARANCE_RETRIES:
+    if already_tracking_same_identity and attempts >= LEFT_NEIGHBOR_CLEARANCE_RETRIES:
         msg = (
             "[ERROR] NFC[%s]: left lane gate %d is interfering with the "
             "current lane read after %d clearance moves (%.0fmm); check "
@@ -582,16 +602,16 @@ def handle_left_neighbor_interference(gate):
         return True
 
     logger.info(
-        "[MOVE] NFC[%s]: uid=%s spool=%s belongs to left neighbor gate %d; "
+        "[MOVE] NFC[%s]: uid=%s spool_identity=%s spool=%s belongs to left neighbor gate %d; "
         "clearance move %d/%d to clear neighbor from reader field",
-        gate._name.capitalize(), uid, spool, left_gate, attempts + 1,
+        gate._name.capitalize(), uid, identity, spool, left_gate, attempts + 1,
         LEFT_NEIGHBOR_CLEARANCE_RETRIES)
     gate._console(
-        "[MOVE] NFC[%s]: uid=%s spool=%s belongs to left neighbor gate %d; "
+        "[MOVE] NFC[%s]: uid=%s spool_identity=%s spool=%s belongs to left neighbor gate %d; "
         "clearance move %d/%d to clear neighbor from reader field"
-        % (gate._name.capitalize(), uid, spool, left_gate, attempts + 1,
+        % (gate._name.capitalize(), uid, identity, spool, left_gate, attempts + 1,
            LEFT_NEIGHBOR_CLEARANCE_RETRIES))
-    if not shift_left_neighbor(gate, left_gate, uid):
+    if not shift_left_neighbor(gate, left_gate, identity):
         msg = (
             "[WARN] NFC[%s]: failed to clear left neighbor gate %d; aborting scan "
             "to avoid assigning the neighbor spool"
@@ -630,7 +650,7 @@ def disconnect_cleanup(gate):
     gate._scan_left_neighbor_gate = -1
     gate._scan_left_neighbor_shift_mm = 0.0
     gate._scan_left_neighbor_shifted = False
-    gate._scan_left_neighbor_uid = None
+    gate._scan_left_neighbor_identity = None
     gate._scan_left_neighbor_attempts = 0
 
 
@@ -910,7 +930,7 @@ def finish(gate):
     gate._scan_left_neighbor_gate = -1
     gate._scan_left_neighbor_shift_mm = 0.0
     gate._scan_left_neighbor_shifted = False
-    gate._scan_left_neighbor_uid = None
+    gate._scan_left_neighbor_identity = None
     gate._scan_left_neighbor_attempts = 0
     gate._resume_poll_after_rewind()
 
@@ -951,7 +971,7 @@ def rewind_and_exit(gate):
     gate._scan_left_neighbor_gate = -1
     gate._scan_left_neighbor_shift_mm = 0.0
     gate._scan_left_neighbor_shifted = False
-    gate._scan_left_neighbor_uid = None
+    gate._scan_left_neighbor_identity = None
     gate._scan_left_neighbor_attempts = 0
     gate._resume_poll_after_rewind()
 
