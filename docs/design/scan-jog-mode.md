@@ -131,7 +131,7 @@ self._scan_found_event     = None      # cached event suppressed during jog; dis
 self._scan_left_neighbor_gate = -1
 self._scan_left_neighbor_shift_mm = 0.0
 self._scan_left_neighbor_shifted = False
-self._scan_left_neighbor_uid = None
+self._scan_left_neighbor_identity = None
 self._scan_left_neighbor_attempts = 0
 
 # Trigger detection
@@ -255,20 +255,27 @@ left side of each lane, gate `N` can occasionally see the parked spool on gate
 
 - only active during scan-jog
 - only checks the immediate left neighbor
-- only treats a read as interference when the read UID exactly matches the
-  left NFC gate object's cached UID
+- only treats a read as interference when both the current read and the left
+  NFC gate cache have a parser-supplied `spool_identity`, and those identities
+  match
 - never compares Spoolman spool IDs or Happy Hare display metadata
+
+This deliberately ignores physical NFC tag UID for the interference decision.
+Bambu AMS-style spools can carry two physical side tags with different NFC UIDs
+but the same parser-supplied `spool_identity` (`bambu_<tray_uid>`). If either
+side has no `spool_identity`, scan-jog treats that as no positive interference
+proof and continues normally.
 
 When the match is confirmed, scan-jog selects the left gate, moves it forward
 75 mm, waits with `M400`, reselects the current gate, clears the false scan
-result, and reads again. If the same left-neighbor UID is still visible, it may
-repeat that clearance move up to three total times. The current gate's
+result, and reads again. If the same left-neighbor spool identity is still
+visible, it may repeat that clearance move up to three total times. The current gate's
 `_scan_mm_total` is unchanged because the current spool did not move.
 
-If the reader still sees the same left-neighbor UID after the third clearance
-move and follow-up read, scan-jog emits an `[ERROR]`, exits through the normal
-rewind path, and restores the left neighbor by the accumulated clearance
-distance. It does not assign the neighbor spool to the current lane.
+If the reader still sees the same left-neighbor spool identity after the third
+clearance move and follow-up read, scan-jog emits an `[ERROR]`, exits through
+the normal rewind path, and restores the left neighbor by the accumulated
+clearance distance. It does not assign the neighbor spool to the current lane.
 
 Both successful and aborted scan exits call `restore_left_neighbor()` after the
 current gate rewind is queued:

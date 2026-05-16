@@ -128,8 +128,17 @@ Example output:
 NFC gate status  (5 gates configured):
   Gate 0:  empty   [not polling]  [HH: empty]
   Gate 1:  empty   [polling]  [HH: empty]
+  Gate 2:  tag 6317B1A1  metadata material=PLA color=FFFFFF spool_identity=bambu_BB9B88E7ED544C1B8FAA92972900E77B   [not polling]  [HH: found/no spool]
+  Gate 3:  tag 04C19F92  metadata material=PLA color=FF5500 spool_identity=None   [not polling]  [HH: found/no spool]
   Gate 4:  spool 43     UID 04456192D32A81   [polling]  [HH: spool 43]
 ```
+
+For metadata-direct tags, `spool_identity` is the parser's optional
+spool-level identity. It is distinct from the physical NFC tag UID. Bambu
+factory spools derive it from `tray_uid` as `bambu_<tray_uid>`, so the two
+physical side tags on the same spool can have different UIDs while sharing the
+same `spool_identity`. Tags without a parser-supplied spool identity display
+`spool_identity=None`.
 
 ---
 

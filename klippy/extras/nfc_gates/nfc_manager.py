@@ -462,7 +462,7 @@ class NFCGate:
         self._scan_left_neighbor_gate = -1
         self._scan_left_neighbor_shift_mm = 0.0
         self._scan_left_neighbor_shifted = False
-        self._scan_left_neighbor_uid = None
+        self._scan_left_neighbor_identity = None
         self._scan_left_neighbor_attempts = 0
         self._scan_idle_ready_time = 0.0
         self._scan_found_event     = None  # cached event suppressed during jog; dispatched after rewind
@@ -1659,14 +1659,21 @@ class NFCGate:
                 "  Gate %d:  empty   [%s]%s  [%s]"
                 % (self._gate, poll_state, sync_note, hh_label))
         if self._state.current_spool is DIRECT_METADATA_SPOOL:
-            meta = (self._state.current_tag.meta
-                    if self._state.current_tag is not None else {})
+            tag = self._state.current_tag
+            meta = tag.meta if tag is not None else {}
             material = (meta or {}).get('material', '')
             color = (meta or {}).get('color_hex', '')
+            spool_identity = (
+                getattr(tag, 'spool_identity', None)
+                if tag is not None else None)
+            if not spool_identity:
+                spool_identity = (meta or {}).get('spool_identity') or 'None'
             return _status_html_words(
-                "  Gate %d:  tag %s  metadata material=%s color=%s   [%s]%s  [%s]"
+                "  Gate %d:  tag %s  metadata material=%s color=%s "
+                "spool_identity=%s   [%s]%s  [%s]"
                 % (self._gate, self._state.current_uid,
-                   material, color, poll_state, sync_note, hh_label))
+                   material, color, spool_identity, poll_state, sync_note,
+                   hh_label))
         if self._state.current_spool is not None:
             return _status_html_words(
                 "  Gate %d:  spool %-2d  UID %s   [%s]%s   [%s]"

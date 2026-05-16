@@ -96,18 +96,19 @@ Spoolman spool before acting.
 
 Implemented order:
 
-1. Confirm a UID was read.
-2. Find the known UID for gate `N - 1` from the left NFC gate object.
-3. If the left gate has a known UID and it matches the read UID, treat the read
-   as interference immediately.
+1. Confirm gate `N` parsed a `spool_identity`.
+2. Find the known `spool_identity` for gate `N - 1` from the left NFC gate
+   object's `current_tag`.
+3. If the left gate has a known `spool_identity` and it matches the current
+   identity, treat the read as interference immediately.
 4. Discard the read, jog gate `N - 1` out of the reader field, and continue
    scan-jog for gate `N`.
-5. If the left UID is unavailable or does not match, fall out to the default
-   scan-jog behavior.
+5. If either identity is unavailable or they do not match, fall out to the
+   default scan-jog behavior.
 
-This avoids unnecessary Spoolman resolution for the common strong-match case.
-The UID comparison is both safer and more efficient: it answers "did this
-reader see the left physical tag?" directly.
+This avoids unnecessary Spoolman resolution for the strong-match case. The
+identity comparison answers "did this reader see the same factory spool as the
+left gate?" without relying on physical tag UIDs.
 
 Helper logic:
 
@@ -126,46 +127,47 @@ left_gate = gate._gate - 1
 if left_gate < 0:
     return False
 
-read_uid = read_uid_from_scan_event(gate)
-if read_uid is None:
+current_identity = current_spool_identity(gate)
+if current_identity is None:
     return False
 
-left_uid = known_uid_for_gate(gate, left_gate)
-if left_uid is not None and left_uid == read_uid:
+left_identity = spool_identity_for_gate(gate, left_gate)
+if left_identity is not None and left_identity == current_identity:
     return True
 ```
 
-The `known_uid_for_gate()` helper is cheap and conservative. Preferred source:
+The `spool_identity_for_gate()` helper is cheap and conservative. Preferred source:
 
-1. The left `NFCGate` instance cache, if it has `current_uid`.
+1. The left `NFCGate.current_tag.spool_identity`, if present.
 
 Happy Hare may be used as a safety check that the left gate is still physically
-loaded or available, but it should not be used to resolve the UID that gate `N`
-just read. Likewise, the first implementation should not fall back from
-`read_uid` to `spool_id` comparison. If the left NFC gate cache has no UID,
-there is no positive interference proof.
+loaded or available, but it should not be used to resolve identity. Likewise,
+the implementation must not fall back from `spool_identity` to `uid`,
+`spool_id`, material, color, or display metadata. If either side has no
+`spool_identity`, there is no positive interference proof.
 
-If no left UID can be established, or if the known left UID does not match the
-read UID, the mitigation should return `False` and let normal scan-jog continue.
-The resolved `spool_id` is useful for the normal assignment flow, but it is not
-the primary decision point for left-neighbor interference.
+If no left `spool_identity` can be established, or if the known left identity
+does not match the current identity, the mitigation should return `False` and
+let normal scan-jog continue. The resolved `spool_id` is useful for the normal
+assignment flow, but it is not the decision point for left-neighbor
+interference.
 
 ### Spoolman-disabled path
 
-When Spoolman is disabled, the same UID-first rule still applies. Do not invent
-a Happy Hare metadata convention just to smuggle the UID through display names.
-The NFC layer already owns per-gate state, and `NFC_STATUS` already shows each
-gate's cached UID from the `NFCGate` object.
+When Spoolman is disabled, the same `spool_identity` rule still applies. Do not
+invent a Happy Hare metadata convention just to smuggle identity through display
+names. The NFC layer already owns per-gate state, and `NFC_STATUS` shows each
+gate's cached `spool_identity` when parser metadata supplies one.
 
 Recommended order:
 
-1. Confirm a UID was read by gate `N`.
+1. Confirm gate `N` has `current_tag.spool_identity`.
 2. Resolve the left NFC gate object for `N - 1`.
-3. Read `left_gate._state.current_uid`.
-4. If the left NFC gate has a cached UID and it matches the read UID, treat the
-   read as interference immediately.
-5. If the left NFC gate has no cached UID, or the UID does not match, return
-   `False` and let normal scan-jog continue.
+3. Read `left_gate._state.current_tag.spool_identity`.
+4. If the left NFC gate has a cached `spool_identity` and it matches the
+   current identity, treat the read as interference immediately.
+5. If either side has no `spool_identity`, or the identities do not match,
+   return `False` and let normal scan-jog continue.
 
 This keeps the no-Spoolman path a corner case with the same core rule:
 
@@ -174,13 +176,14 @@ left_nfc = nfc_gate_for_gate_number(gate._gate - 1)
 if left_nfc is None:
     return False
 
-left_uid = left_nfc._state.current_uid
-return left_uid is not None and left_uid == read_uid
+left_identity = left_nfc._state.current_tag.spool_identity
+return left_identity is not None and left_identity == current_identity
 ```
 
 Happy Hare can still be used as a sanity check that the left lane is physically
-loaded or available, but HH does not need to carry the UID. The UID comparison
-should come from the NFC gate cache, not from gate names or display metadata.
+loaded or available, but HH does not need to carry the identity. Identity
+comparison comes from NFC parser metadata, not from gate names or display
+metadata.
 
 ## Mitigation Strategy
 
@@ -254,7 +257,7 @@ State on `NFCGate`:
 gate._scan_left_neighbor_gate = -1
 gate._scan_left_neighbor_shift_mm = 0.0
 gate._scan_left_neighbor_shifted = False
-gate._scan_left_neighbor_uid = None
+gate._scan_left_neighbor_identity = None
 gate._scan_left_neighbor_attempts = 0
 ```
 
@@ -271,7 +274,7 @@ def restore_left_neighbor(gate):
     gate._scan_left_neighbor_shifted = False
     gate._scan_left_neighbor_gate = -1
     gate._scan_left_neighbor_shift_mm = 0.0
-    gate._scan_left_neighbor_uid = None
+    gate._scan_left_neighbor_identity = None
 
     gcode = gate.printer.lookup_object('gcode')
     gcode.run_script(
@@ -320,29 +323,37 @@ This section describes the implemented first pass.
 Use exactly one positive interference rule:
 
 ```text
-gate N read UID X
-left NFC gate cache has current_uid Y
-X == Y  -> left-neighbor interference
-X != Y  -> normal scan-jog behavior
-Y empty -> normal scan-jog behavior
+gate N current_tag.spool_identity = X
+left NFC gate current_tag.spool_identity = Y
+X exists and Y exists and X == Y -> left-neighbor interference
+X missing or Y missing          -> normal scan-jog behavior
+X != Y                          -> normal scan-jog behavior
 ```
 
-Do not resolve the read UID to a Spoolman spool ID for interference detection.
-Do not compare the read spool ID to Happy Hare's left-gate spool ID. Do not
-inspect Happy Hare display names or metadata for UID information.
+This is deliberately conservative for dual-tag factory spools where the two
+physical tags have different UIDs. Bambu spools are one observed case: both side
+tags can parse to the same `spool_identity` (`bambu_<tray_uid>`) while exposing
+different physical NFC UIDs.
+
+Do not use physical tag UID as a fallback for this decision. Do not resolve the
+read UID to a Spoolman spool ID for interference detection. Do not compare the
+read spool ID to Happy Hare's left-gate spool ID. Do not inspect Happy Hare
+display names, material, color, or other metadata for identity information.
 
 ### Data Sources
 
-The current read UID comes from the current gate's scan state, in this order:
+The current identity comes from the current gate's parsed tag state:
 
-1. `gate._scan_found_event[2]`, if a deferred scan event exists
-2. `gate._state.current_uid`
+1. `gate._state.current_tag.spool_identity`
 
-The left UID comes from the left NFC gate object only:
+The left identity comes from the left NFC gate object only:
 
 ```python
 left_nfc = nfc_gate_for_gate_number(gate._gate - 1)
-left_uid = left_nfc._state.current_uid if left_nfc is not None else None
+left_identity = (
+    left_nfc._state.current_tag.spool_identity
+    if left_nfc is not None and left_nfc._state.current_tag is not None
+    else None)
 ```
 
 Happy Hare may be consulted only to reject stale left-cache data:
@@ -405,13 +416,14 @@ to Happy Hare, or finished.
 
 The handler should:
 
-1. Read the current scan UID.
+1. Read the current scan UID for logging and the current `spool_identity` for
+   identity matching.
 2. Return `False` for gate `0`.
-3. Return `False` if the current UID is empty.
-4. Read the left NFC gate object and its `current_uid`.
-5. Return `False` if the left UID is empty or does not match.
+3. Return `False` if the current `spool_identity` is empty.
+4. Read the left NFC gate object and its cached `spool_identity`.
+5. Return `False` if the left identity is empty or does not match.
 6. If the left neighbor was already shifted during this scan and the same left
-   gate/UID is still being read, log a fault, abort scan-jog, and return `True`.
+   gate/identity is still being read, log a fault, abort scan-jog, and return `True`.
 7. Log the interference decision.
 8. Move the left gate out of range. If the shift command fails, log the
    failure, clear no scan state, return `False`, and let normal scan-jog
@@ -446,20 +458,20 @@ Set restore state only after the shift command is successfully queued:
 gate._scan_left_neighbor_gate = left
 gate._scan_left_neighbor_shift_mm = 75.0
 gate._scan_left_neighbor_shifted = True
-gate._scan_left_neighbor_uid = uid
+gate._scan_left_neighbor_identity = spool_identity
 ```
 
 If the shift command raises, log a warning, clear no state, and return `False`
 so normal scan-jog behavior continues.
 
 Retry clearance moves conservatively. If `gate._scan_left_neighbor_shifted` is
-already `True` for the same left gate and UID, the implementation may call
-`MMU_TEST_MOVE MOVE=75.00` again until three total clearance moves have been
-queued. Each retry clears the false scan result and reads again before normal
-current-lane scan-jog movement resumes.
+already `True` for the same left gate and `spool_identity`, the implementation
+may call `MMU_TEST_MOVE MOVE=75.00` again until three total clearance moves
+have been queued. Each retry clears the false scan result and reads again
+before normal current-lane scan-jog movement resumes.
 
-If the same UID is still visible after the third clearance move and follow-up
-read, report an error and exit scan-jog:
+If the same `spool_identity` is still visible after the third clearance move
+and follow-up read, report an error and exit scan-jog:
 
 ```text
 [ERROR] NFC[<current>]: left lane gate <left> is interfering with the current lane read after 3 clearance moves (<mm>mm); check reader position, tag placement, or lane spacing
@@ -470,7 +482,8 @@ with `MMU_TEST_MOVE MOVE=-<total clearance>` and the current gate is rewound.
 
 ### False Read Cleanup
 
-After a confirmed left-neighbor UID match and successful left-gate shift, clear:
+After a confirmed left-neighbor `spool_identity` match and successful left-gate
+shift, clear:
 
 ```python
 gate._scan_found_event = None
@@ -528,7 +541,8 @@ Recommended additions:
 
 - `LEFT_NEIGHBOR_CLEARANCE_MM`
 - `handle_left_neighbor_interference(gate, now)`
-- `is_left_neighbor_interference(gate, uid, spool)`
+- `is_left_neighbor_spool_identity_match(gate)`
+- `spool_identity_for_gate(gate, target_gate)`
 - `shift_left_neighbor(gate)`
 - `restore_left_neighbor(gate)`
 - `clear_false_scan_result(gate)`
@@ -543,7 +557,7 @@ Add scan state fields in `NFCGate.__init__` so tests and status are explicit:
 self._scan_left_neighbor_gate = -1
 self._scan_left_neighbor_shift_mm = 0.0
 self._scan_left_neighbor_shifted = False
-self._scan_left_neighbor_uid = None
+self._scan_left_neighbor_identity = None
 ```
 
 Expose or reuse a small lookup helper for the existing NFC gate registry:
@@ -556,9 +570,9 @@ def nfc_gate_for_gate_number(gate_number):
     return None
 ```
 
-This helper lets scan-jog read the left gate's cached `current_uid` directly
-from the NFC gate object. That is the right source for UID identity; Happy Hare
-does not need a UID field for this mitigation.
+This helper lets scan-jog read the left gate's cached `current_tag` directly
+from the NFC gate object. Parser-supplied `spool_identity` is the source for
+this mitigation; Happy Hare does not need an identity field.
 
 No Happy Hare movement commands should be added here. Movement remains in
 `scan_jog.py`.
@@ -568,15 +582,15 @@ No Happy Hare movement commands should be added here. Movement remains in
 No display-name or metadata changes are required for this design.
 
 `hh_status.py` may still be used to verify the left lane is physically loaded or
-available before trusting a cached UID, but it should not be extended to carry
-UIDs through Happy Hare gate metadata.
+available before trusting a cached `spool_identity`, but it should not be
+extended to carry identity through Happy Hare gate metadata.
 
 ### `klipper_interface.py`
 
 No changes are required.
 
-Do not append UID suffixes to metadata names for this mitigation. Display names
-should remain display names; UID identity stays in the NFC gate cache.
+Do not append identity suffixes to metadata names for this mitigation. Display
+names should remain display names; spool identity stays in NFC parser metadata.
 
 ## Pseudocode
 
@@ -587,22 +601,15 @@ def handle_left_neighbor_interference(gate, now):
     if gate._gate <= 0:
         return False
 
-    event = getattr(gate, '_scan_found_event', None)
-    uid = None
-    spool = gate._state.current_spool
-    if event is not None and len(event) >= 4:
-        uid = event[2]
-        spool = event[3]
-    if uid is None:
-        uid = gate._state.current_uid
-    if uid is None:
+    identity = current_spool_identity(gate)
+    if identity is None:
         return False
 
-    if not is_left_neighbor_interference(gate, uid, spool):
+    if not is_left_neighbor_spool_identity_match(gate):
         return False
 
     left_gate = gate._gate - 1
-    if left_neighbor_already_shifted(gate, left_gate, uid) and attempts >= 3:
+    if left_neighbor_already_shifted(gate, left_gate, identity) and attempts >= 3:
         msg = (
             "[ERROR] NFC[%d]: left lane gate %d is interfering with the "
             "current lane read after %d clearance moves"
@@ -614,9 +621,9 @@ def handle_left_neighbor_interference(gate, now):
         return True
 
     logger.warning(
-        "nfc_gate: [%s] gate %d scan mode - uid=%s spool=%s belongs "
+        "nfc_gate: [%s] gate %d scan mode - spool_identity=%s belongs "
         "to left neighbor gate %d; moving neighbor out of reader field",
-        gate._name, gate._gate, uid, spool, left_gate)
+        gate._name, gate._gate, identity, left_gate)
 
     if not shift_left_neighbor(gate):
         return False
@@ -626,39 +633,49 @@ def handle_left_neighbor_interference(gate, now):
     return True
 
 
-def left_neighbor_already_shifted(gate, left_gate, uid):
+def left_neighbor_already_shifted(gate, left_gate, identity):
     return (
         gate._scan_left_neighbor_shifted
         and gate._scan_left_neighbor_gate == left_gate
-        and gate._scan_left_neighbor_uid == uid)
+        and gate._scan_left_neighbor_identity == identity)
 
 
-def is_left_neighbor_interference(gate, uid, spool):
+def current_spool_identity(gate):
+    tag = gate._state.current_tag
+    return getattr(tag, 'spool_identity', None) if tag is not None else None
+
+
+def is_left_neighbor_spool_identity_match(gate):
     if gate._gate <= 0:
         return False
-    if uid is None:
+    identity = current_spool_identity(gate)
+    if identity is None:
         return False
 
     left_gate = gate._gate - 1
-    left_uid = known_uid_for_gate(gate, left_gate)
-    if left_uid is None:
+    left_identity = spool_identity_for_gate(gate, left_gate)
+    if left_identity is None:
         return False
 
-    return left_uid == uid
+    return left_identity == identity
 
 
-def known_uid_for_gate(gate, target_gate):
+def spool_identity_for_gate(gate, target_gate):
     left_nfc = gate._nfc_gate_for_gate_number(target_gate)
-    if left_nfc is None or not left_nfc._state.current_uid:
+    left_tag = left_nfc._state.current_tag if left_nfc is not None else None
+    left_identity = (
+        getattr(left_tag, 'spool_identity', None)
+        if left_tag is not None else None)
+    if left_identity is None:
         return None
 
     # Optional stale-cache guard. HH is not used to resolve identity; it can
-    # only veto a cached left UID when it clearly says the left gate is empty.
+    # only veto cached left metadata when it clearly says the left gate is empty.
     left = hh_status.read(gate.printer, target_gate)
     if left.present and not left.available:
         return None
 
-    return left_nfc._state.current_uid
+    return left_identity
 ```
 
 ## Tests
@@ -670,10 +687,10 @@ Add tests to:
 Recommended cases:
 
 - gate `0` never checks a left neighbor
-- Spoolman-enabled read matching the known left UID shifts left and does not finish
+- read matching the known left `spool_identity` shifts left and does not finish
   scan
-- Spoolman-enabled read not matching the known left UID finishes normally
-- Spoolman-enabled read with no known left UID falls through to normal scan-jog
+- read with a different left `spool_identity` finishes normally
+- read with no known left `spool_identity` falls through to normal scan-jog
   behavior
 - left gate assigned but not available does not trigger mitigation
 - after interference, false `_scan_found_event` and `GateState` values are
@@ -683,10 +700,7 @@ Recommended cases:
 - repeated left-neighbor hits after the first clearance do not issue another
   `MOVE=75.00`; they warn, abort scan-jog, restore the neighbor, and rewind the
   current gate
-- Spoolman-disabled read matching the left NFC gate object's cached UID shifts
-  left and does not finish scan
-- Spoolman-disabled read with no cached left UID falls through to normal
-  scan-jog behavior
+- Spoolman-disabled reads use the same parser-supplied `spool_identity` rule
 
 The tests should assert emitted GCode order, especially:
 
@@ -708,15 +722,17 @@ MMU_SELECT GATE=<current>
 
 ## Risks and Notes
 
-- The no-Spoolman path depends on the left NFC gate object having a current UID
-  in its cache. If it does not, the mitigation should degrade gracefully by
-  returning `False` and letting normal scan-jog continue.
+- The no-Spoolman path depends on parser metadata having supplied
+  `spool_identity` for both the current and left NFC gate objects. If either is
+  missing, the mitigation should degrade gracefully by returning `False` and
+  letting normal scan-jog continue.
 - Moving the left neighbor assumes all lanes are parked or empty. The existing
   scan-jog preflight is therefore part of this feature's safety case.
-- If the reader still sees the same left-neighbor UID after a 75mm clearance
-  move, the problem is likely mechanical placement, reader field overlap, tag
-  placement, or lane spacing. The implementation should surface that condition
-  clearly and stop the scan instead of pushing the neighbor farther out.
+- If the reader still sees the same left-neighbor `spool_identity` after a 75mm
+  clearance move, the problem is likely mechanical placement, reader field
+  overlap, tag placement, or lane spacing. The implementation should surface
+  that condition clearly and stop the scan instead of pushing the neighbor
+  farther out.
 - The mitigation should be conservative about what counts as interference.
   False positives move a neighboring parked spool unnecessarily. False
   negatives preserve current behavior.

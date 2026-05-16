@@ -23,6 +23,7 @@ class CurrentTag:
     target_info: object = None
     raw_tag_data: object = None
     meta: dict = field(default_factory=dict)
+    spool_identity: object = None
     parse_error: object = None
     resolution: object = None
     read_incomplete: bool = False

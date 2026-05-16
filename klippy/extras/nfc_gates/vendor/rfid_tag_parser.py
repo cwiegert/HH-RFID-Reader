@@ -827,6 +827,7 @@ def _parse_bambu_blocks(blocks: dict) -> Optional[dict]:
         info["material_variant_id"] = material_variant_id
     if tray_uid:
         info["tray_uid"] = tray_uid
+        info["spool_identity"] = "bambu_%s" % tray_uid
     if production_date:
         info["production_date"] = production_date
     if filament_length_m is not None:
