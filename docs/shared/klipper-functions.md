@@ -12,6 +12,7 @@ For shared reader console and `nfc_reader.log` messages, see [Message Definition
 
 | Command | What it does |
 |---|---|
+| `NFC_HELP` | Show global NFC command help; add `ADVANCED=1 CALLBACKS=1 LOW_LEVEL=1` for the full command set |
 | `NFC_STATUS` | Show current state of every configured gate (includes shared reader if configured) |
 | `NFC GATE=<n> STATUS=1` | Show one gate's state |
 | `NFC GATE=<n> INIT=1` | Initialize (or re-initialize) the PN532 reader |
@@ -22,7 +23,7 @@ For shared reader console and `nfc_reader.log` messages, see [Message Definition
 | `NFC GATE=<n> CLEAR_CACHE=1` | Clear cached spool, force fresh Spoolman lookup |
 | `NFC GATE=<n> READ=1` | Start background polling |
 | `NFC GATE=<n> READ=0` | Stop background polling |
-| `NFC GATE=<n> HELP=1` | Show available commands |
+| `NFC GATE=<n> HELP=1` | Show available commands for one per-lane reader |
 | `NFC_HH_SYNC_CACHE` | Re-seed all lane caches from the current Happy Hare gate map |
 | `NFC GATE=<n> HH_SYNC=1 SPOOL_ID=<n>` | Seed one lane's cache directly (called by `NFC_HH_SYNC_CACHE`) |
 | `NFC_SHARED READ=1` | Start shared polling manually; rejected while printing |
@@ -63,6 +64,26 @@ For shared reader console and `nfc_reader.log` messages, see [Message Definition
 | `NFC GATE=<n> RAW_READ=1 LEN=<n>` | Read exactly N raw bytes |
 | `NFC GATE=<n> RAW_WRITE=<hex>` | Write raw bytes (no framing added) |
 | `NFC GATE=<n> RAW_CMD=<hex>` | Build and send a complete PN532 command frame |
+
+---
+
+## Help Commands
+
+Use `NFC_HELP` the same way you use Happy Hare's `MMU_HELP`: run it by itself
+for the everyday command list, or add flags to include less-common sections.
+
+```gcode
+NFC_HELP
+NFC_HELP ADVANCED=1 CALLBACKS=1 LOW_LEVEL=1
+```
+
+`NFC_HELP` shows shared-reader commands only when `[nfc_gate shared]` is
+configured. Per-reader help is still available for focused command lists:
+
+```gcode
+NFC GATE=0 HELP=1
+NFC_SHARED HELP=1
+```
 
 ---
 

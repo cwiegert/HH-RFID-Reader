@@ -215,6 +215,8 @@ See [Install & Uninstall](docs/shared/install-uninstall.md) for the complete fir
 These are the commands you'll actually use at the Fluidd/Mainsail console:
 
 ```gcode
+NFC_HELP                      ; show everyday command help
+NFC_HELP ADVANCED=1 CALLBACKS=1 LOW_LEVEL=1  ; show the full command set
 NFC_STATUS                    ; see all gates at a glance
 NFC GATE=0 SCAN=1             ; read a tag and show its UID
 NFC GATE=0 POLL=1             ; full cycle: read → Spoolman → Happy Hare

@@ -69,6 +69,12 @@ class GateState:
             return
         self.current_tag.spool_id = self._current_spool
 
+    def reset(self):
+        self._current_uid = None
+        self._current_spool = None
+        self.current_tag = None
+        self.miss_count = 0
+
     def process_read(self, uid_hex, spool_id, scan_mode=False):
         if uid_hex is not None:
             self.miss_count = 0

@@ -43,7 +43,7 @@ These apply to both per-lane readers and the shared reader.
 | Manual polling stop | `NFC[<name>]: polling stop requested` | Per-lane: console command output only. Shared: see shared table. |
 | One manual poll complete | `NFC[<name>]: one poll complete; <status>` | Per-lane: console command output only. Shared: see shared table. |
 | Status command | Per-lane `NFC GATE=<n> STATUS=1`, global `NFC_STATUS`, shared `NFC_SHARED STATUS=1`, and `SUMMARY=1` print status text. | Console command output only |
-| Help command | `NFC GATE=<n> HELP=1`, `NFC_SHARED HELP=1`, or low-level debug help prints command help. | Console command output only |
+| Help command | `NFC_HELP`, `NFC GATE=<n> HELP=1`, `NFC_SHARED HELP=1`, or low-level debug help prints command help. | Console command output only |
 
 ## Per-Lane Reader Messages
 

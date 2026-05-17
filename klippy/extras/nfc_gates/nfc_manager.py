@@ -193,6 +193,90 @@ def _append_shared_status(lines):
         lines.append(_shared_instance.shared_status_line())
 
 
+def _nfc_help(gcmd=None):
+    advanced = bool(gcmd.get_int('ADVANCED', 0, minval=0, maxval=1)
+                    if gcmd is not None else False)
+    callbacks = bool(gcmd.get_int('CALLBACKS', 0, minval=0, maxval=1)
+                     if gcmd is not None else False)
+    low_level = bool(gcmd.get_int('LOW_LEVEL', 0, minval=0, maxval=1)
+                     if gcmd is not None else False)
+    lane_gates = sorted(gate._gate for gate in _lane_instances
+                        if not getattr(gate, '_shared', False))
+    has_shared = _shared_instance is not None or any(
+        getattr(gate, '_shared', False) for gate in _lane_instances)
+
+    lines = [
+        "NFC Reader commands: (use NFC_HELP ADVANCED=1 CALLBACKS=1 "
+        "LOW_LEVEL=1 for full command set)",
+        "NFC_HELP : Display the complete set of NFC commands and functions",
+        "NFC_STATUS : Show every configured NFC reader",
+        "NFC GATE=<n> HELP=1 : Show commands for one per-lane reader",
+        "NFC GATE=<n> STATUS=1 : Show one per-lane reader state",
+        "NFC GATE=<n> SCAN=1 : Scan hardware once, no Spoolman/HH dispatch",
+        "NFC GATE=<n> POLL=1 : Run one full read/resolve cycle",
+        "NFC GATE=<n> READ=1 : Start timer polling",
+        "NFC GATE=<n> READ=0 : Stop timer polling",
+    ]
+    if lane_gates:
+        lines.append("Configured lane gates : %s" %
+                     ", ".join(str(gate) for gate in lane_gates))
+    else:
+        lines.append("Configured lane gates : none")
+
+    if has_shared:
+        lines.extend([
+            "",
+            "Shared reader commands:",
+            "NFC_SHARED HELP=1 : Show shared reader commands",
+            "NFC_SHARED STATUS=1 : Show detailed shared reader state",
+            "NFC_SHARED SUMMARY=1 : Show one-line shared reader state",
+            "NFC_SHARED READ=1 : Start shared polling",
+            "NFC_SHARED READ=0 : Stop shared polling",
+            "NFC_SHARED CANCEL=1 : Cancel a staged shared spool",
+            "NFC_SHARED REPLACE=1 : Discard a staged spool and scan another",
+            "NFC_SHARED LED_TEST=1 : Test configured shared tag-read LED effect",
+        ])
+        if advanced:
+            lines.extend([
+                "",
+                "Advanced shared-reader commands:",
+                "NFC_SHARED CLEAR=1 : Clear pending state and stop polling",
+                "NFC_SHARED PRELOAD_CHECK=1 : HH hook command; approve NEXT_SPOOLID if valid",
+                "NFC_SHARED PRELOAD_COMMIT=1 SPOOL_ID=<n> : HH hook command; clear pending after NEXT_SPOOLID",
+                "NFC_SHARED PRELOAD_CLEAR_ASSIGNED=1 SPOOL_ID=<n> : HH hook command; clear when per-lane already assigned spool",
+                "NFC_SHARED POLL=1 : Run one full read/resolve cycle",
+                "NFC_SHARED SCAN=1 : Raw hardware scan only",
+                "NFC_SHARED INIT=1 : Re-run PN532 init",
+                "NFC_SHARED CLEAR_CACHE=1 : Clear tag cache, keeping pending spool",
+            ])
+
+    if callbacks:
+        lines.extend([
+            "",
+            "Callbacks and macros:",
+            "_NFC_SPOOL_CHANGED : Per-lane spool assignment callback",
+            "_NFC_TAG_NO_SPOOL : Per-lane UID-only callback",
+            "_NFC_SPOOL_REMOVED : Per-lane spool removal callback",
+            "_NFC_HH_SYNC_ONE : Re-seed one lane cache from Happy Hare",
+            "NFC_HH_SYNC_CACHE : Re-seed all lane caches from Happy Hare",
+            "_NFC_SHARED_PRELOAD : Happy Hare pre-load hook for shared reader",
+        ])
+
+    if low_level:
+        lines.extend([
+            "",
+            "Low-level debug commands:",
+            "NFC GATE=<n> STEP=HELP : Show PN532 low-level debug help",
+            "NFC GATE=<n> STEP=WAKEUP : Write wake byte to PN532",
+            "NFC GATE=<n> STEP=READY : Read PN532 ready status byte",
+            "NFC GATE=<n> STEP=FIRMWARE_WRITE : Send GetFirmwareVersion frame",
+            "NFC GATE=<n> STEP=FIRMWARE_RESPONSE : Read firmware response",
+            "NFC GATE=<n> STEP=SAM_WRITE : Send SAMConfiguration frame",
+            "NFC GATE=<n> STEP=SAM_RESPONSE : Read SAMConfiguration response",
+        ])
+    return lines
+
+
 class NFCGateDefaults:
     def __init__(self, config):
         self.spoolman_url       = config.get('spoolman_url', '')
@@ -249,6 +333,9 @@ class NFCGateDefaults:
         gcode.register_command(
             'NFC_STATUS', self.cmd_NFC_STATUS,
             desc="Report spool state for all configured NFC gates")
+        gcode.register_command(
+            'NFC_HELP', self.cmd_NFC_HELP,
+            desc="Show NFC reader command help")
 
         log_file = config.get('log_file', '')
         try:
@@ -282,6 +369,9 @@ class NFCGateDefaults:
 
     def cmd_NFC_STATUS(self, gcmd):
         gcmd.respond_info('\n'.join(_lane_status_lines(self._printer)))
+
+    def cmd_NFC_HELP(self, gcmd):
+        gcmd.respond_info('\n'.join(_nfc_help(gcmd)))
 
 
 class NFCGate:
@@ -521,6 +611,7 @@ class NFCGate:
         self._gcode = None
         self._commands_registered = False
         self._status_registered = False
+        self._help_registered = False
         self._shared_cmd_registered = False
 
         self.printer.register_event_handler('klippy:connect',
@@ -530,6 +621,9 @@ class NFCGate:
 
     def _cmd_NFC_STATUS_fallback(self, gcmd):
         gcmd.respond_info('\n'.join(_lane_status_lines(self.printer)))
+
+    def _cmd_NFC_HELP_fallback(self, gcmd):
+        gcmd.respond_info('\n'.join(_nfc_help(gcmd)))
 
     def _cmd_help(self, gcmd):
         lines = [
@@ -975,6 +1069,15 @@ class NFCGate:
                     desc="Report spool state for all configured NFC gates"
                 )
                 self._status_registered = True
+            if (self._defaults is None and _lane_instances
+                    and _lane_instances[0] is self
+                    and not self._help_registered):
+                self._gcode.register_command(
+                    'NFC_HELP',
+                    self._cmd_NFC_HELP_fallback,
+                    desc="Show NFC reader command help"
+                )
+                self._help_registered = True
 
             # Shared reader has no mmu_gate — all interaction goes through
             # NFC_SHARED.  Lane readers register the GATE mux command.
@@ -1333,6 +1436,9 @@ class NFCGate:
             return
         self._check_hh_cleared()
         uid_hex  = self._read_current_tag()
+        if (self._shared and uid_hex is not None
+                and self._shared_tag_read_effect):
+            self._shared_play_tag_read_effect()
         spool_id = self._resolve_spool(uid_hex)
         event    = self._state.process_read(uid_hex, spool_id,
                                             scan_mode=self._scan_mode)

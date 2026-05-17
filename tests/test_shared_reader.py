@@ -326,6 +326,7 @@ def _make_shared(
     g._spoolman_auto_create       = False
     g._tag_parsing                = False
     g._scan_mode                  = False
+    g._hh_load_paused             = False
     g._state                      = GateState(255)
     g._reader                     = MockReader()
     g._spoolman                   = MockSpoolman()

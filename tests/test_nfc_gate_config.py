@@ -62,16 +62,26 @@ _stub('nfc_gates.spoolman_client', SpoolmanClient=_MockSpoolmanClient)
 # so pytest collection order cannot leak stubs between files.
 sys.modules.pop('nfc_gates.nfc_manager', None)
 
-from nfc_gates.nfc_manager import NFCGateDefaults
+from nfc_gates.nfc_manager import NFCGateDefaults, _lane_instances
 
 
 class _MockGCode:
-    def register_command(self, *a, **k): pass
+    def __init__(self):
+        self.commands = {}
+
+    def register_command(self, name, func, **kwargs):
+        self.commands[name] = (func, kwargs)
 
 
 class _MockPrinter:
+    def __init__(self):
+        self.gcode = _MockGCode()
+
     def lookup_object(self, name, default=None):
-        return _MockGCode()
+        if name == 'gcode':
+            return self.gcode
+        return default
+
     def get_reactor(self):
         return None
 
@@ -123,6 +133,18 @@ class MockConfig:
         return val
 
 
+class MockGCmd:
+    def __init__(self, params=None):
+        self._params = dict(params or {})
+        self.responses = []
+
+    def get_int(self, name, default=0, minval=None, maxval=None):
+        return int(self._params.get(name, default))
+
+    def respond_info(self, msg):
+        self.responses.append(msg)
+
+
 def test_defaults_built_in_values():
     d = NFCGateDefaults(MockConfig())
     assert d.spoolman_url       == ''
@@ -139,6 +161,98 @@ def test_defaults_built_in_values():
     assert d.tag_parsing        == False
     assert d.bambu_reads        == False
     assert d.spoolman_auto_create == False
+
+
+def test_defaults_register_nfc_help_command():
+    cfg = MockConfig()
+    NFCGateDefaults(cfg)
+
+    commands = cfg.get_printer().gcode.commands
+    assert 'NFC_HELP' in commands
+    assert commands['NFC_HELP'][1]['desc'] == "Show NFC reader command help"
+
+
+def test_nfc_help_command_outputs_global_help():
+    cfg = MockConfig()
+    NFCGateDefaults(cfg)
+
+    func = cfg.get_printer().gcode.commands['NFC_HELP'][0]
+    gcmd = MockGCmd()
+    func(gcmd)
+
+    help_text = "\n".join(gcmd.responses)
+    assert "NFC Reader commands:" in help_text
+    assert "NFC_HELP : Display the complete set of NFC commands" in help_text
+    assert "NFC_STATUS : Show every configured NFC reader" in help_text
+    assert "NFC GATE=<n> HELP=1 : Show commands" in help_text
+    assert "Shared reader commands:" not in help_text
+    assert "NFC_SHARED" not in help_text
+    assert "Callbacks and macros:" not in help_text
+    assert "Low-level debug commands:" not in help_text
+
+
+def test_nfc_help_shows_shared_commands_only_when_shared_configured():
+    cfg = MockConfig()
+    NFCGateDefaults(cfg)
+    func = cfg.get_printer().gcode.commands['NFC_HELP'][0]
+
+    class SharedGate:
+        _gate = 255
+        _shared = True
+
+    _lane_instances.append(SharedGate())
+    try:
+        gcmd = MockGCmd()
+        func(gcmd)
+    finally:
+        _lane_instances.pop()
+
+    help_text = "\n".join(gcmd.responses)
+    assert "Shared reader commands:" in help_text
+    assert "NFC_SHARED HELP=1 : Show shared reader commands" in help_text
+    assert "NFC_SHARED READ=1 : Start shared polling" in help_text
+
+
+def test_nfc_help_hides_advanced_shared_commands_unless_requested():
+    cfg = MockConfig()
+    NFCGateDefaults(cfg)
+    func = cfg.get_printer().gcode.commands['NFC_HELP'][0]
+
+    class SharedGate:
+        _gate = 255
+        _shared = True
+
+    _lane_instances.append(SharedGate())
+    try:
+        basic = MockGCmd()
+        func(basic)
+        expanded = MockGCmd({'ADVANCED': 1})
+        func(expanded)
+    finally:
+        _lane_instances.pop()
+
+    basic_text = "\n".join(basic.responses)
+    expanded_text = "\n".join(expanded.responses)
+    assert "Advanced shared-reader commands:" not in basic_text
+    assert "NFC_SHARED PRELOAD_CHECK=1" not in basic_text
+    assert "Advanced shared-reader commands:" in expanded_text
+    assert "NFC_SHARED PRELOAD_CHECK=1" in expanded_text
+
+
+def test_nfc_help_command_supports_expanded_sections():
+    cfg = MockConfig()
+    NFCGateDefaults(cfg)
+
+    func = cfg.get_printer().gcode.commands['NFC_HELP'][0]
+    gcmd = MockGCmd({'CALLBACKS': 1, 'LOW_LEVEL': 1})
+    func(gcmd)
+
+    help_text = "\n".join(gcmd.responses)
+    assert "Callbacks and macros:" in help_text
+    assert "_NFC_SHARED_PRELOAD : Happy Hare pre-load hook" in help_text
+    assert "Low-level debug commands:" in help_text
+    assert "NFC GATE=<n> STEP=HELP" in help_text
+
 
 def test_defaults_all_keys_overridden():
     d = NFCGateDefaults(MockConfig({
