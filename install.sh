@@ -725,6 +725,19 @@ if [ ! -d "${PRINTER_CONFIG}" ]; then
     exit 1
 fi
 
+# ── Sparse checkout — keep docs on remote only ───────────────────────────────
+# Excludes the docs/ directory from the working tree on this machine.
+# Safe to run on first install (removes already-cloned docs) and on re-runs.
+if git -C "${REPO_DIR}" config core.sparseCheckout 2>/dev/null | grep -q "true"; then
+    : # already configured — git pull will honour it automatically
+else
+    echo "Configuring sparse checkout to exclude docs/ from this machine..."
+    git -C "${REPO_DIR}" sparse-checkout init
+    git -C "${REPO_DIR}" sparse-checkout set '/*' '!/docs/' '!/Readme.md' '!/VENDORED.md' '!/NFC Mounting Bracket/' '!/PR.md' '!/README-private.md'
+    echo "  [done]   docs/ removed from working tree — remote repo unchanged"
+    echo ""
+fi
+
 # ── Profile color setup ───────────────────────────────────────────────────────
 if [ -n "${_CLI_PROFILE}" ]; then
     apply_profile_color "${_CLI_PROFILE}"
@@ -953,9 +966,11 @@ echo "  Files that will be written / merged:"
 echo "    ${DEFAULT}${NFC_READER_CFG}${RESET}"
 echo "    ${DEFAULT}${NFC_CONFIG_DIR}/nfc_macros.cfg${RESET}"
 if [ "${READER_TYPE}" = "shared" ]; then
-    echo "    ${DEFAULT}${NFC_READER_SHARED_CFG}${RESET}  (overwritten)"
+    echo "    ${DEFAULT}${NFC_READER_SHARED_CFG}${RESET}  (settings applied)"
+    echo "    ${DEFAULT}${NFC_READER_HW_CFG}${RESET}  (template — ready for lane readers later)"
 else
-    echo "    ${DEFAULT}${NFC_READER_HW_CFG}${RESET}"
+    echo "    ${DEFAULT}${NFC_READER_HW_CFG}${RESET}  (settings applied)"
+    echo "    ${DEFAULT}${NFC_READER_SHARED_CFG}${RESET}  (template — ready for shared reader later)"
 fi
 echo "${DEFAULT}${BOLD}════════════════════════════════════════════════════════════════${RESET}"
 echo ""
@@ -1104,13 +1119,10 @@ echo ""
 echo "Installing config files to ${NFC_CONFIG_DIR}/..."
 echo ""
 
-merge_config "${REPO_DIR}/config/nfc_reader.cfg"   "${NFC_READER_CFG}"
-merge_config "${REPO_DIR}/config/nfc_macros.cfg" "${NFC_CONFIG_DIR}/nfc_macros.cfg"
-# nfc_reader_hw.cfg is lane-specific — only merge it for lane installs.
-# Shared-only installs use nfc_reader_shared.cfg instead.
-if [ "${READER_TYPE}" = "lane" ]; then
-    merge_config "${REPO_DIR}/config/nfc_reader_hw.cfg"  "${NFC_READER_HW_CFG}"
-fi
+merge_config "${REPO_DIR}/config/nfc_reader.cfg"        "${NFC_READER_CFG}"
+merge_config "${REPO_DIR}/config/nfc_macros.cfg"         "${NFC_CONFIG_DIR}/nfc_macros.cfg"
+merge_config "${REPO_DIR}/config/nfc_reader_hw.cfg"      "${NFC_READER_HW_CFG}"
+merge_config "${REPO_DIR}/config/nfc_reader_shared.cfg"  "${NFC_READER_SHARED_CFG}"
 
 echo ""
 echo "Applying selected settings..."
@@ -1227,13 +1239,17 @@ echo "    ${KLIPPER_EXTRAS}/nfc_gate.py  ->  ${REPO_DIR}/klippy/extras/nfc_gate.
 echo "    ${KLIPPER_EXTRAS}/nfc_gates    ->  ${REPO_DIR}/klippy/extras/nfc_gates/"
 echo ""
 echo "  Config files in ${NFC_CONFIG_DIR}/:"
-echo "    nfc_reader.cfg     ← Spoolman URL, tag parsing, debug settings"
-echo "    nfc_macros.cfg     ← Happy Hare handoff macros"
+echo "    nfc_reader.cfg          ← Spoolman URL, tag parsing, debug settings"
+echo "    nfc_macros.cfg          ← Happy Hare handoff macros"
 if [ "${READER_TYPE}" = "shared" ]; then
-    echo "    nfc_reader_shared.cfg  ← [nfc_gate shared] hardware config"
+    echo "    nfc_reader_shared.cfg   ← [nfc_gate shared] hardware config  (settings applied)"
+    echo "    nfc_reader_hw.cfg       ← [nfc_gate laneN] hardware layout   (template — not yet active)"
 else
-    echo "    nfc_reader_hw.cfg      ← hardware layout (one [nfc_gate laneN] per physical reader)"
+    echo "    nfc_reader_hw.cfg       ← [nfc_gate laneN] hardware layout   (settings applied)"
+    echo "    nfc_reader_shared.cfg   ← [nfc_gate shared] hardware config  (template — not yet active)"
 fi
+echo "  To activate the other hardware config later, re-run install.sh with the"
+echo "  other reader type selected, or edit the template file and add the include."
 echo ""
 echo "Next steps (first install only):"
 echo ""
