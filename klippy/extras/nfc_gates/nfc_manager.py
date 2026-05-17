@@ -210,12 +210,12 @@ def _nfc_help(gcmd=None):
         "LOW_LEVEL=1 for full command set)",
         "NFC_HELP : Display the complete set of NFC commands and functions",
         "NFC_STATUS : Show every configured NFC reader",
-        "NFC GATE=<n> HELP=1 : Show commands for one per-lane reader",
-        "NFC GATE=<n> STATUS=1 : Show one per-lane reader state",
-        "NFC GATE=<n> SCAN=1 : Scan hardware once, no Spoolman/HH dispatch",
-        "NFC GATE=<n> POLL=1 : Run one full read/resolve cycle",
-        "NFC GATE=<n> READ=1 : Start timer polling",
-        "NFC GATE=<n> READ=0 : Stop timer polling",
+        "NFC GATE=<#> HELP=1 : Show commands for one per-lane reader",
+        "NFC GATE=<#> STATUS=1 : Show one per-lane reader state",
+        "NFC GATE=<#> SCAN=1 : Scan hardware once, no Spoolman/HH dispatch",
+        "NFC GATE=<#> POLL=1 : Run one full read/resolve cycle",
+        "NFC GATE=<#> READ=1 : Start timer polling",
+        "NFC GATE=<#> READ=0 : Stop timer polling",
     ]
     if lane_gates:
         lines.append("Configured lane gates : %s" %
@@ -266,13 +266,13 @@ def _nfc_help(gcmd=None):
         lines.extend([
             "",
             "Low-level debug commands:",
-            "NFC GATE=<n> STEP=HELP : Show PN532 low-level debug help",
-            "NFC GATE=<n> STEP=WAKEUP : Write wake byte to PN532",
-            "NFC GATE=<n> STEP=READY : Read PN532 ready status byte",
-            "NFC GATE=<n> STEP=FIRMWARE_WRITE : Send GetFirmwareVersion frame",
-            "NFC GATE=<n> STEP=FIRMWARE_RESPONSE : Read firmware response",
-            "NFC GATE=<n> STEP=SAM_WRITE : Send SAMConfiguration frame",
-            "NFC GATE=<n> STEP=SAM_RESPONSE : Read SAMConfiguration response",
+            "NFC GATE=<#> STEP=HELP : Show PN532 low-level debug help",
+            "NFC GATE=<#> STEP=WAKEUP : Write wake byte to PN532",
+            "NFC GATE=<#> STEP=READY : Read PN532 ready status byte",
+            "NFC GATE=<#> STEP=FIRMWARE_WRITE : Send GetFirmwareVersion frame",
+            "NFC GATE=<#> STEP=FIRMWARE_RESPONSE : Read firmware response",
+            "NFC GATE=<#> STEP=SAM_WRITE : Send SAMConfiguration frame",
+            "NFC GATE=<#> STEP=SAM_RESPONSE : Read SAMConfiguration response",
         ])
     return lines
 
@@ -1029,7 +1029,7 @@ class NFCGate:
     def _hh_sync(self, gcmd):
         """Receive a spool_id from NFC_HH_SYNC_CACHE and set the lane seed.
 
-        Called by NFC GATE=<n> HH_SYNC=1 SPOOL_ID=<n>.
+        Called by NFC GATE=<#> HH_SYNC=1 SPOOL_ID=<n>.
         The macro reads HH template vars (which GCode macros can access) and
         passes the resolved spool_id here so Python can update the seed without
         needing to walk the HH object itself.

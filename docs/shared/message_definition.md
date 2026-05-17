@@ -42,18 +42,18 @@ These apply to both per-lane readers and the shared reader.
 | Manual polling start | `NFC[<name>]: polling started` | Per-lane: console command output only. Shared: see shared table. |
 | Manual polling stop | `NFC[<name>]: polling stop requested` | Per-lane: console command output only. Shared: see shared table. |
 | One manual poll complete | `NFC[<name>]: one poll complete; <status>` | Per-lane: console command output only. Shared: see shared table. |
-| Status command | Per-lane `NFC GATE=<n> STATUS=1`, global `NFC_STATUS`, shared `NFC_SHARED STATUS=1`, and `SUMMARY=1` print status text. | Console command output only |
-| Help command | `NFC_HELP`, `NFC GATE=<n> HELP=1`, `NFC_SHARED HELP=1`, or low-level debug help prints command help. | Console command output only |
+| Status command | Per-lane `NFC GATE=<#> STATUS=1`, global `NFC_STATUS`, shared `NFC_SHARED STATUS=1`, and `SUMMARY=1` print status text. | Console command output only |
+| Help command | `NFC_HELP`, `NFC GATE=<#> HELP=1`, `NFC_SHARED HELP=1`, or low-level debug help prints command help. | Console command output only |
 
 ## Per-Lane Reader Messages
 
-Per-lane readers are the normal EMU lane readers driven by `NFC GATE=<n> ...`
+Per-lane readers are the normal EMU lane readers driven by `NFC GATE=<#> ...`
 commands and scan-jog.
 
 | Case | Console message | `nfc_reader.log` |
 |---|---|---|
 | Startup ready with HH seed | `[OK] NFC[laneN]: reader ready.  HH seed: spool_id=<spool>  Startup polling is enabled; first poll in <delay>s.` | `INFO     nfc_gate: [laneN] PN532 reader OK` plus HH seed info |
-| Startup ready, HH reports empty | `[OK] NFC[laneN]: reader ready.  HH reports gate empty  Run NFC GATE=<n> READ=1 to start polling.` | `INFO     nfc_gate: [laneN] PN532 reader OK` plus HH seed/empty info |
+| Startup ready, HH reports empty | `[OK] NFC[laneN]: reader ready.  HH reports gate empty  Run NFC GATE=<#> READ=1 to start polling.` | `INFO     nfc_gate: [laneN] PN532 reader OK` plus HH seed/empty info |
 | Manual polling while reader failed | `💥 NFC[laneN]: reader failed; run INIT=1 first` | `ERROR    nfc_gate: [laneN] gate <n> READ=1 refused — reader failed; run INIT=1 first` |
 | Clear spool cache | `NFC[laneN]: cleared cached spool_id for gate <n>; no NFC_Manager event was dispatched. Next tag read will resolve Spoolman again.` | `INFO     nfc_gate: [laneN] gate <n> — spool cache cleared (uid=<uid> old_spool=<spool>); next read will resolve Spoolman again` |
 | Apply with no cached spool | `NFC[laneN]: no cached spool_id to apply; run POLL=1 first` | Console command output only |
@@ -73,12 +73,12 @@ commands and scan-jog.
 
 ## Per-Lane Scan-Jog Messages
 
-Scan-jog messages are per-lane only. They are produced by `NFC GATE=<n>
+Scan-jog messages are per-lane only. They are produced by `NFC GATE=<#>
 JOG_SCAN=1` or by the automatic scan-jog trigger.
 
 | Case | Console message | `nfc_reader.log` |
 |---|---|---|
-| Reader failed | `💥 NFC[laneN]: reader failed — run NFC GATE=<n> INIT=1 first` | `ERROR    💥 NFC[laneN]: reader failed — run NFC GATE=<n> INIT=1 first` |
+| Reader failed | `💥 NFC[laneN]: reader failed — run NFC GATE=<#> INIT=1 first` | `ERROR    💥 NFC[laneN]: reader failed — run NFC GATE=<#> INIT=1 first` |
 | Print active | `⛔ NFC[laneN]: print is active — cannot start scan-jog while printing` | `WARNING  ⛔ NFC[laneN]: print is active — cannot start scan-jog while printing` |
 | Happy Hare busy | `⛔ NFC[laneN]: Happy Hare is busy (action=<action>) — wait for idle before starting scan-jog` | `WARNING  ⛔ NFC[laneN]: Happy Hare is busy (action=<action>) — wait for idle before starting scan-jog` |
 | Another gate scanning | `⛔ NFC[laneN]: gate <n> is already scanning — only one gate may scan at a time` | `WARNING  ⛔ NFC[laneN]: gate <n> is already scanning — only one gate may scan at a time` |
@@ -156,4 +156,4 @@ normal workflow events.
 | Ready result | `NFC[<name>]: READY result: ready (0x01)`, `busy (0x00)`, or `unknown status 0x<value>` | Console command output only |
 | ACK result | `NFC[<name>]: ACK result: valid PN532 ACK`, `invalid, expected 00 00 FF 00 FF 00`, or related probe guidance | Console command output only |
 | Parsed response | `NFC[<name>]: Firmware parsed: ...`, `SAM response parsed: OK`, or `Passive response parsed header: OK` | Console command output only |
-| Next suggested step | `NFC[<name>]: NEXT: NFC GATE=<n> <args>` | Console command output only |
+| Next suggested step | `NFC[<name>]: NEXT: NFC GATE=<#> <args>` | Console command output only |

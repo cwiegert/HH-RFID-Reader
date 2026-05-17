@@ -184,7 +184,7 @@ def test_nfc_help_command_outputs_global_help():
     assert "NFC Reader commands:" in help_text
     assert "NFC_HELP : Display the complete set of NFC commands" in help_text
     assert "NFC_STATUS : Show every configured NFC reader" in help_text
-    assert "NFC GATE=<n> HELP=1 : Show commands" in help_text
+    assert "NFC GATE=<#> HELP=1 : Show commands" in help_text
     assert "Shared reader commands:" not in help_text
     assert "NFC_SHARED" not in help_text
     assert "Callbacks and macros:" not in help_text
@@ -251,7 +251,7 @@ def test_nfc_help_command_supports_expanded_sections():
     assert "Callbacks and macros:" in help_text
     assert "_NFC_SHARED_PRELOAD : Happy Hare pre-load hook" in help_text
     assert "Low-level debug commands:" in help_text
-    assert "NFC GATE=<n> STEP=HELP" in help_text
+    assert "NFC GATE=<#> STEP=HELP" in help_text
 
 
 def test_defaults_all_keys_overridden():
