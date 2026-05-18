@@ -190,7 +190,7 @@ Define a named `[mmu_led_effect]` in your LED config:
 ```ini
 [mmu_led_effect mmu_RFID_read]
 define_on: gates
-layers: strobe 1 2 top (1, 1, 0)
+layers: strobe 1 3 top (0, 1, 0)
 
 [mmu_led_effect mmu_RFID_ready]
 define_on: gates
@@ -201,7 +201,7 @@ define_on: gates
 layers: strobe 1 5 top (1, 0, 0)
 ```
 
-Set `shared_tag_read_effect: mmu_RFID_read`, `shared_spool_ready_effect: mmu_RFID_ready`, and `shared_tag_unresolved_effect: mmu_RFID_unresolved` in `[nfc_gate shared]`. Tag detection flashes bright yellow 2x; auto-create runs a yellow chase; a ready spool ID flashes bright green 2x; an unresolved UID flashes bright red 5x. If auto-create is enabled, keep the tag in front of the reader until the green ready blink appears.
+Set `shared_tag_read_effect: mmu_RFID_read`, `shared_spool_ready_effect: mmu_RFID_ready`, and `shared_tag_unresolved_effect: mmu_RFID_unresolved` in `[nfc_gate shared]`. Tag detection flashes bright green 3x; auto-create runs a yellow chase; a ready spool ID flashes bright green 2x; an unresolved UID flashes bright red 5x. If auto-create is enabled, keep the tag in front of the reader until the green ready blink appears.
 
 ---
 
