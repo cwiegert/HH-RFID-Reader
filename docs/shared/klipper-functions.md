@@ -618,17 +618,20 @@ PN532 debug commands, and they do not require `low_level_debug: True`.
 
 **`NFC_SHARED CLEAR=1`** — Clear pending state, stop polling, reset the reader. Use this to cancel a staged spool before the preload fires.
 
-**`NFC_SHARED PRELOAD_CHECK=1`** — Called automatically by `variable_user_post_preload_extension`. Approves `MMU_GATE_MAP NEXT_SPOOLID=<id>` if a valid pending spool exists. Skips only while printing. If no spool is staged, a console message advises tapping a tag first or using `MMU_PRELOAD`. With `force_spool_id: true` the load is blocked entirely until a spool is staged.
+**`NFC_SHARED PRELOAD_CHECK=1`** — Called automatically by `variable_user_post_preload_extension`. Approves `MMU_GATE_MAP NEXT_SPOOLID=<id>` if a valid pending spool exists. Skips only while printing. If no spool is staged, a console message advises tapping a tag first or using `MMU_PRELOAD`. With `force_spool_id: true`, that advisory is shown in red without raising a Klipper command error.
 
 The default macro runs `MMU_SPOOLMAN REFRESH=1` when needed, then
 `MMU_GATE_MAP NEXT_SPOOLID=<id>`, then `NFC_SHARED PRELOAD_COMMIT=1`. If
 HH/Spoolman staging fails, commit never runs and the pending spool is kept for
 the next preload attempt until it times out.
 
-**`NFC_SHARED PRELOAD_CLEAR_ASSIGNED=1 SPOOL_ID=<id>`** — Called automatically
-by the default macro when Happy Hare already reports the pending spool in its
-gate map. This preserves per-lane precedence by clearing the shared reader's
-pending state without sending `NEXT_SPOOLID`.
+**`NFC_SHARED PRELOAD_CLEAR_ASSIGNED=1 SPOOL_ID=<id> GATE=<gate>`** — Called
+automatically by the default macro when Happy Hare already reports the pending
+spool in its gate map. Hybrid installs preserve per-lane precedence by clearing
+only the shared reader's pending state without sending `NEXT_SPOOLID`. Pure
+shared-reader installs also clear that stale Happy Hare gate assignment with
+`MMU_GATE_MAP GATE=<gate> SPOOLID=-1 AVAILABLE=0 SYNC=1 QUIET=1` and
+`MMU_GATE_MAP GATE=<gate> APPLY=1 QUIET=1`.
 
 **`NFC_SHARED POLL=1`** — Force one full read/resolve cycle. Skips while printing and reports that no poll was run.
 

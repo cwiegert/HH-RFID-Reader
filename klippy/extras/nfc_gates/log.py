@@ -82,16 +82,34 @@ def _quote_respond_value(value):
     return value.replace('\n', '\\n')
 
 
+def color_console_tags(text):
+    """Wrap console bracket tags with HTML color spans for the Klipper UI."""
+    text = str(text)
+    text = text.replace('[WARN]',   '<span style="color:#FFFF00">[WARN]</span>')
+    text = text.replace('[OK]',     '<span style="color:#90EE90">[OK]</span>')
+    text = text.replace('[ERROR]',  '<span style="color:#FF6060">[ERROR]</span>')
+    text = text.replace('[SCAN]',   '<span style="color:#FFA040">[SCAN]</span>')
+    text = text.replace('[MOVE]',   '<span style="color:#FFA040">[MOVE]</span>')
+    text = text.replace('[REWIND]', '<span style="color:#90EE90">[REWIND]</span>')
+    return text
+
+
+def _warn_console_message(message):
+    return color_console_tags("[WARN] %s" % message)
+
+
 def _respond_prefixed(message, levelno):
-    msg = _quote_respond_value(message)
     if hasattr(_console_gcode, 'run_script'):
         if levelno >= logging.ERROR:
+            msg = _quote_respond_value(color_console_tags(message))
             _console_gcode.run_script(
                 'RESPOND TYPE=error PREFIX="NFC" MSG="%s"' % msg)
         elif levelno >= logging.WARNING:
+            msg = _quote_respond_value(_warn_console_message(message))
             _console_gcode.run_script(
                 'RESPOND TYPE=command PREFIX="NFC" MSG="%s"' % msg)
         else:
+            msg = _quote_respond_value(color_console_tags(message))
             _console_gcode.run_script(
                 'RESPOND PREFIX="NFC" MSG="%s"' % msg)
         return
@@ -103,9 +121,9 @@ def _respond_prefixed(message, levelno):
         else:
             _console_gcode.respond_info("ERROR: NFC: %s" % message)
     elif levelno >= logging.WARNING:
-        _console_gcode.respond_info("[WARN] NFC: %s" % message)
+        _console_gcode.respond_info(_warn_console_message("NFC: %s" % message))
     else:
-        _console_gcode.respond_info("NFC: %s" % message)
+        _console_gcode.respond_info(color_console_tags("NFC: %s" % message))
 
 
 def _respond_to_console(record):

@@ -68,6 +68,19 @@ from .gate_state      import (CurrentTag, GateState,
 from .klipper_interface import KlipperInterface
 from .log              import configure, logger
 from .pn532_driver     import PN532Driver
+
+try:
+    from .log import color_console_tags
+except ImportError:
+    def color_console_tags(text):
+        text = str(text)
+        text = text.replace('[WARN]', '<span style="color:#FFFF00">[WARN]</span>')
+        text = text.replace('[OK]', '<span style="color:#90EE90">[OK]</span>')
+        text = text.replace('[ERROR]', '<span style="color:#FF6060">[ERROR]</span>')
+        text = text.replace('[SCAN]', '<span style="color:#FFA040">[SCAN]</span>')
+        text = text.replace('[MOVE]', '<span style="color:#FFA040">[MOVE]</span>')
+        text = text.replace('[REWIND]', '<span style="color:#90EE90">[REWIND]</span>')
+        return text
 from .spoolman_client  import SpoolmanClient
 
 
@@ -254,7 +267,7 @@ def _nfc_help(gcmd=None):
                 "NFC_SHARED CLEAR=1 : Clear pending state and stop polling",
                 "NFC_SHARED PRELOAD_CHECK=1 : HH hook command; approve NEXT_SPOOLID if valid",
                 "NFC_SHARED PRELOAD_COMMIT=1 SPOOL_ID=<n> : HH hook command; clear pending after NEXT_SPOOLID",
-                "NFC_SHARED PRELOAD_CLEAR_ASSIGNED=1 SPOOL_ID=<n> : HH hook command; clear when per-lane already assigned spool",
+                "NFC_SHARED PRELOAD_CLEAR_ASSIGNED=1 SPOOL_ID=<n> GATE=<n> : HH hook command; clear already-assigned shared spool",
                 "NFC_SHARED POLL=1 : Run one full read/resolve cycle",
                 "NFC_SHARED SCAN=1 : Raw hardware scan only",
                 "NFC_SHARED INIT=1 : Re-run PN532 init",
@@ -698,9 +711,10 @@ class NFCGate:
                 logger.error(
                     "nfc_gate: [%s] PN532 did not respond — "
                     "check wiring and I2C address (default 0x24)", self._name)
-            gcmd.respond_info("%s NFC[%s]: reader %s" %
-                              ("[OK]" if alive else "[WARN]", self._name,
-                               "OK" if alive else "not responding"))
+            gcmd.respond_info(color_console_tags(
+                "%s NFC[%s]: reader %s" %
+                ("[OK]" if alive else "[WARN]", self._name,
+                 "OK" if alive else "not responding")))
             if (self._shared and alive and self._startup_polling == 1
                     and not self._is_printing()
                     and self._shared_pending_spool is None):
@@ -1984,6 +1998,10 @@ class NFCGate:
                 "nfc_gate: [%s] spool %d detected (UID %s)%s — "
                 "load spool into gate now",
                 self._name, spool, uid, _ac_note)
+            if self._gcode is not None:
+                self._gcode.respond_info(color_console_tags(
+                    "[OK] NFC[%s]: read tag — spool %d staged%s"
+                    % (self._name, spool, _ac_note)))
             self._shared_stop_tag_read_effect()
             if self._shared_spool_ready_effect:
                 self._shared_play_spool_ready_effect()
@@ -2384,7 +2402,7 @@ class NFCGate:
             "  NFC_SHARED CLEAR=1         - clear pending state and stop polling\n"
             "  NFC_SHARED PRELOAD_CHECK=1 - HH hook command; approve NEXT_SPOOLID if valid\n"
             "  NFC_SHARED PRELOAD_COMMIT=1 SPOOL_ID=<n> - HH hook command; clear pending after NEXT_SPOOLID\n"
-            "  NFC_SHARED PRELOAD_CLEAR_ASSIGNED=1 SPOOL_ID=<n> - HH hook command; clear when per-lane already assigned spool\n"
+            "  NFC_SHARED PRELOAD_CLEAR_ASSIGNED=1 SPOOL_ID=<n> GATE=<n> - HH hook command; clear already-assigned shared spool\n"
             "  NFC_SHARED POLL=1          - run one full read/resolve cycle (skips printing)\n"
             "  NFC_SHARED SCAN=1          - raw hardware scan only (skips printing)\n"
             "  NFC_SHARED INIT=1          - re-run PN532 init; resumes startup polling if enabled\n"
@@ -2424,4 +2442,6 @@ class NFCGate:
             'pending_auto_created': pending_auto_created,
             'preload_spool_id':    preload_spool if preload_spool is not None else -1,
             'preload_auto_created': preload_auto_created,
+            'has_per_lane_readers': bool(getattr(self, '_has_per_lane_readers', False))
+                                    if shared else False,
         }

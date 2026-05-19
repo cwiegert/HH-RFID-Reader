@@ -6,6 +6,19 @@ from . import hh_status
 from .gate_state import DIRECT_METADATA_SPOOL
 from .log import info_both, logger
 
+try:
+    from .log import color_console_tags
+except ImportError:
+    def color_console_tags(text):
+        text = str(text)
+        text = text.replace('[SCAN]', '<span style="color:#FFA040">[SCAN]</span>')
+        text = text.replace('[MOVE]', '<span style="color:#FFA040">[MOVE]</span>')
+        text = text.replace('[WARN]', '<span style="color:#FFFF00">[WARN]</span>')
+        text = text.replace('[OK]', '<span style="color:#90EE90">[OK]</span>')
+        text = text.replace('[REWIND]', '<span style="color:#90EE90">[REWIND]</span>')
+        text = text.replace('[ERROR]', '<span style="color:#FF6060">[ERROR]</span>')
+        return text
+
 
 DECODE_RETRY_SETTLE_DELAY = 1.0
 SCAN_JOG_SUBSTEPS = 3
@@ -14,14 +27,7 @@ LEFT_NEIGHBOR_CLEARANCE_RETRIES = 3
 
 
 def _color_tags(text):
-    """Wrap console bracket tags with HTML color spans for the Klipper UI."""
-    text = text.replace('[SCAN]',   '<span style="color:#FFA040">[SCAN]</span>')
-    text = text.replace('[MOVE]',   '<span style="color:#FFA040">[MOVE]</span>')
-    text = text.replace('[WARN]',   '<span style="color:#FFFF00">[WARN]</span>')
-    text = text.replace('[OK]',     '<span style="color:#90EE90">[OK]</span>')
-    text = text.replace('[REWIND]', '<span style="color:#90EE90">[REWIND]</span>')
-    text = text.replace('[ERROR]',  '<span style="color:#FF6060">[ERROR]</span>')
-    return text
+    return color_console_tags(text)
 
 
 

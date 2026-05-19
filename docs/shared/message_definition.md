@@ -15,7 +15,7 @@ Console prefixes are used consistently:
 
 - `💥` means NFC tried the operation and it failed.
 - `⚠️` means NFC skipped, ignored, or warned but kept the system recoverable.
-- `⛔` means an action was blocked by a safety/precondition check.
+- `[ERROR]` means an action was blocked by a safety/precondition check.
 - `[OK]` means the requested action completed.
 - `[OK]` means a tag was found/read successfully.
 - `🔍` means scan-jog started.
@@ -79,11 +79,11 @@ JOG_SCAN=1` or by the automatic scan-jog trigger.
 | Case | Console message | `nfc_reader.log` |
 |---|---|---|
 | Reader failed | `💥 NFC[laneN]: reader failed — run NFC GATE=<#> INIT=1 first` | `ERROR    💥 NFC[laneN]: reader failed — run NFC GATE=<#> INIT=1 first` |
-| Print active | `⛔ NFC[laneN]: print is active — cannot start scan-jog while printing` | `WARNING  ⛔ NFC[laneN]: print is active — cannot start scan-jog while printing` |
-| Happy Hare busy | `⛔ NFC[laneN]: Happy Hare is busy (action=<action>) — wait for idle before starting scan-jog` | `WARNING  ⛔ NFC[laneN]: Happy Hare is busy (action=<action>) — wait for idle before starting scan-jog` |
-| Another gate scanning | `⛔ NFC[laneN]: gate <n> is already scanning — only one gate may scan at a time` | `WARNING  ⛔ NFC[laneN]: gate <n> is already scanning — only one gate may scan at a time` |
-| Same gate already scanning | `⛔ NFC[laneN]: scan-jog already in progress for this gate` | `WARNING  ⛔ NFC[laneN]: scan-jog already in progress for this gate` |
-| Preflight failed | `⛔ NFC[laneN]: scan-jog not available while <reason>` | `WARNING  ⛔ NFC[laneN]: scan-jog not available while <reason>` |
+| Print active | `[ERROR] NFC[laneN]: print is active — cannot start scan-jog while printing` | `WARNING  [ERROR] NFC[laneN]: print is active — cannot start scan-jog while printing` |
+| Happy Hare busy | `[ERROR] NFC[laneN]: Happy Hare is busy (action=<action>) — wait for idle before starting scan-jog` | `WARNING  [ERROR] NFC[laneN]: Happy Hare is busy (action=<action>) — wait for idle before starting scan-jog` |
+| Another gate scanning | `[ERROR] NFC[laneN]: gate <n> is already scanning — only one gate may scan at a time` | `WARNING  [ERROR] NFC[laneN]: gate <n> is already scanning — only one gate may scan at a time` |
+| Same gate already scanning | `[ERROR] NFC[laneN]: scan-jog already in progress for this gate` | `WARNING  [ERROR] NFC[laneN]: scan-jog already in progress for this gate` |
+| Preflight failed | `[ERROR] NFC[laneN]: scan-jog not available while <reason>` | `WARNING  [ERROR] NFC[laneN]: scan-jog not available while <reason>` |
 | Scan-jog started | `🔍 NFC[laneN]: scan-jog started for gate <n> (max=<mm>mm  poll=<seconds>s)` | `INFO     nfc_gate: [laneN] gate <n> scan mode started — chunk=<mm>mm max=<mm>mm speed=<mm/s> chunk_interval=<seconds>s dwell=<seconds>s poll=<seconds>s` at `debug: 3` |
 | Move step queued | `NFC[<n>]: moving <mm>mm  scan position <mm> / <mm>mm` | `INFO     NFC[<n>]: moving <mm>mm  scan position <mm> / <mm>mm` and `INFO     NFC[<n>]: move queued <mm>mm  scan position <mm> / <mm>mm` |
 | Scan poll failed | `💥 NFC[<n>]: scan poll failed` | `ERROR    💥 NFC[<n>]: scan poll failed` |
@@ -124,9 +124,9 @@ Shared reader messages are specific to `[nfc_gate shared]` and `NFC_SHARED`.
 | Pending timeout (no resume) | `[ERROR] NFC[shared]: timeout after <seconds>s — no spool was loaded. Tap tag to stage again.` (red error) | `INFO     nfc_gate: [shared] shared pending spool=<spool> timed out after <seconds>s` |
 | Pending timeout (polling resumed) | `[ERROR] NFC[shared]: timeout after <seconds>s — no spool was loaded. Reader polling resumed. Tap tag to stage again.` (red error) | `INFO     nfc_gate: [shared] shared pending timeout — startup polling resumed` |
 | `PRELOAD_CHECK` while printing | `⚠️ NFC[shared]: PRELOAD_CHECK skipped while printing; pending spool kept` | `INFO     nfc_gate: [shared] PRELOAD_CHECK skipped — printing` |
-| `PRELOAD_CHECK` no staged spool | `⛔ NFC[shared]: no spool staged — tap your spool tag on the shared reader first, or use MMU_PRELOAD to load without spool assignment` | `INFO     nfc_gate: [shared] PRELOAD_CHECK — no pending spool; advising manual preload` |
-| `force_spool_id` blocks load | `⛔ NFC[shared]: force_spool_id is set — tap your spool tag on the shared reader before loading, or disable force_spool_id to allow untagged loads` | Same message is raised as a G-code error; no separate logger line currently |
-| Spool already assigned | `⚠️ NFC[shared]: spool <spool> is already assigned to a gate — possible duplicate load or stale assignment; no NEXT_SPOOLID staged` | `WARNING  nfc_gate: [shared] PRELOAD_CLEAR_ASSIGNED — spool <spool> already assigned to a gate; possible duplicate load or stale assignment; skipping NEXT_SPOOLID` |
+| `PRELOAD_CHECK` no staged spool | `[ERROR] NFC[shared]: no spool staged — tap your spool tag on the shared reader first, or use MMU_PRELOAD to load without spool assignment` | `INFO     nfc_gate: [shared] PRELOAD_CHECK — no pending spool; advising manual preload` |
+| `force_spool_id` with no staged spool | `[ERROR] NFC[shared]: force_spool_id is set — tap your spool tag on the shared reader before loading, or disable force_spool_id to allow untagged loads` (red console text, emitted once) | `INFO     nfc_gate: [shared] PRELOAD_CHECK — no pending spool; advising manual preload` |
+| Spool already assigned | `[WARN] NFC[shared]: spool <spool> already assigned to gate <gate>; clearing stale Happy Hare assignment` | `INFO     nfc_gate: [shared] PRELOAD_CLEAR_ASSIGNED — spool <spool> already assigned to gate <gate>; clearing stale Happy Hare assignment` |
 | Spool approved for bridge | `[OK] NFC[shared]: spool <spool> approved — macro will send to Happy Hare` | `INFO     nfc_gate: [shared] PRELOAD_CHECK — spool <spool> validated, macro responsible for MMU_GATE_MAP NEXT_SPOOLID` |
 | Auto-created spool approved | `[OK] NFC[shared]: spool <spool> approved [new spool synced] — macro will send to Happy Hare` | Same as above; the macro runs `MMU_SPOOLMAN REFRESH=1 QUIET=1` before `MMU_GATE_MAP NEXT_SPOOLID=<spool>` |
 | Spool staged successfully | `[OK] NFC[shared]: spool <spool> loaded — ready for next tag` | `INFO     nfc_gate: [shared] PRELOAD_CHECK complete — pending cleared, polling restarted` |

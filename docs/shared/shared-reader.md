@@ -74,7 +74,8 @@ or use MMU_PRELOAD to load without spool assignment
 
 The pregate load continues normally — Happy Hare loads the gate without a spool ID.
 
-With `force_spool_id: true` the load is **blocked** instead: a gcode error stops the preload macro chain until the user taps a tag.
+With `force_spool_id: true` the advisory is shown in red so the operator knows
+to tap a tag before loading, without throwing a Klipper command error.
 
 ---
 
@@ -115,6 +116,12 @@ In hybrid installs, per-lane readers take precedence. If a lane reader has
 already assigned the shared reader's pending spool in Happy Hare, the shared
 preload bridge skips `NEXT_SPOOLID`, clears the shared pending state, and lets
 the Happy Hare preload continue.
+
+In pure shared-reader installs, that same "already assigned" state usually
+means Happy Hare is carrying a stale gate assignment from a previous load. The
+default `_NFC_SHARED_PRELOAD` macro clears that gate with
+`MMU_GATE_MAP GATE=<gate> SPOOLID=-1 AVAILABLE=0 SYNC=1 QUIET=1`, applies the
+map, and then clears the shared pending state so the next tag can be scanned.
 
 Run `install.sh` to generate `nfc_reader_shared.cfg` automatically, or copy `config/nfc_reader_shared.cfg` from the repo and fill in `i2c_mcu`, `i2c_bus`, and `i2c_address`.
 
@@ -161,7 +168,7 @@ force_spool_id:         true
 | `shared_spool_ready_effect` | `''` | Name of a `[mmu_led_effect]` to play when the tag resolves to a Spoolman spool and is ready to load. |
 | `shared_tag_unresolved_effect` | `''` | Name of a `[mmu_led_effect]` to play when the tag UID does not resolve to a spool. |
 | `shared_missed_limit` | `3` | Consecutive unresolvable reads before a console error advises `MMU_PRELOAD`. Minimum 1. |
-| `force_spool_id` | `true` | Block pregate loads entirely when no spool is staged. |
+| `force_spool_id` | `true` | Show a red advisory when no spool is staged. |
 
 `mmu_gate` and `scan_enabled` are set internally — do not add them. Only one shared reader may be configured. All Spoolman connection settings and logging settings are inherited from the base `[nfc_gate]` section.
 
@@ -177,7 +184,7 @@ Add one user extension hook to `mmu_macro_vars.cfg`:
 variable_user_post_preload_extension: '_NFC_SHARED_PRELOAD'
 ```
 
-`variable_user_post_preload_extension` fires at the start of every pregate load. `PRELOAD_CHECK` is safe to leave wired for all loads — it skips only while printing, and emits an advisory message (or blocks, with `force_spool_id`) when no spool is staged.
+`variable_user_post_preload_extension` fires at the start of every pregate load. `PRELOAD_CHECK` is safe to leave wired for all loads — it skips only while printing, and emits an advisory message when no spool is staged. With `force_spool_id`, that advisory is red.
 
 Shared polling pauses automatically when printing starts (`idle_timeout:printing`) and resumes when printing completes (`idle_timeout:ready`). No post-unload hook is needed.
 

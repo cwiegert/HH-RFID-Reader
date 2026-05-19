@@ -379,7 +379,7 @@ force_spool_id:         true
 | `shared_spool_ready_effect` | `''` | Name of a `[mmu_led_effect]` to play when the tag resolves to a Spoolman spool and is ready to load. Leave empty to skip ready LED feedback. |
 | `shared_tag_unresolved_effect` | `''` | Name of a `[mmu_led_effect]` to play when the tag UID does not resolve to a spool. Leave empty to skip unresolved LED feedback. |
 | `shared_missed_limit` | `3` | Consecutive unresolvable UID reads before a console error advises the user to use `MMU_PRELOAD`. Minimum 1. |
-| `force_spool_id` | `true` | When `true`, `PRELOAD_CHECK` raises a gcode error if no spool is staged, blocking Happy Hare from completing the pregate load until a tag has been scanned. |
+| `force_spool_id` | `true` | When `true`, `PRELOAD_CHECK` emits a red console advisory if no spool is staged, telling the user to scan a tag before loading. |
 
 `mmu_gate` and `scan_enabled` are not user-configurable — both are set internally by `shared: true`. Only one shared reader may be configured. The reader inherits `spoolman_url`, `spoolman_rfid_key`, `tag_parsing`, `spoolman_auto_create`, and all logging settings from the base `[nfc_gate]` section.
 
@@ -399,7 +399,7 @@ Add one user extension hook to `mmu_macro_vars.cfg`:
 variable_user_post_preload_extension: '_NFC_SHARED_PRELOAD'
 ```
 
-`variable_user_post_preload_extension` fires at the start of every pregate load. `PRELOAD_CHECK` skips only while printing — it is safe to leave wired for all loads. If no spool is staged a console message advises the user; with `force_spool_id: true` the load is blocked instead.
+`variable_user_post_preload_extension` fires at the start of every pregate load. `PRELOAD_CHECK` skips only while printing — it is safe to leave wired for all loads. If no spool is staged a console message advises the user; with `force_spool_id: true` that advisory is shown in red.
 
 Shared polling pauses automatically when printing starts and resumes when printing completes via Klipper's `idle_timeout` events — no post-unload hook is needed.
 
