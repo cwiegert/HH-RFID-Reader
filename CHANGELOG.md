@@ -5,50 +5,50 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
-## [0.9.0-beta.1] — 2026-05-17 — Public Beta
+## [05/18/2026]
 
-### Added
+### Shared Reader Improvements
 
-**Shared Reader**
-- Single PN532 mounted inside the MMU body for spool staging before loading
-- Tap a tagged spool; NFC stages the spool ID for the next pregate preload automatically
-- Separate `nfc_reader_shared.cfg` hardware config — can coexist with per-lane readers
-- `_NFC_SHARED_PRELOAD` Happy Hare post-preload hook
-- LED feedback states: tag read, spool ready, unresolved tag, auto-create in progress
+- Added full shared-reader command coverage through `NFC_SHARED`, including help, status, summary, cancel, replace, LED test, cache sync, polling, scan, and raw poll actions.
+- `NFC_SHARED HELP=1` now documents the required `=1` action flag style so commands match Klipper's parser and avoid malformed bare commands.
+- Shared-reader installs now include the base `nfc_reader.cfg` along with `nfc_reader_shared.cfg`, so the standard NFC commands and shared commands are both available after install.
+- Shared-reader polling uses the scan-jog reader interval, not the slower base polling interval. The config comments now call this out so tuning the shared reader is less mysterious.
+- The shared reader now prints a green `[OK]` line as soon as a tag is successfully read and staged, before the later Happy Hare preload messages.
+- `nfc_reader_shared.cfg` now defaults `i2c_mcu: mmu` so the most common wiring works without editing the hardware config.
 
-**Rich Tag Metadata**
-- OpenSpool and OpenPrintTag NTAG/Type-2 metadata reads
-- Bambu factory-tagged spool support (MIFARE Classic with HKDF authentication via `pycryptodome`)
-- Auto-create Spoolman spools from rich tag data (material, color, temperature)
-- Optional `cbor2` library for full OpenPrintTag CBOR payload decoding; built-in minimal fallback active without it
+### LED Behavior
 
-**Scan-Jog Mode**
-- Incremental jog/read cycles to bring a tag into read range without a full load
-- Left-lane interference detection using spool identity — distinguishes neighbor reads from target reads
-- 3-attempt interference retry with automatic left-lane repark on failure
+- Fixed indefinitely looping unresolved-tag strobe — it now plays a fixed number of flashes and stops cleanly.
+- `mmu_RFID_ready` (green strobe) now persists continuously while a spool is staged and waiting to load; previously it blinked twice and stopped.
+- Added `mmu_RFID_warning` amber strobe: plays when the pending timeout is 80% elapsed, giving the user a visible countdown before the spool is dropped.
+- Amber warning strobe stops exactly when the pending timeout expires — no overshoot.
+- After all NFC effects finish, HH gate LEDs are restored via `MMU_GATE_MAP QUIET=1` only when no spool is pending, preventing HH's gate repaint from killing the active ready effect mid-wait.
+- On pending timeout, polling always restarts automatically (equivalent to issuing `NFC_SHARED REPLACE=1`).
 
-**Happy Hare Integration**
-- `MMU_GATE_MAP` updates with material, color, and temperature from tag metadata
-- `NFC_GATE_STATUS` cross-references Klipper MMU lane MCUs for live status
-- HH external gate-clear detection — re-dispatches `_NFC_SPOOL_CHANGED` on next poll
-- Spoolman sync (`MMU_SPOOLMAN REFRESH=1`) triggered automatically for auto-created spools
+### Klipper Deadlock Fix
 
-**Installer**
-- Interactive terminal color theme selection (20 profiles, or pass `-p <profile>` to skip)
-- Always installs both `nfc_reader_hw.cfg` and `nfc_reader_shared.cfg`; non-destructive merge on re-runs adds only missing sections
-- Sparse checkout configured automatically — docs, bracket files, and CI scripts excluded from the Pi working tree
-- Moonraker `[update_manager emu_nfc_reader]` block appended automatically
-- Klipper Python venv auto-detection across standard install paths and non-standard usernames
+- Eliminated a class of Klipper deadlocks caused by calling `run_script()` from inside GCode command handlers. All LED, respond, and HH gate-map calls that originate from GCode handlers are now deferred via `register_async_callback`. Affected commands: `NFC_SHARED LED_TEST`, `REPLACE`, `CANCEL`, `CLEAR`, `PRELOAD_CLEAR_ASSIGNED`.
 
-### Hardware Support
+### Happy Hare Preload Behavior
 
-| Reader | Mode | Status |
-|---|---|---|
-| PN532 I2C (one per EBB42 lane) | per-lane | stable |
-| PN532 I2C (single, any Klipper MCU) | shared | beta |
-| RC522 | — | not yet supported |
+- Fixed the pure shared-reader stale assignment path. If Happy Hare still has a spool assigned to a gate when the shared reader stages that same spool, NFC now clears the stale Happy Hare gate assignment and gets ready for the next tag.
+- Hybrid installs are still protected: when per-lane readers are present, the shared reader does not overwrite or clear legitimate per-lane assignments.
+- `NFC_SHARED PRELOAD_CLEAR_ASSIGNED=1` now receives the assigned gate number so the automatic cleanup can target the correct Happy Hare gate.
+- `force_spool_id` no longer throws a Klipper command error when no spool is staged. It now shows one red `[ERROR]` console advisory instead of duplicated `!!` error lines.
+- `_NFC_SHARED_PRELOAD` macro cross-checks `gate_status` when evaluating already-assigned spools — a gate with status 0 (filament absent) is no longer treated as occupied, fixing the case where a spool ejected from a gate with no per-lane reader left a stale HH assignment that blocked future loads of the same spool.
 
-### Known Limitations
-- RC522 driver is not yet available
-- Bambu MIFARE reads require `pycryptodome` in the Klipper Python environment — the installer checks and warns if absent
-- Shared reader is tested on single-MCU setups; hybrid (per-lane + shared on separate MCUs) configurations are community-tested only
+### Console Output
+
+- All NFC console messages now route through the logger rather than inline `RESPOND` GCode calls, eliminating `echo:` format output and removing a second source of deadlocks.
+- Standardized console tag colors:
+  - `[OK]` renders green.
+  - `[WARN]` renders yellow.
+  - `[ERROR]` renders red text without forcing a Klipper error unless the command truly fails.
+- Reduced duplicate shared-reader warnings by keeping recovered stale-assignment details in the internal log and showing only one concise console warning.
+- Replaced stop-sign precondition glyphs with `[ERROR]` for clearer, consistent console messages.
+
+### Documentation
+
+- README and quick-install guide updated with the correct Happy Hare hook parameter: `variable_user_post_preload_extension: '_NFC_SHARED_PRELOAD'` in `mmu_macro_vars.cfg`.
+- Install instructions now list the required config includes for shared-reader installs.
+- Command reference updated to cover `NFC_SHARED` commands users are expected to run day-to-day.
