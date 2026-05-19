@@ -140,7 +140,6 @@ i2c_bus:                i2c1
 i2c_address:            0x24
 shared:                 true
 startup_polling:        1
-poll_interval:          3.0
 shared_pending_timeout: 120.0
 shared_read_timeout:    120.0
 shared_tag_read_effect: mmu_RFID_read
@@ -154,7 +153,8 @@ force_spool_id:         true
 |---|---|---|
 | `shared` | `false` | Must be `true`. Enables shared dispatch mode. |
 | `startup_polling` | `0` | Set to `1` to start polling at Klipper boot. |
-| `poll_interval` | `3.0` | Seconds between tag reads while polling. |
+| `scan_poll_interval` | inherited from `[nfc_gate]` | Seconds between shared-reader tag reads while polling. The shipped default is `0.10`. |
+| `poll_interval` | inherited from `[nfc_gate]` | Ignored for shared-reader read cadence; lane readers still use it for normal background polling. |
 | `shared_pending_timeout` | `120.0` | Seconds a resolved spool stays eligible for the next preload. |
 | `shared_read_timeout` | `120.0` | Seconds polling may run after `NFC_SHARED READ=1` without resolving a tag before auto-stopping. Has no effect when started via `startup_polling` or after a successful `PRELOAD_CHECK`. |
 | `shared_tag_read_effect` | `''` | Name of a `[mmu_led_effect]` to play as soon as the shared reader sees a tag. |

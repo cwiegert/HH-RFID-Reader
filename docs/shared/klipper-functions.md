@@ -575,7 +575,7 @@ The shared reader is a single PN532 mounted inside the MMU body. Tap a spool tag
 
 ### Normal flow
 
-1. Shared reader is polling. With `startup_polling: 1` it starts at boot and pauses automatically when printing starts, resuming when printing completes.
+1. Shared reader is polling. With `startup_polling: 1` it starts at boot, reads at `scan_poll_interval`, and pauses automatically when printing starts, resuming when printing completes.
 2. Tap your spool tag on the shared reader — NFC resolves the spool in Spoolman and stores it as pending. LED effect fires if configured.
 3. Drop the spool into an MMU lane and push the filament tip into the pregate sensor.
 4. Happy Hare detects the pregate load and fires `variable_user_post_preload_extension` → `_NFC_SHARED_PRELOAD`.

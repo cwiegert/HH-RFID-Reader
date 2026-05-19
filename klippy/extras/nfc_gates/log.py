@@ -88,6 +88,9 @@ def _respond_prefixed(message, levelno):
         if levelno >= logging.ERROR:
             _console_gcode.run_script(
                 'RESPOND TYPE=error PREFIX="NFC" MSG="%s"' % msg)
+        elif levelno >= logging.WARNING:
+            _console_gcode.run_script(
+                'RESPOND TYPE=command PREFIX="NFC" MSG="%s"' % msg)
         else:
             _console_gcode.run_script(
                 'RESPOND PREFIX="NFC" MSG="%s"' % msg)
@@ -99,6 +102,8 @@ def _respond_prefixed(message, levelno):
             _console_gcode.respond_raw("!! NFC: %s" % message)
         else:
             _console_gcode.respond_info("ERROR: NFC: %s" % message)
+    elif levelno >= logging.WARNING:
+        _console_gcode.respond_info("[WARN] NFC: %s" % message)
     else:
         _console_gcode.respond_info("NFC: %s" % message)
 

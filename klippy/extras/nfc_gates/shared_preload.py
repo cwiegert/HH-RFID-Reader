@@ -23,12 +23,9 @@ class SharedPreloadCoordinator:
                 gate._name, gate._shared_pending_spool,
                 gate._shared_pending_uid)
         if gate._is_printing():
-            logger.info(
+            logger.warning(
                 "nfc_gate: [%s] PRELOAD_CHECK skipped — printing",
                 gate._name)
-            gcmd.respond_info(
-                "[WARN] NFC[%s]: PRELOAD_CHECK skipped while printing; "
-                "pending spool kept" % gate._name)
             if expected_spool > 0:
                 raise gcmd.error(
                     "[WARN] NFC[%s]: PRELOAD_CHECK skipped while printing; "
@@ -137,9 +134,6 @@ class SharedPreloadCoordinator:
                 "nfc_gate: [%s] PRELOAD_CLEAR_ASSIGNED ignored — "
                 "invalid SPOOL_ID=%d",
                 gate._name, spool_id)
-            gcmd.respond_info(
-                "[WARN] NFC[%s]: PRELOAD_CLEAR_ASSIGNED ignored; invalid SPOOL_ID"
-                % gate._name)
             gate._shared_last_action = (
                 "ignored per-lane clear with invalid spool id")
             return
@@ -173,10 +167,6 @@ class SharedPreloadCoordinator:
                 "to a gate; possible duplicate load or stale assignment; "
                 "skipping NEXT_SPOOLID",
                 gate._name, spool_id)
-            gcmd.respond_info(
-                "[WARN] NFC[%s]: spool %d is already assigned to a gate — "
-                "possible duplicate load or stale assignment; "
-                "no NEXT_SPOOLID staged" % (gate._name, spool_id))
         gate._shared_clear_pending()
         gate._shared_last_action = (
             "cleared spool %d because HH already had it assigned" % spool_id)

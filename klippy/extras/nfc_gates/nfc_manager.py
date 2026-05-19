@@ -741,34 +741,19 @@ class NFCGate:
                     "[WARN] NFC[%s]: no LED effect configured" % self._name)
             return False
         gate_effect = self._shared_gate_effect_name(effect_name)
-        try:
-            self._gcode.run_script("_MMU_SET_LED_EFFECT EFFECT=%s REPLACE=1" % gate_effect)
-            logger.info(
-                "nfc_gate: [%s] LED effect %s started",
-                self._name, gate_effect)
-            if gcmd is not None:
-                gcmd.respond_info(
-                    "NFC[%s]: LED effect %s started"
-                    % (self._name, gate_effect))
-            return True
-        except Exception as e:
-            logger.warning(
-                "nfc_gate: [%s] LED effect %s failed (mmu_led_effect not "
-                "defined or HH LED plugin missing): %s",
-                self._name, gate_effect, e)
-            try:
-                self._gcode.run_script(
-                    "RESPOND MSG=\"[WARN] NFC[%s]: LED effect '%s' failed; "
-                    "tag read still staged\""
-                    % (self._name, gate_effect))
-            except Exception as respond_error:
-                logger.debug(
-                    "nfc_gate: [%s] RESPOND failed after LED warning: %s",
-                    self._name, respond_error)
-            if gcmd is not None:
-                gcmd.respond_info(
-                    "[WARN] NFC[%s]: LED effect %s failed" % (self._name, gate_effect))
-            return False
+        logger.info(
+            "nfc_gate: [%s] LED effect %s scheduled",
+            self._name, gate_effect)
+        if gcmd is not None:
+            gcmd.respond_info(
+                "NFC[%s]: LED effect %s started" % (self._name, gate_effect))
+        # Deferred via async callback — safe from both timer callbacks and
+        # GCode handlers (run_script from a GCode handler re-enters the
+        # GCode mutex and deadlocks).
+        script = "_MMU_SET_LED_EFFECT EFFECT=%s REPLACE=1" % gate_effect
+        self.reactor.register_async_callback(
+            lambda et, _s=script: self._safe_run_script(_s))
+        return True
 
     def _shared_play_tag_read_effect(self, gcmd=None):
         if self._shared_play_led_effect(self._shared_tag_read_effect, gcmd):
@@ -812,15 +797,6 @@ class NFCGate:
         self._shared_stop_tag_read_effect()
         self._shared_stop_tag_unresolved_effect()
 
-    def _shared_respond(self, msg, error=False):
-        respond_type = "TYPE=error " if error else ""
-        try:
-            self._gcode.run_script(
-                "RESPOND %sMSG=\"%s\"" % (respond_type, msg))
-        except Exception as e:
-            logger.debug(
-                "nfc_gate: [%s] RESPOND failed: %s", self._name, e)
-
     def _shared_restore_hh_leds(self):
         # Deferred via async callback — safe from both timer callbacks and
         # GCode handlers (run_script from a GCode handler re-enters the
@@ -833,7 +809,12 @@ class NFCGate:
         if self._shared_pending_warning_fired:
             self._shared_stop_led_effect(self._shared_spool_warning_effect)
             self._shared_pending_warning_fired = False
-        self._shared_restore_hh_leds()
+        # Restore HH gate LEDs only when no spool is staged.
+        # While a spool is pending the ready effect must stay active —
+        # calling MMU_GATE_MAP QUIET=1 would trigger an HH REPLACE that
+        # kills the NFC effect and goes dark.
+        if self._shared_pending_spool is None:
+            self._shared_restore_hh_leds()
         return self.reactor.NEVER
 
     def _shared_schedule_effect_stop(self, delay):
@@ -1316,19 +1297,10 @@ class NFCGate:
             # Schedule the effect to stop exactly when the pending deadline
             # expires so the blink doesn't outlive the timeout.
             self._shared_schedule_effect_stop(remaining)
-        logger.info(
-            "nfc_gate: [%s] shared pending spool=%d — 80%% timeout warning, "
-            "%.0fs remaining",
+        logger.warning(
+            "nfc_gate: [%s] spool %d staged — load into gate soon or "
+            "tap tag again (%.0fs remaining)",
             self._name, self._shared_pending_spool, remaining)
-        try:
-            self._gcode.run_script(
-                "RESPOND TYPE=command MSG=\"[WARN] NFC[%s]: spool %d staged — "
-                "load into gate soon or tap tag again\""
-                % (self._name, self._shared_pending_spool))
-        except Exception as e:
-            logger.debug(
-                "nfc_gate: [%s] RESPOND failed in warning timer: %s",
-                self._name, e)
         return self.reactor.NEVER
 
     def _poll_timer_event(self, eventtime):
@@ -1483,10 +1455,12 @@ class NFCGate:
             self._poll()
         except Exception:
             logger.exception("nfc_gate: [%s] poll error", self._name)
+        next_interval = (self._scan_poll_interval
+                         if self._shared else self._poll_interval)
         if self._debug >= 4:
             logger.debug("nfc_gate: [%s] poll cycle done — "
-                         "next poll in %.0fs", self._name, self._poll_interval)
-        return self.reactor.monotonic() + self._poll_interval
+                         "next poll in %.2fs", self._name, next_interval)
+        return self.reactor.monotonic() + next_interval
 
     def _read_current_tag(self):
         return tag_handler.read_current_tag(self)
@@ -1549,9 +1523,9 @@ class NFCGate:
             if self._shared_tag_read_effect:
                 self._shared_play_tag_read_effect()
             if self._debug >= 2:
-                self._shared_respond(
-                    "NFC[%s]: tag read uid=%s — resolving..."
-                    % (self._name, uid_hex))
+                logger.info(
+                    "nfc_gate: [%s] tag read uid=%s — resolving...",
+                    self._name, uid_hex)
         spool_id = self._resolve_spool(uid_hex)
         event    = self._state.process_read(uid_hex, spool_id,
                                             scan_mode=self._scan_mode)
@@ -1566,9 +1540,9 @@ class NFCGate:
                     self._shared_stop_tag_read_effect()
                     self._shared_play_tag_unresolved_effect()
                 if self._shared_missed_resolutions == 1 and self._debug >= 2:
-                    self._shared_respond(
-                        "NFC[%s]: uid=%s not in Spoolman"
-                        % (self._name, uid_hex), error=True)
+                    logger.warning(
+                        "nfc_gate: [%s] uid=%s not in Spoolman",
+                        self._name, uid_hex)
                 if self._shared_missed_resolutions == self._shared_missed_limit:
                     self._shared_unresolved_limit_reached(uid_hex)
         return uid_hex is not None
@@ -1959,9 +1933,6 @@ class NFCGate:
             if self._shared_pending_spool is not None:
                 pending_spool = self._shared_pending_spool
                 if pending_spool == spool:
-                    msg = (
-                        "[WARN] NFC[%s]: spool %d is already pending; duplicate "
-                        "tag read ignored" % (self._name, pending_spool))
                     logger.info(
                         "nfc_gate: [%s] shared duplicate tag ignored — "
                         "spool=%d uid=%s",
@@ -1969,24 +1940,13 @@ class NFCGate:
                     self._shared_last_action = (
                         "ignored duplicate read for pending spool %d" % spool)
                 else:
-                    msg = (
-                        "[WARN] NFC[%s]: spool %d is already pending; read spool %d "
-                        "uid=%s ignored. Run NFC_SHARED REPLACE=1 to discard "
-                        "the pending spool and scan another"
-                        % (self._name, pending_spool, spool, uid))
                     logger.warning(
-                        "nfc_gate: [%s] shared tag ignored — pending spool=%d, "
-                        "new spool=%d uid=%s; use NFC_SHARED REPLACE=1 to replace",
+                        "nfc_gate: [%s] spool %d already pending; new spool=%d "
+                        "uid=%s ignored — use NFC_SHARED REPLACE=1 to replace",
                         self._name, pending_spool, spool, uid)
                     self._shared_last_action = (
                         "ignored spool %d while spool %d pending"
                         % (spool, pending_spool))
-                try:
-                    self._gcode.run_script('RESPOND MSG="%s"' % msg)
-                except Exception as e:
-                    logger.debug(
-                        "nfc_gate: [%s] RESPOND failed after ignored tag: %s",
-                        self._name, e)
                 return
             auto_created = False
             if self._state.current_tag is not None:
@@ -2020,15 +1980,10 @@ class NFCGate:
                     "auto_created=%s; polling stopped, awaiting PRELOAD_CHECK",
                     self._name, spool, uid, auto_created)
             _ac_note = " [new spool]" if auto_created else ""
-            try:
-                self._gcode.run_script(
-                    "RESPOND MSG=\"[OK] NFC[%s]: spool %d detected "
-                    "(UID %s)%s — load spool into gate now\""
-                    % (self._name, spool, uid, _ac_note))
-            except Exception as e:
-                logger.debug(
-                    "nfc_gate: [%s] RESPOND failed after spool resolved: %s",
-                    self._name, e)
+            logger.info(
+                "nfc_gate: [%s] spool %d detected (UID %s)%s — "
+                "load spool into gate now",
+                self._name, spool, uid, _ac_note)
             self._shared_stop_tag_read_effect()
             if self._shared_spool_ready_effect:
                 self._shared_play_spool_ready_effect()
@@ -2050,9 +2005,9 @@ class NFCGate:
                         self._shared_stop_tag_read_effect()
                         self._shared_play_tag_unresolved_effect()
                     if self._shared_missed_resolutions == 1 and self._debug >= 2:
-                        self._shared_respond(
-                            "NFC[%s]: uid=%s not in Spoolman"
-                            % (self._name, uid), error=True)
+                        logger.warning(
+                            "nfc_gate: [%s] uid=%s not in Spoolman",
+                            self._name, uid)
                     if self._shared_missed_resolutions == self._shared_missed_limit:
                         self._shared_unresolved_limit_reached(uid)
                 tag  = self._state.current_tag
@@ -2082,19 +2037,16 @@ class NFCGate:
                     self._name, self._shared_pending_spool)
 
     def _shared_unresolved_limit_reached(self, uid):
-        logger.info(
-            "nfc_gate: [%s] unresolved limit reached for uid=%s — "
-            "resetting state; polling continues",
-            self._name, uid)
         self._shared_missed_resolutions = 0
         self._state.current_uid   = None
         self._state.current_spool = None
         self._shared_read_deadline = 0.0
-        self._shared_respond(
-            "NFC[%s]: uid=%s not in Spoolman after %d attempts"
-            % (self._name, uid, self._shared_missed_limit), error=True)
-        self._shared_respond(
-            "[OK] NFC[%s]: reader ready for next tag" % self._name)
+        logger.error(
+            "nfc_gate: [%s] uid=%s not in Spoolman after %d attempts",
+            self._name, uid, self._shared_missed_limit)
+        logger.info(
+            "nfc_gate: [%s] reader ready for next tag",
+            self._name)
 
     def _shared_expire_pending_if_needed(self):
         if (self._shared_pending_spool is not None
@@ -2175,14 +2127,10 @@ class NFCGate:
                     "polling not resumed (failed=%s printing=%s)",
                     self._name, self._failed, self._is_printing())
             resume_note = " Reader polling resumed." if polling_resumed else ""
-            msg = (
-                "RESPOND TYPE=error MSG=\"[ERROR] NFC[%s]: timeout after %.0fs — "
-                "no spool was loaded.%s Tap tag to stage again.\""
-                % (self._name, self._shared_pending_timeout, resume_note))
-            # Use async callback so the timer returns immediately rather than
-            # blocking while gcode processes the RESPOND (prevents Klipper hang).
-            self.reactor.register_async_callback(
-                lambda et, _m=msg: self._safe_run_script(_m))
+            logger.error(
+                "nfc_gate: [%s] timeout after %.0fs — no spool was loaded.%s "
+                "Tap tag to stage again.",
+                self._name, self._shared_pending_timeout, resume_note)
             return True
         return False
 
