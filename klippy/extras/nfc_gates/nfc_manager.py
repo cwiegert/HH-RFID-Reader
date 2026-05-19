@@ -789,13 +789,12 @@ class NFCGate:
         if not effect_name:
             return
         gate_effect = self._shared_gate_effect_name(effect_name)
-        try:
-            self._gcode.run_script(
-                "_MMU_SET_LED_EFFECT EFFECT=%s STOP=1" % gate_effect)
-        except Exception as e:
-            logger.debug(
-                "nfc_gate: [%s] STOP effect %s failed: %s",
-                self._name, gate_effect, e)
+        # Deferred via async callback so this is safe from both timer
+        # callbacks and GCode handlers (run_script from a GCode handler
+        # deadlocks because it re-enters the GCode mutex).
+        script = "_MMU_SET_LED_EFFECT EFFECT=%s STOP=1" % gate_effect
+        self.reactor.register_async_callback(
+            lambda et, _s=script: self._safe_run_script(_s))
 
     def _shared_stop_auto_create_effect(self):
         self._shared_stop_led_effect(self._shared_auto_create_effect)
@@ -823,15 +822,17 @@ class NFCGate:
                 "nfc_gate: [%s] RESPOND failed: %s", self._name, e)
 
     def _shared_restore_hh_leds(self):
-        try:
-            self._gcode.run_script("MMU_GATE_MAP QUIET=1")
-        except Exception as e:
-            logger.debug(
-                "nfc_gate: [%s] MMU_GATE_MAP restore failed: %s",
-                self._name, e)
+        # Deferred via async callback — safe from both timer callbacks and
+        # GCode handlers (run_script from a GCode handler re-enters the
+        # GCode mutex and deadlocks).
+        self.reactor.register_async_callback(
+            lambda et: self._safe_run_script("MMU_GATE_MAP QUIET=1"))
 
     def _shared_effect_timer_callback(self, eventtime):
         self._shared_stop_all_nfc_effects()
+        if self._shared_pending_warning_fired:
+            self._shared_stop_led_effect(self._shared_spool_warning_effect)
+            self._shared_pending_warning_fired = False
         self._shared_restore_hh_leds()
         return self.reactor.NEVER
 
@@ -1309,16 +1310,19 @@ class NFCGate:
             return self.reactor.NEVER
         self._shared_pending_warning_fired = True
         self._shared_stop_spool_ready_effect()
+        remaining = max(1.0, self._shared_pending_deadline - eventtime)
         if self._shared_spool_warning_effect:
             self._shared_play_led_effect(self._shared_spool_warning_effect)
+            # Schedule the effect to stop exactly when the pending deadline
+            # expires so the blink doesn't outlive the timeout.
+            self._shared_schedule_effect_stop(remaining)
         logger.info(
             "nfc_gate: [%s] shared pending spool=%d — 80%% timeout warning, "
             "%.0fs remaining",
-            self._name, self._shared_pending_spool,
-            max(0.0, self._shared_pending_deadline - eventtime))
+            self._name, self._shared_pending_spool, remaining)
         try:
             self._gcode.run_script(
-                "RESPOND MSG=\"[WARN] NFC[%s]: spool %d staged — "
+                "RESPOND TYPE=command MSG=\"[WARN] NFC[%s]: spool %d staged — "
                 "load into gate soon or tap tag again\""
                 % (self._name, self._shared_pending_spool))
         except Exception as e:
@@ -2114,9 +2118,12 @@ class NFCGate:
                 self._name,
                 self._shared_pending_spool,
                 self._shared_pending_uid)
-        # Cancel warning timer and stop whichever LED effect is active,
+        # Cancel all pending timers and stop whichever LED effect is active,
         # then ask HH to repaint all gate LEDs from the current gate map.
         self.reactor.update_timer(self._warning_timer, self.reactor.NEVER)
+        if self._shared_effect_timer is not None:
+            self.reactor.update_timer(
+                self._shared_effect_timer, self.reactor.NEVER)
         if self._shared_pending_warning_fired:
             self._shared_stop_led_effect(self._shared_spool_warning_effect)
         else:
@@ -2147,17 +2154,26 @@ class NFCGate:
 
     def _shared_expire_pending_and_maybe_resume(self):
         if self._shared_expire_pending_if_needed():
-            polling_resumed = self._shared_resume_startup_polling()
+            # Always restart polling after timeout (equivalent to
+            # NFC_SHARED REPLACE=1) so the user can tap a new tag
+            # immediately without a manual command.
+            polling_resumed = not self._failed and not self._is_printing()
             if polling_resumed:
+                self._shared_missed_resolutions = 0
+                self._shared_last_error = None
+                self._shared_read_deadline = (
+                    self.reactor.monotonic() + self._shared_read_timeout)
+                self._polling = True
+                self.reactor.update_timer(self._poll_timer, self.reactor.NOW)
                 logger.info(
                     "nfc_gate: [%s] shared pending timeout — "
-                    "startup polling resumed",
+                    "polling restarted (NFC_SHARED REPLACE=1 behavior)",
                     self._name)
             else:
                 logger.info(
                     "nfc_gate: [%s] shared pending timeout — "
-                    "polling remains stopped",
-                    self._name)
+                    "polling not resumed (failed=%s printing=%s)",
+                    self._name, self._failed, self._is_printing())
             resume_note = " Reader polling resumed." if polling_resumed else ""
             msg = (
                 "RESPOND TYPE=error MSG=\"[ERROR] NFC[%s]: timeout after %.0fs — "
