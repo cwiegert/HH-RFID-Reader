@@ -683,7 +683,7 @@ class NFCGate:
                 "nfc_gate: [%s] shared scan skipped while printing",
                 self._name)
             gcmd.respond_info(
-                "[WARN] NFC[%s]: shared scan skipped while printing" % self._name)
+                "[WARN] [%s]: shared scan skipped while printing" % self._name)
             return
         try:
             target_info = self._reader.read_target()
@@ -712,7 +712,7 @@ class NFCGate:
                     "nfc_gate: [%s] PN532 did not respond — "
                     "check wiring and I2C address (default 0x24)", self._name)
             gcmd.respond_info(color_console_tags(
-                "%s NFC[%s]: reader %s" %
+                "%s [%s]: reader %s" %
                 ("[OK]" if alive else "[WARN]", self._name,
                  "OK" if alive else "not responding")))
             if (self._shared and alive and self._startup_polling == 1
@@ -729,7 +729,7 @@ class NFCGate:
         except Exception as e:
             self._failed = True
             logger.error("nfc_gate: [%s] init error: %s", self._name, e)
-            gcmd.respond_info("[WARN] NFC[%s]: init failed: %s" %
+            gcmd.respond_info("[WARN] [%s]: init failed: %s" %
                               (self._name, e))
 
     def _shared_gate_effect_name(self, base):
@@ -752,7 +752,7 @@ class NFCGate:
                 logger.warning(
                     "nfc_gate: [%s] no LED effect configured", self._name)
                 gcmd.respond_info(
-                    "[WARN] NFC[%s]: no LED effect configured" % self._name)
+                    "[WARN] [%s]: no LED effect configured" % self._name)
             return False
         gate_effect = self._shared_gate_effect_name(effect_name)
         logger.info(
@@ -852,7 +852,7 @@ class NFCGate:
                         "nfc_gate: [%s] gate %d READ=1 refused — "
                         "reader failed; run INIT=1 first",
                         self._name, self._gate)
-                gcmd.respond_info("[WARN] NFC[%s]: reader failed; run INIT=1 first"
+                gcmd.respond_info("[WARN] [%s]: reader failed; run INIT=1 first"
                                   % self._name)
                 return
             if self._shared:
@@ -861,7 +861,7 @@ class NFCGate:
                         "nfc_gate: [%s] shared READ=1 refused — printing",
                         self._name)
                     gcmd.respond_info(
-                        "[WARN] NFC[%s]: shared polling not started while printing"
+                        "[WARN] [%s]: shared polling not started while printing"
                         % self._name)
                     return
                 if self._shared_pending_spool is not None:
@@ -870,7 +870,7 @@ class NFCGate:
                         "spool %s already pending",
                         self._name, self._shared_pending_spool)
                     gcmd.respond_info(
-                        "[WARN] NFC[%s]: spool %s is already pending; use "
+                        "[WARN] [%s]: spool %s is already pending; use "
                         "NFC_SHARED REPLACE=1 to discard it and scan another, "
                         "or NFC_SHARED CANCEL=1 to cancel"
                         % (self._name, self._shared_pending_spool))
@@ -1217,7 +1217,7 @@ class NFCGate:
         if self._gcode is not None:
             if self._failed:
                 self._gcode.respond_info(scan_jog._color_tags(
-                    "[WARN] NFC[%s]: not ready — check wiring. "
+                    "[WARN] [%s]: not ready — check wiring. "
                     "Run NFC GATE=%d INIT=1 after fixing."
                     % (self._name, self._gate)))
             else:
@@ -1225,7 +1225,7 @@ class NFCGate:
                              if self._hh_seed_spool_id is not None
                              else "  HH reports gate empty")
                 self._gcode.respond_info(scan_jog._color_tags(
-                    "[OK] NFC[%s]: ready.%s  %s"
+                    "[OK] [%s]: ready.%s  %s"
                     % (self._name,
                        seed_note,
                        "Startup polling is enabled; first poll in %.1fs."
@@ -1446,7 +1446,7 @@ class NFCGate:
                         logger.warning("nfc_gate: [%s] %s", self._name, msg)
                         self._console("[WARN] " + msg)
                         return self.reactor.monotonic() + self._poll_interval
-                    msg = ("[SCAN] NFC[%d]: starting scan-jog "
+                    msg = ("[SCAN] [%d]: starting scan-jog "
                            "(max=%.0fmm  poll=%.2fs)"
                            % (self._gate, max_mm, self._scan_poll_interval))
                     if self._debug >= 3:
@@ -2000,7 +2000,7 @@ class NFCGate:
                 self._name, spool, uid, _ac_note)
             if self._gcode is not None:
                 self._gcode.respond_info(color_console_tags(
-                    "[OK] NFC[%s]: read tag — spool %d staged%s"
+                    "[OK] [%s]: read tag — spool %d staged%s"
                     % (self._name, spool, _ac_note)))
             self._shared_stop_tag_read_effect()
             if self._shared_spool_ready_effect:
@@ -2275,7 +2275,7 @@ class NFCGate:
                 "nfc_gate: [%s] shared REPLACE=1 refused — reader failed; "
                 "run INIT=1 first",
                 self._name)
-            gcmd.respond_info("[WARN] NFC[%s]: reader failed; run INIT=1 first"
+            gcmd.respond_info("[WARN] [%s]: reader failed; run INIT=1 first"
                               % self._name)
             return
         if self._is_printing():
@@ -2283,7 +2283,7 @@ class NFCGate:
                 "nfc_gate: [%s] shared REPLACE=1 refused — printing",
                 self._name)
             gcmd.respond_info(
-                "[WARN] NFC[%s]: shared polling not started while printing"
+                "[WARN] [%s]: shared polling not started while printing"
                 % self._name)
             return
         pending_spool = self._shared_pending_spool
@@ -2362,7 +2362,7 @@ class NFCGate:
                     "nfc_gate: [%s] shared poll skipped while printing",
                     self._name)
                 gcmd.respond_info(
-                    "[WARN] NFC[%s]: shared poll skipped while printing" % self._name)
+                    "[WARN] [%s]: shared poll skipped while printing" % self._name)
                 return
             self._poll()
             logger.info(

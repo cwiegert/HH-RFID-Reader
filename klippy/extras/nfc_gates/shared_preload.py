@@ -42,7 +42,7 @@ class SharedPreloadCoordinator:
                 gate._name)
             if expected_spool > 0:
                 raise gcmd.error(
-                    "[WARN] NFC[%s]: PRELOAD_CHECK skipped while printing; "
+                    "[WARN] [%s]: PRELOAD_CHECK skipped while printing; "
                     "NEXT_SPOOLID not staged" % gate._name)
             return
 
@@ -54,20 +54,20 @@ class SharedPreloadCoordinator:
                 gate._name)
             if expected_spool > 0:
                 raise gcmd.error(
-                    "[WARN] NFC[%s]: pending spool %d is no longer valid%s; "
+                    "[WARN] [%s]: pending spool %d is no longer valid%s; "
                     "NEXT_SPOOLID not staged"
                     % (gate._name, expected_spool,
                        " (expired)" if expired else ""))
             if gate._shared_force_spool_id:
                 gcmd.respond_info(_red_console(
-                    "[ERROR] NFC[%s]: force_spool_id is set — tap your spool tag on "
+                    "[ERROR] [%s]: force_spool_id is set — tap your spool tag on "
                     "the shared reader before loading, or disable "
                     "force_spool_id to allow untagged loads" % gate._name))
                 gate._shared_last_action = (
                     "blocked preload without staged spool")
                 return
             gcmd.respond_info(
-                "[ERROR] NFC[%s]: no spool staged — tap your spool tag on the "
+                "[ERROR] [%s]: no spool staged — tap your spool tag on the "
                 "shared reader first, or use MMU_PRELOAD to load without "
                 "spool assignment" % gate._name)
             gate._shared_last_action = "preload check found no staged spool"
@@ -81,7 +81,7 @@ class SharedPreloadCoordinator:
                 "pending spool is %d; aborting stale bridge",
                 gate._name, expected_spool, spool_id)
             raise gcmd.error(
-                "[WARN] NFC[%s]: pending spool changed from %d to %d; "
+                "[WARN] [%s]: pending spool changed from %d to %d; "
                 "NEXT_SPOOLID not staged. Trigger the preload again."
                 % (gate._name, expected_spool, spool_id))
 
@@ -103,7 +103,7 @@ class SharedPreloadCoordinator:
         gate._shared_preload_auto_created = auto_created
         _ac_note = " [new spool synced]" if auto_created else ""
         gcmd.respond_info(color_console_tags(
-            "[OK] NFC[%s]: spool %d approved%s — macro will send to Happy Hare"
+            "[OK] [%s]: spool %d approved%s — macro will send to Happy Hare"
             % (gate._name, spool_id, _ac_note)))
         logger.info(
             "nfc_gate: [%s] PRELOAD_CHECK — spool %d validated, "
@@ -117,16 +117,16 @@ class SharedPreloadCoordinator:
         spool_id = gcmd.get_int('SPOOL_ID', -1)
         if gate._shared_preload_spool is None:
             raise gcmd.error(
-                "[WARN] NFC[%s]: PRELOAD_COMMIT without approved spool; "
+                "[WARN] [%s]: PRELOAD_COMMIT without approved spool; "
                 "pending spool kept" % gate._name)
         if spool_id != gate._shared_preload_spool:
             raise gcmd.error(
-                "[WARN] NFC[%s]: PRELOAD_COMMIT spool mismatch "
+                "[WARN] [%s]: PRELOAD_COMMIT spool mismatch "
                 "(got %d, approved %d); pending spool kept"
                 % (gate._name, spool_id, gate._shared_preload_spool))
         if gate._shared_pending_spool != spool_id:
             raise gcmd.error(
-                "[WARN] NFC[%s]: pending spool changed before commit "
+                "[WARN] [%s]: pending spool changed before commit "
                 "(got %s, approved %d); pending spool kept"
                 % (gate._name, gate._shared_pending_spool, spool_id))
         gate._shared_clear_pending()
@@ -140,7 +140,7 @@ class SharedPreloadCoordinator:
             "polling restarted",
             gate._name)
         gcmd.respond_info(color_console_tags(
-            "[OK] NFC[%s]: spool %d loaded — ready for next tag"
+            "[OK] [%s]: spool %d loaded — ready for next tag"
             % (gate._name, spool_id)))
 
     def clear_assigned(self, gcmd):
@@ -198,5 +198,5 @@ class SharedPreloadCoordinator:
         gate._polling = True
         gate.reactor.update_timer(gate._poll_timer, gate.reactor.NOW)
         gcmd.respond_info(color_console_tags(
-            "[OK] NFC[%s]: spool %d loaded — ready for next tag"
+            "[OK] [%s]: spool %d loaded — ready for next tag"
             % (gate._name, spool_id)))

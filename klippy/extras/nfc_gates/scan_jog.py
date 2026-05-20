@@ -34,41 +34,41 @@ def _color_tags(text):
 def manual_jog_scan(gate, gcmd):
     """Start scan-and-jog on demand, matching the automatic trigger path."""
     if gate._failed:
-        msg = ("[ERROR] NFC[%s]: reader failed - "
+        msg = ("[ERROR] [%s]: reader failed - "
                "run NFC GATE=%d INIT=1 first"
                % (gate._name, gate._gate))
         logger.error(msg)
         gcmd.respond_info(_color_tags(msg))
         return
     if is_printing(gate):
-        msg = ("[WARN] NFC[%s]: print is active - "
+        msg = ("[WARN] [%s]: print is active - "
                "cannot start scan-jog while printing" % gate._name)
         logger.warning(msg)
         gcmd.respond_info(_color_tags(msg))
         return
     hh = gate._read_hh_status()
     if hh.present and not hh.idle:
-        msg = ("[WARN] NFC[%s]: Happy Hare is busy (action=%s) — "
+        msg = ("[WARN] [%s]: Happy Hare is busy (action=%s) — "
                "wait for idle before starting scan-jog"
                % (gate._name, hh.action))
         logger.warning(msg)
         gcmd.respond_info(_color_tags(msg))
         return
     if gate.__class__._active_scan_gate is not None:
-        msg = ("[WARN] NFC[%s]: gate %d is already scanning — "
+        msg = ("[WARN] [%s]: gate %d is already scanning — "
                "only one gate may scan at a time"
                % (gate._name, gate.__class__._active_scan_gate))
         logger.warning(msg)
         gcmd.respond_info(_color_tags(msg))
         return
     if gate._scan_mode:
-        msg = "[WARN] NFC[%s]: scan-jog already in progress for this gate" % gate._name
+        msg = "[WARN] [%s]: scan-jog already in progress for this gate" % gate._name
         logger.warning(msg)
         gcmd.respond_info(_color_tags(msg))
         return
     ok, reason, max_mm = gate._prepare_scan_jog()
     if not ok:
-        msg = "[WARN] NFC[%s]: scan-jog not available while %s" % (
+        msg = "[WARN] [%s]: scan-jog not available while %s" % (
             gate._name, reason)
         logger.warning(msg)
         gcmd.respond_info(_color_tags(msg))
@@ -77,7 +77,7 @@ def manual_jog_scan(gate, gcmd):
     gate.reactor.update_timer(gate._poll_timer, gate.reactor.NEVER)
     start(gate, max_mm=max_mm)
     gcmd.respond_info(_color_tags(
-        "[SCAN] NFC[%s]: scan-jog started for gate %d"
+        "[SCAN] [%s]: scan-jog started for gate %d"
         " (max=%.0fmm  poll=%.2fs)"
         % (gate._name, gate._gate,
            gate._scan_max_mm, gate._scan_poll_interval)))
@@ -310,7 +310,7 @@ def step_event(gate, eventtime):
         tag_found = gate._poll()
     except Exception:
         logger.exception("nfc_gate: [%s] scan step poll error", gate._name)
-        msg = "[ERROR] NFC[%s]: scan poll failed" % gate._name.capitalize()
+        msg = "[ERROR] [%s]: scan poll failed" % gate._name.capitalize()
         logger.error(msg)
         gate._console(msg)
         tag_found = False
@@ -362,7 +362,7 @@ def step_event(gate, eventtime):
 
     if gate._scan_mm_total >= gate._scan_max_mm:
         if gate._scan_found_event is not None:
-            msg = ("[WARN] NFC[%s]: scan reached max distance after decode retries; "
+            msg = ("[WARN] [%s]: scan reached max distance after decode retries; "
                    "using best incomplete result" % gate._name.capitalize())
             logger.info(msg)
             gate._console(msg)
@@ -381,7 +381,7 @@ def step_event(gate, eventtime):
         remaining = gate._scan_max_mm - gate._scan_mm_total
         chunk = min(substep_distance(gate), remaining)
         next_position = gate._scan_mm_total + chunk
-        msg = ("[SCAN] NFC[%s]: moving %.1fmm  scan position %.1f / %.1fmm "
+        msg = ("[SCAN] [%s]: moving %.1fmm  scan position %.1f / %.1fmm "
                "(substep of %.1fmm)"
                % (gate._name.capitalize(), chunk, next_position, gate._scan_max_mm,
                   gate._scan_jog_mm))
@@ -547,7 +547,7 @@ def restore_left_neighbor(gate):
     gcode = gate.printer.lookup_object('gcode', None)
     if gcode is None:
         return
-    msg = ("[REWIND] NFC[Lane%d]: parking at gate sensor"
+    msg = ("[REWIND] [Lane%d]: parking at gate sensor"
            % left_gate)
     logger.info(msg)
     try:
@@ -562,7 +562,7 @@ def restore_left_neighbor(gate):
             "neighbor gate %d: %s",
             gate._name, gate._gate, left_gate, e)
         gate._console(
-            "[WARN] NFC[Lane%d]: failed to park at gate sensor — "
+            "[WARN] [Lane%d]: failed to park at gate sensor — "
             "move it back manually" % left_gate)
         return
     if gate._debug >= 3:
@@ -595,7 +595,7 @@ def handle_left_neighbor_interference(gate):
     attempts = getattr(gate, '_scan_left_neighbor_attempts', 0)
     if already_tracking_same_identity and attempts >= LEFT_NEIGHBOR_CLEARANCE_RETRIES:
         msg = (
-            "[ERROR] NFC[%s]: left lane gate %d is interfering with the "
+            "[ERROR] [%s]: left lane gate %d is interfering with the "
             "current lane read after %d clearance moves (%.0fmm); check "
             "reader position, tag placement, or lane spacing"
             % (gate._name.capitalize(), left_gate, attempts,
@@ -608,18 +608,18 @@ def handle_left_neighbor_interference(gate):
         return True
 
     logger.info(
-        "[MOVE] NFC[%s]: uid=%s spool_identity=%s spool=%s belongs to left neighbor gate %d; "
+        "[MOVE] [%s]: uid=%s spool_identity=%s spool=%s belongs to left neighbor gate %d; "
         "clearance move %d/%d to clear neighbor from reader field",
         gate._name.capitalize(), uid, identity, spool, left_gate, attempts + 1,
         LEFT_NEIGHBOR_CLEARANCE_RETRIES)
     gate._console(
-        "[MOVE] NFC[%s]: uid=%s spool_identity=%s spool=%s belongs to left neighbor gate %d; "
+        "[MOVE] [%s]: uid=%s spool_identity=%s spool=%s belongs to left neighbor gate %d; "
         "clearance move %d/%d to clear neighbor from reader field"
         % (gate._name.capitalize(), uid, identity, spool, left_gate, attempts + 1,
            LEFT_NEIGHBOR_CLEARANCE_RETRIES))
     if not shift_left_neighbor(gate, left_gate, identity):
         msg = (
-            "[WARN] NFC[%s]: failed to clear left neighbor gate %d; aborting scan "
+            "[WARN] [%s]: failed to clear left neighbor gate %d; aborting scan "
             "to avoid assigning the neighbor spool"
             % (gate._name.capitalize(), left_gate))
         logger.info(msg)
@@ -630,7 +630,7 @@ def handle_left_neighbor_interference(gate):
     clear_false_scan_result(gate)
     gate._scan_next_chunk_time = (
         gate.reactor.monotonic() + DECODE_RETRY_SETTLE_DELAY)
-    msg = ("[SCAN] NFC[%s]: re-polling at position %.1fmm after left lane clearance"
+    msg = ("[SCAN] [%s]: re-polling at position %.1fmm after left lane clearance"
            % (gate._name.capitalize(), gate._scan_mm_total))
     logger.info(msg)
     gate._console(msg)
@@ -695,7 +695,7 @@ def decode_retry_exhausted(gate):
 def resume_scan_after_decode_retry(gate, now):
     uid = gate._scan_decode_retry_uid
     max_attempts, _retry_mm = decode_retry_config(gate)
-    msg = ("[WARN] NFC[%s]: tag decode still incomplete after %d retries; "
+    msg = ("[WARN] [%s]: tag decode still incomplete after %d retries; "
            "continuing scan-jog" % (gate._name.capitalize(), max_attempts))
     logger.info("%s (uid=%s)", msg, uid)
     gate._console(msg)
@@ -785,7 +785,7 @@ def queue_decode_retry_move(gate, now, uid, reason, max_attempts, retry_mm):
         return False
 
     attempt = gate._scan_decode_retry_attempts
-    msg = ("[WARN] NFC[%s]: tag decode incomplete; retry %d/%d after %.1fmm jog"
+    msg = ("[WARN] [%s]: tag decode incomplete; retry %d/%d after %.1fmm jog"
            % (gate._name.capitalize(), attempt, max_attempts, move))
     logger.info("%s (uid=%s reason=%s)", msg, uid, reason)
     gate._console(msg)
@@ -816,7 +816,7 @@ def retry_incomplete_decode(gate, now):
         gate._scan_decode_retry_offset = 0.0
 
     if gate._scan_decode_retry_attempts >= max_attempts:
-        msg = ("[WARN] NFC[%s]: tag decode still incomplete after %d retries; "
+        msg = ("[WARN] [%s]: tag decode still incomplete after %d retries; "
                "using current result" % (gate._name.capitalize(), max_attempts))
         logger.info(msg)
         gate._console(msg)
@@ -855,7 +855,7 @@ def retry_incomplete_decode(gate, now):
         return False
 
     attempt = gate._scan_decode_retry_attempts
-    msg = ("[WARN] NFC[%s]: tag decode incomplete; retry %d/%d after %.1fmm jog"
+    msg = ("[WARN] [%s]: tag decode incomplete; retry %d/%d after %.1fmm jog"
            % (gate._name.capitalize(), attempt, max_attempts, move))
     logger.info("%s (uid=%s reason=%s)", msg, uid, reason)
     gate._console(msg)
@@ -874,7 +874,7 @@ def continue_decode_retry(gate, now):
     uid = gate._scan_decode_retry_uid
     max_attempts, retry_mm = decode_retry_config(gate)
     if gate._scan_decode_retry_attempts >= max_attempts:
-        msg = ("[WARN] NFC[%s]: tag decode still incomplete after %d retries; "
+        msg = ("[WARN] [%s]: tag decode still incomplete after %d retries; "
                "using current result" % (gate._name.capitalize(), max_attempts))
         logger.info(msg)
         gate._console(msg)
@@ -886,7 +886,7 @@ def continue_decode_retry(gate, now):
 def finish(gate):
     gate._scan_mode = False
     gate._state.miss_count = 0
-    found_msg = "[OK] NFC[%s]: tag found" % gate._name.capitalize()
+    found_msg = "[OK] [%s]: tag found" % gate._name.capitalize()
     info_both(found_msg)
     gate._console(found_msg)
     msg = _rewind_message(gate, "[REWIND]")
@@ -917,15 +917,15 @@ def finish(gate):
             gate._hh_load_paused = True
             gate._state.miss_count = 0
         if event_type == 'changed' and spool is not None:
-            msg = "[OK] NFC[%s]: spool %s assigned" % (gate._name.capitalize(), spool)
+            msg = "[OK] [%s]: spool %s assigned" % (gate._name.capitalize(), spool)
             info_both(msg)
             gate._console(msg)
         elif event_type == 'changed' and meta is not None:
-            msg = "[OK] NFC[%s]: tag metadata assigned" % gate._name.capitalize()
+            msg = "[OK] [%s]: tag metadata assigned" % gate._name.capitalize()
             info_both(msg)
             gate._console(msg)
         elif event_type == 'uid_only':
-            msg = "[WARN] NFC[%s]: tag has no Spoolman match" % gate._name.capitalize()
+            msg = "[WARN] [%s]: tag has no Spoolman match" % gate._name.capitalize()
             logger.warning(msg)
             gate._console(msg)
     gate._scan_previous_uid = None
@@ -1015,18 +1015,18 @@ def _rewind_parts(gate):
 def _rewind_message(gate, level, prefix=""):
     scan_mm, buffer_mm, fast_rewind = _rewind_parts(gate)
     if fast_rewind > 0.0:
-        return ("%s NFC[%s]: %srewinding %.1fmm "
+        return ("%s [%s]: %srewinding %.1fmm "
                 "(scan=%.1fmm buffer=%.1fmm)" % (
                     level, gate._name.capitalize(), prefix, fast_rewind,
                     scan_mm, buffer_mm))
-    return ("%s NFC[%s]: %srewind fast move skipped "
+    return ("%s [%s]: %srewind fast move skipped "
             "(scan=%.1fmm buffer=%.1fmm)" % (
                 level, gate._name.capitalize(), prefix, scan_mm, buffer_mm))
 
 
 def _rewind_complete_message(gate):
     scan_mm, buffer_mm, fast_rewind = _rewind_parts(gate)
-    return ("[REWIND] NFC[%s]: rewind complete; gate parking handed to "
+    return ("[REWIND] [%s]: rewind complete; gate parking handed to "
             "Happy Hare (rewound=%.1fmm scan=%.1fmm buffer=%.1fmm)" % (
                 gate._name.capitalize(), fast_rewind, scan_mm, buffer_mm))
 
