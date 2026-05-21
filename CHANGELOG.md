@@ -5,21 +5,41 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.9.17] - 05/20/2026 - WoodWorker
+
+### Shared Preload Macro — Root Cause Fix
+
+- Removed all `MMU_GATE_MAP`, `MMU_SELECT`, and `MMU_SPOOLMAN` calls from `_NFC_SHARED_PRELOAD`. Python stages `MMU_GATE_MAP NEXT_SPOOLID` at tag-read time; Happy Hare processes it during the pregate load and owns the gate map entry by the time `user_post_preload_extension` fires. The macro re-assigning the gate map inside the hook was interfering with HH's finalized state, causing Spoolman ID to remain `-1` in the gate editor even though filament metadata was correct. The macro is now validate-and-commit only: `NFC_SHARED PRELOAD_CHECK=1` and `NFC_SHARED PRELOAD_COMMIT=1`.
+- Removed `MMU_SELECT GATE={target_gate}` — HH has already selected the gate before the post-preload hook fires; re-selecting inside the hook can reset gate state and halt macro execution before `PRELOAD_CHECK` runs.
+
+### Shared Preload Macro Cleanup (earlier in session)
+
+- Removed the `auto_created` guard and redundant `MMU_SPOOLMAN REFRESH=1 QUIET=1` — Python already issues the refresh at tag-resolution time before staging `NEXT_SPOOLID`.
+- Replaced `MMU_SPOOLMAN SPOOLID={spool_id} GATE={target_gate} QUIET=1` with `MMU_SPOOLMAN SYNC=1 QUIET=1` to match the pattern used by `_NFC_SPOOL_CHANGED`.
+
+---
+
 ## [05/20/2026] - WoodWorker
 
 ### Shared Reader LEDs
 
 - Changed shared-reader ready, bypass-ready, and warning LED defaults from strobes to breathing-style effects so staged/ready feedback is calmer while the EMU waits.
-- Updated `_NFC_SHARED_PRELOAD` to call `MMU_GATE_MAP REFRESH=1 SYNC=1 QUIET=1` after successful preload handling, nudging Happy Hare/EMU UI state to refresh after NFC clears the pending spool.
+- Updated `_NFC_SHARED_PRELOAD` to follow the per-lane assignment pattern more closely: select the hook gate, validate/commit the pending spool, apply the local Happy Hare gate map, and directly set the Spoolman gate assignment with `MMU_SPOOLMAN SPOOLID=<n> GATE=<n> QUIET=1`.
+- Shared preload now mirrors the per-lane auto-created spool path by running `MMU_SPOOLMAN REFRESH=1 QUIET=1` only when the pending shared-reader spool was newly created, before applying the gate map assignment.
+- Removed the obsolete duplicated shared-reader "already assigned" macro branch and the broad gate-map refresh from the shared preload success path.
+- `_NFC_SHARED_PRELOAD` now prefers Happy Hare's hook-provided `GATE=<n>` and selects that gate before preload validation, preventing a previously selected lane from receiving the shared reader's resolved spool.
 - Fixed bypass unresolved-tag feedback replaying across the shared reader's missed-resolution retries. The unresolved red LED effect now starts only once for an unresolved tag sequence, so bypass mode no longer appears to flash 6 times from three repeated attempts.
 - Changed `mmu_RFID_unresolved` to exactly 2 red flashes (`strobe 2 2`) and updated shared-reader config comments, installer text, and docs to match.
 - Kept bypass-ready confirmation bounded at 2 seconds and ensured scheduled LED timers stop the exact effect that was started.
 - Added configurable shared-reader LED stop durations (`read_effect_duration`, `bypass_read_effect_duration`, `ready_effect_duration`, `bypass_ready_effect_duration`, and `unresolved_effect_duration`) next to their related effect names in `nfc_reader_shared.cfg`.
+- Expanded `nfc_reader.cfg` scan-jog comments to document polling lane readers, `NFC JOG_SCAN=1` hook-triggered lane readers, shared-reader preload mode, and the hybrid lane-reader plus shared-reader bypass setup.
+- Updated scan-jog's `_NFC_GATE_CLEAR_CACHE` preflight to call `MMU_SPOOLMAN GATE=<n> QUIET=1` before clearing the local HH gate spool ID, so stale Spoolman edit-dialog gate/location assignments are removed before NFC applies the newly read spool.
 
 ### Tests
 
 - Added regression coverage proving repeated unresolved shared-reader events only start the red unresolved LED effect once.
 - Added regression coverage for custom shared-reader LED effect durations.
+- Added static coverage for the scan-jog preflight Spoolman gate unset.
 
 ---
 
