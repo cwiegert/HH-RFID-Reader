@@ -128,6 +128,29 @@ If you see errors, check [Troubleshooting](../i2c-pn532/troubleshooting.md).
 
 ---
 
+### Shared Reader — Additional Required Steps
+
+If you are using the shared reader (`[nfc_gate shared]`), two more things must be configured before it will work.
+
+**Wire the Happy Hare preload hook.** Open `~/printer_data/config/mmu/base/mmu_macro_vars.cfg` and add:
+
+```ini
+[gcode_macro _MMU_SEQUENCE_VARS]
+variable_user_post_preload_extension: '_NFC_SHARED_PRELOAD'
+```
+
+Without this, NFC never sees the preload event and the spool ID is never applied to the gate.
+
+**Set the pending timeout.** Open `~/printer_data/config/mmu/base/mmu_parameters.cfg` and set:
+
+```ini
+pending_spool_id_timeout: 120   # seconds between tapping the tag and inserting filament
+```
+
+NFC reads this value automatically at connect time (falls back to 30 s if not set). 30 s is short enough that a first load will almost always time out before the filament reaches the gate — increase it to match your typical tap-to-load time.
+
+---
+
 ## Moonraker Update Manager
 
 Add this block to `~/printer_data/config/moonraker.conf` so Fluidd/Mainsail can update the NFC reader alongside Klipper:

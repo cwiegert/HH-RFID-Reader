@@ -5,6 +5,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.9.18] - 05/20/2026 - WoodWorker
+
+### Test Suite — Macro Tests Updated
+
+- Rewrote 4 tests across `test_nfc_macros_config.py` and `test_shared_reader.py` that were asserting old `_NFC_SHARED_PRELOAD` behavior (`MMU_SELECT`, `MMU_GATE_MAP`, `MMU_SPOOLMAN`, `auto_created`). Tests now verify the validate-and-commit-only pattern and assert that gate map calls are absent from the macro.
+
+### Documentation — Config Inheritance Clarified
+
+- Added a `docs/shared/configuration.md` example showing top-level `[nfc_gate]` defaults and per-lane `[nfc_gate laneN]` overrides for values like `i2c_address`, `i2c_bus`, and `scan_enabled`.
+- Removed obsolete LED holder files from `NFC Mounting Bracket`, preserving only `LED_holder_with_NFC_Bambu_height v3.step`.
+
+---
+
 ## [0.9.17] - 05/20/2026 - WoodWorker
 
 ### Shared Preload Macro — Root Cause Fix
@@ -16,6 +29,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Removed the `auto_created` guard and redundant `MMU_SPOOLMAN REFRESH=1 QUIET=1` — Python already issues the refresh at tag-resolution time before staging `NEXT_SPOOLID`.
 - Replaced `MMU_SPOOLMAN SPOOLID={spool_id} GATE={target_gate} QUIET=1` with `MMU_SPOOLMAN SYNC=1 QUIET=1` to match the pattern used by `_NFC_SPOOL_CHANGED`.
+
+### Documentation — First-Install Gaps Fixed
+
+- Added "Shared Reader — Additional Required Steps" section to `install-uninstall.md` covering the two things that silently break a first-time shared-reader install: wiring `variable_user_post_preload_extension: '_NFC_SHARED_PRELOAD'` in `mmu_macro_vars.cfg`, and setting `pending_spool_id_timeout` in `mmu_parameters.cfg` (the 30 s fallback is too short for normal use).
+- Fixed stale description in `shared-reader.md` ("What it does" and step 5 of the load flow) that still described the old macro behaviour — selecting the gate and issuing `MMU_GATE_MAP`/`MMU_SPOOLMAN` directly. Both now accurately describe the validate-and-commit-only macro.
 
 ---
 

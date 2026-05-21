@@ -36,7 +36,7 @@ enabling `spoolman_auto_create`.
 
 - Polls continuously for NFC tags while the printer is idle.
 - When a tag is recognised, resolves it to a Spoolman spool ID and holds it as **pending**.
-- When Happy Hare begins a pregate preload it fires the `user_post_preload_extension` hook → NFC selects the hook gate, commits the staged spool, applies `MMU_GATE_MAP GATE=<n> SPOOLID=<id>`, and sets `MMU_SPOOLMAN SPOOLID=<id> GATE=<n>`.
+- When Happy Hare begins a pregate preload it fires the `user_post_preload_extension` hook → `_NFC_SHARED_PRELOAD` validates the pending spool and commits it. Happy Hare owns the gate map assignment via `NEXT_SPOOLID`, which NFC staged at tag-read time.
 - After staging, polling restarts automatically — no user action required between spools.
 
 **No per-lane readers are required.** A shared-only installation needs only the base `[nfc_gate]` section (for Spoolman config) and `[nfc_gate shared]`.
@@ -53,7 +53,7 @@ enabling `spoolman_auto_create`.
 
 4. **Push the filament tip into the pregate/buffer sensor.** Happy Hare detects filament at the sensor and begins a pregate load. HH's action transitions to `loading`.
 
-5. **Happy Hare fires `user_post_preload_extension` → `_NFC_SHARED_PRELOAD` macro.** This happens automatically — no user action required. The macro uses Happy Hare's hook-provided `GATE=<n>` first, selects that gate, and validates the pending shared-reader spool.
+5. **Happy Hare fires `user_post_preload_extension` → `_NFC_SHARED_PRELOAD` macro.** This happens automatically — no user action required. The macro validates the pending shared-reader spool and commits it; Happy Hare owns the gate map assignment via the `NEXT_SPOOLID` hint NFC staged at tag-read time.
 
 6. **The macro commits and applies the spool.** It calls `NFC_SHARED PRELOAD_CHECK=1`, then `NFC_SHARED PRELOAD_COMMIT=1`, then applies the resolved spool to the selected gate with `MMU_GATE_MAP GATE=<n> SPOOLID=<spool_id> AVAILABLE=1 SYNC=1 QUIET=1`. It also calls `MMU_SPOOLMAN SPOOLID=<spool_id> GATE=<n> QUIET=1` so Spoolman's edit-spool dialog shows the new gate assignment.
 

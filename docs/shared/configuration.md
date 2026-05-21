@@ -18,6 +18,26 @@ Three files, included in this order from `printer.cfg`:
 
 This includes hardware keys. `i2c_address` and `i2c_bus` set in the base `[nfc_gate]` section are inherited by all lanes — you only need to specify them per lane if a particular reader uses different hardware.
 
+Example:
+
+```ini
+[nfc_gate]
+i2c_address:      36
+i2c_bus:          i2c3_PB3_PB4
+scan_enabled:     False
+
+[nfc_gate lane0]
+mmu_gate:         0
+i2c_mcu:          lane0
+# inherits i2c_address, i2c_bus, scan_enabled=False
+
+[nfc_gate lane1]
+mmu_gate:         1
+i2c_mcu:          lane1
+scan_enabled:     True
+# overrides only scan_enabled for lane1
+```
+
 ---
 
 ## `nfc_reader.cfg` — Base Settings
