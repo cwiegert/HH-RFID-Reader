@@ -15,14 +15,14 @@ Console prefixes are used consistently. In Fluidd/Mainsail each prefix renders i
 
 | Prefix | Color | Meaning |
 |---|---|---|
-| `NFC` (prefix) | `#4FC3F7` light blue | Identifies the NFC reader in any message |
+| `NFC` (prefix) | ![#4FC3F7](https://placehold.co/15x15/4FC3F7/4FC3F7.png) `#4FC3F7` light blue | Identifies the NFC reader in any message |
 | `[CONNECTED]` | plain | Reader object registered with Klipper |
-| `[OK]` | `#90EE90` light green | Action completed or tag found/read successfully |
-| `[WARN]` | `#FFFF00` yellow | NFC skipped, ignored, or warned but system recoverable |
-| `[ERROR]` | `#FF6060` red | Action failed or blocked by a safety/precondition check |
-| `[SCAN]` | `#FFA040` orange | Scan-jog is starting, moving, or re-polling |
-| `[MOVE]` | `#FFA040` orange | Scan-jog is moving filament to clear a lane conflict |
-| `[REWIND]` | `#90EE90` light green | Scan-jog is rewinding or parking after a scan |
+| `[OK]` | ![#90EE90](https://placehold.co/15x15/90EE90/90EE90.png) `#90EE90` light green | Action completed or tag found/read successfully |
+| `[WARN]` | ![#FFFF00](https://placehold.co/15x15/FFFF00/FFFF00.png) `#FFFF00` yellow | NFC skipped, ignored, or warned but system recoverable |
+| `[ERROR]` | ![#FF6060](https://placehold.co/15x15/FF6060/FF6060.png) `#FF6060` red | Action failed or blocked by a safety/precondition check |
+| `[SCAN]` | ![#FFA040](https://placehold.co/15x15/FFA040/FFA040.png) `#FFA040` orange | Scan-jog is starting, moving, or re-polling |
+| `[MOVE]` | ![#FFA040](https://placehold.co/15x15/FFA040/FFA040.png) `#FFA040` orange | Scan-jog is moving filament to clear a lane conflict |
+| `[REWIND]` | ![#90EE90](https://placehold.co/15x15/90EE90/90EE90.png) `#90EE90` light green | Scan-jog is rewinding or parking after a scan |
 
 Warnings and errors are also forwarded to `klippy.log`. Info/debug records stay
 in `nfc_reader.log` only.
