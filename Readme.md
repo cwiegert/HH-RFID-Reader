@@ -2,6 +2,11 @@
 
 > NFC spool identification for Happy Hare: use one reader per EMU lane, or one shared reader inside the MMU body.
 
+This is a system-level integration, not an appliance. It touches Klipper extras,
+Happy Hare macros, lane MCU firmware, I2C wiring, and Spoolman. If you are not
+already comfortable recovering from a Klipper config error, flashing your lane
+MCUs, and reading logs, this will probably stop being fun quickly.
+
 This project supports two operating models:
 
 - **Per-lane readers:** each EMU gate gets its own PN532 reader. When you load a spool, NFC can scan-jog the filament until the tag rotates into read range, resolve the spool in Spoolman, and update Happy Hare's gate map automatically.
@@ -218,6 +223,7 @@ These are the commands you'll actually use at the Fluidd/Mainsail console:
 NFC_HELP                      ; show everyday command help
 NFC_HELP ADVANCED=1 CALLBACKS=1 LOW_LEVEL=1  ; show the full command set
 NFC_STATUS                    ; see all gates at a glance
+NFC_DOCTOR                    ; check common setup/config problems
 NFC GATE=0 SCAN=1             ; read a tag and show its UID
 NFC GATE=0 POLL=1             ; full cycle: read → Spoolman → Happy Hare
 NFC GATE=0 JOG_SCAN=1         ; start scan-jog (same as automatic pre-load trigger)

@@ -156,11 +156,19 @@ _SHARED_BYPASS_READ_EFFECT_DURATION = 4.0
 _SHARED_READY_EFFECT_DURATION    = 4.0
 _SHARED_BYPASS_READY_EFFECT_DURATION = 2.0
 _SHARED_UNRESOLVED_EFFECT_DURATION = 2.0
+_diagnostic_warnings = []
+
+
+def _add_diagnostic_warning(message):
+    if message not in _diagnostic_warnings:
+        _diagnostic_warnings.append(message)
+        logger.warning("nfc_gate: %s", message)
 
 
 def nfc_gate_for_gate_number(gate_number):
     for candidate in _lane_instances:
-        if candidate._gate == gate_number:
+        if (candidate._gate == gate_number
+                and getattr(candidate, '_enabled', True)):
             return candidate
     return None
 
@@ -175,6 +183,23 @@ def _status_html_words(text):
     return text
 
 
+def _lookup_objects_safe(printer, name):
+    try:
+        return list(printer.lookup_objects(name))
+    except Exception:
+        return []
+
+
+def _raw_klipper_config(printer):
+    try:
+        configfile = printer.lookup_object('configfile', None)
+        if configfile is None:
+            return {}
+        return configfile.get_status(0).get('config', {}) or {}
+    except Exception:
+        return {}
+
+
 def _lane_status_lines(printer):
     """Build NFC_STATUS output lines cross-referenced against the MMU
     lane MCUs registered in Klipper (mirrors how HH reads [board_pins lane]).
@@ -186,13 +211,14 @@ def _lane_status_lines(printer):
     """
     # Collect MCU names that match "lane<N>" from Klipper's object registry.
     lane_names = []
-    for obj_name, _ in printer.lookup_objects('mcu'):
+    for obj_name, _ in _lookup_objects_safe(printer, 'mcu'):
         parts = obj_name.split(None, 1)
         if len(parts) == 2 and re.match(r'^lane\d+$', parts[1]):
             lane_names.append(parts[1])
     lane_names.sort(key=lambda n: int(n[4:]))
 
-    nfc_by_lane = {gate._name: gate for gate in _lane_instances}
+    nfc_by_lane = {gate._name: gate for gate in _lane_instances
+                   if not getattr(gate, '_shared', False)}
 
     if not lane_names:
         # No MMU lane MCUs visible — fall back to plain list.
@@ -218,8 +244,77 @@ def _lane_status_lines(printer):
 
 
 def _append_shared_status(lines):
-    if _shared_instance is not None:
+    if (_shared_instance is not None
+            and getattr(_shared_instance, '_enabled', True)):
         lines.append(_shared_instance.shared_status_line())
+
+
+def _doctor_lines(printer):
+    lines = ["NFC doctor:"]
+    raw_config = _raw_klipper_config(printer)
+    lane_readers = [gate for gate in _lane_instances
+                    if not getattr(gate, '_shared', False)]
+    enabled_lanes = [gate for gate in lane_readers
+                     if getattr(gate, '_enabled', True)]
+    disabled_lanes = [gate for gate in lane_readers
+                      if not getattr(gate, '_enabled', True)]
+    shared_readers = [gate for gate in _lane_instances
+                      if getattr(gate, '_shared', False)]
+    enabled_shared = [gate for gate in shared_readers
+                      if getattr(gate, '_enabled', True)]
+
+    def mark(ok):
+        return "[OK]" if ok else "[WARN]"
+
+    lines.append("  %s lane readers: %d enabled, %d disabled" %
+                 (mark(bool(enabled_lanes) or bool(enabled_shared)),
+                  len(enabled_lanes), len(disabled_lanes)))
+    for gate in sorted(lane_readers, key=lambda g: g._gate):
+        if not getattr(gate, '_enabled', True):
+            lines.append("    Gate %d [%s]: disabled by config" %
+                         (gate._gate, gate._name))
+        else:
+            state = "failed" if gate._failed else "ready/pending init"
+            lines.append("    Gate %d [%s]: enabled, %s" %
+                         (gate._gate, gate._name, state))
+
+    if enabled_shared:
+        shared = enabled_shared[0]
+        lines.append("  %s shared reader: enabled [%s]" %
+                     (mark(not shared._failed), shared._name))
+    elif shared_readers:
+        lines.append("  [OK] shared reader: configured but disabled")
+    else:
+        lines.append("  [OK] shared reader: not configured")
+
+    defaults = printer.lookup_object('nfc_gate', None)
+    spoolman = getattr(defaults, '_spoolman', None)
+    if spoolman is not None:
+        lines.append("  [OK] Spoolman: enabled")
+    else:
+        url = getattr(defaults, 'spoolman_url', '')
+        lines.append("  [WARN] Spoolman: disabled or unavailable"
+                     if not url else "  [OK] Spoolman: disabled by config")
+
+    if enabled_shared:
+        macro = raw_config.get('gcode_macro _MMU_SEQUENCE_VARS', {})
+        hook = str(macro.get('variable_user_post_preload_extension', ''))
+        if '_NFC_SHARED_PRELOAD' in hook:
+            lines.append("  [OK] shared preload hook: _NFC_SHARED_PRELOAD")
+        else:
+            lines.append("  [WARN] shared preload hook: missing "
+                         "_NFC_SHARED_PRELOAD in _MMU_SEQUENCE_VARS")
+
+    warnings = list(_diagnostic_warnings)
+    for gate in _lane_instances:
+        warnings.extend(getattr(gate, '_diagnostic_warnings', []))
+    if warnings:
+        lines.append("  Warnings:")
+        for warning in sorted(set(warnings)):
+            lines.append("    [WARN] %s" % warning)
+    else:
+        lines.append("  [OK] no static config warnings")
+    return lines
 
 
 def _nfc_help(gcmd=None):
@@ -230,15 +325,18 @@ def _nfc_help(gcmd=None):
     low_level = bool(gcmd.get_int('LOW_LEVEL', 0, minval=0, maxval=1)
                      if gcmd is not None else False)
     lane_gates = sorted(gate._gate for gate in _lane_instances
-                        if not getattr(gate, '_shared', False))
+                        if (not getattr(gate, '_shared', False)
+                            and getattr(gate, '_enabled', True)))
     has_shared = _shared_instance is not None or any(
-        getattr(gate, '_shared', False) for gate in _lane_instances)
+        getattr(gate, '_shared', False) and getattr(gate, '_enabled', True)
+        for gate in _lane_instances)
 
     lines = [
         "NFC Reader commands: (use NFC_HELP ADVANCED=1 CALLBACKS=1 "
         "LOW_LEVEL=1 for full command set)",
         "NFC_HELP : Display the complete set of NFC commands and functions",
         "NFC_STATUS : Show every configured NFC reader",
+        "NFC_DOCTOR : Check NFC config, readers, Spoolman, and HH hooks",
         "NFC GATE=<#> HELP : Show commands for one per-lane reader",
         "NFC GATE=<#> STATUS : Show one per-lane reader state",
         "NFC GATE=<#> SCAN=1 : Scan hardware once, no Spoolman/HH dispatch",
@@ -356,6 +454,16 @@ class NFCGateDefaults:
                                                    minval=4, maxval=135)
         self.bambu_reads          = config.getboolean('bambu_reads', False)
         self.spoolman_auto_create = config.getboolean('spoolman_auto_create', False)
+        if self.bambu_reads and not self.tag_parsing:
+            _add_diagnostic_warning(
+                "bambu_reads=True has no effect while tag_parsing=False")
+        if self.spoolman_auto_create and not self.tag_parsing:
+            _add_diagnostic_warning(
+                "spoolman_auto_create=True has no effect while tag_parsing=False")
+        if (self.spoolman_auto_create
+                and not _spoolman_url_enabled(self.spoolman_url)):
+            _add_diagnostic_warning(
+                "spoolman_auto_create=True requires Spoolman to be enabled")
 
         self._printer = config.get_printer()
         gcode         = self._printer.lookup_object('gcode')
@@ -365,6 +473,9 @@ class NFCGateDefaults:
         gcode.register_command(
             'NFC_HELP', self.cmd_NFC_HELP,
             desc="Show NFC reader command help")
+        gcode.register_command(
+            'NFC_DOCTOR', self.cmd_NFC_DOCTOR,
+            desc="Check NFC reader setup and common configuration problems")
 
         log_file = config.get('log_file', '')
         try:
@@ -402,6 +513,10 @@ class NFCGateDefaults:
     def cmd_NFC_HELP(self, gcmd):
         gcmd.respond_info('\n'.join(_nfc_help(gcmd)))
 
+    def cmd_NFC_DOCTOR(self, gcmd):
+        gcmd.respond_info(color_console_tags(
+            '\n'.join(_doctor_lines(self._printer))))
+
 
 class NFCGate:
     _active_scan_gate = None  # class-level scan lock; shared across all instances
@@ -416,12 +531,14 @@ class NFCGate:
 
         # Read shared first — it controls how subsequent params are parsed.
         self._shared = config.getboolean('shared', False)
+        self._enabled = config.getboolean('enabled', True)
         _i2c_mcu_name = config.get('i2c_mcu', 'mcu')
         _m = re.search(r'(\d+)$', _i2c_mcu_name)
         self._shared_mcu_index = int(_m.group(1)) if _m else None
-        if self._shared:
+        if self._shared and self._enabled:
             for existing in _lane_instances:
-                if getattr(existing, '_shared', False):
+                if (getattr(existing, '_shared', False)
+                        and getattr(existing, '_enabled', True)):
                     raise config.error(
                         "nfc_gate [%s]: only one shared reader may be configured"
                         % self._name)
@@ -433,6 +550,38 @@ class NFCGate:
             self._gate = _SHARED_GATE_SENTINEL
         else:
             self._gate = config.getint('mmu_gate', minval=0)
+        self._diagnostic_warnings = []
+        if not self._enabled:
+            self._poll_interval = 0.0
+            self._startup_polling = 0
+            self._startup_poll_delay = 0.0
+            self._absent_threshold = 3
+            self._debug = d.debug if d else 2
+            self._low_level_debug = False
+            self._console_output = d.console_output if d else False
+            self._console_log_level = d.console_log_level if d else 'warning'
+            self._spoolman = d._spoolman if d is not None else None
+            self._reader = None
+            self._state = GateState(self._gate, self._absent_threshold)
+            self._failed = False
+            self._polling = False
+            self._scan_enabled = False
+            self._tag_parsing = False
+            self._bambu_reads = False
+            self._spoolman_auto_create = False
+            self._hh_load_paused = False
+            self._shared_pending_spool = None
+            self._shared_pending_uid = None
+            self._shared_last_error = None
+            self._shared_read_deadline = 0.0
+            self._has_per_lane_readers = False
+            self._gcode = None
+            self._commands_registered = True
+            self._status_registered = False
+            self._help_registered = False
+            self._shared_cmd_registered = False
+            logger.info("[%s]: NFC reader disabled by config", self._name)
+            return
         self._poll_interval    = config.getfloat('poll_interval',
                                                   d.poll_interval if d else 10.,
                                                   minval=1., maxval=3600.)
@@ -567,12 +716,23 @@ class NFCGate:
         self._bambu_reads          = config.getboolean('bambu_reads',
                                                         d.bambu_reads if d else False)
         if self._bambu_reads and not self._tag_parsing:
-            logger.warning(
-                "[%s]: bambu_reads=True has no effect when "
-                "tag_parsing=False — set tag_parsing: True to enable "
-                "Bambu/MIFARE reads", self._name)
+            warning = ("[%s]: bambu_reads=True has no effect when "
+                       "tag_parsing=False — set tag_parsing: True to enable "
+                       "Bambu/MIFARE reads" % self._name)
+            logger.warning(warning)
+            self._diagnostic_warnings.append(warning)
         self._spoolman_auto_create = config.getboolean('spoolman_auto_create',
                                                         d.spoolman_auto_create if d else False)
+        if self._spoolman_auto_create and not self._tag_parsing:
+            warning = ("[%s]: spoolman_auto_create=True has no effect when "
+                       "tag_parsing=False" % self._name)
+            logger.warning(warning)
+            self._diagnostic_warnings.append(warning)
+        if self._spoolman_auto_create and self._spoolman is None:
+            warning = ("[%s]: spoolman_auto_create=True requires Spoolman to "
+                       "be enabled" % self._name)
+            logger.warning(warning)
+            self._diagnostic_warnings.append(warning)
         self._scan_timer           = None
         self._scan_mode            = False
         self._scan_mm_total        = 0.0
@@ -691,6 +851,10 @@ class NFCGate:
 
     def _cmd_NFC_HELP_fallback(self, gcmd):
         gcmd.respond_info('\n'.join(_nfc_help(gcmd)))
+
+    def _cmd_NFC_DOCTOR_fallback(self, gcmd):
+        gcmd.respond_info(color_console_tags(
+            '\n'.join(_doctor_lines(self.printer))))
 
     def _cmd_help(self, gcmd):
         lines = [
@@ -1175,9 +1339,34 @@ class NFCGate:
             gcmd.respond_info(
                 "NFC[%s]: HH reports gate empty — seed cleared" % self._name)
 
+    def _validate_startup_config(self):
+        if not getattr(self, '_enabled', True):
+            return
+        if self._shared:
+            raw_config = _raw_klipper_config(self.printer)
+            macro = raw_config.get('gcode_macro _MMU_SEQUENCE_VARS', {})
+            hook = str(macro.get('variable_user_post_preload_extension', ''))
+            if '_NFC_SHARED_PRELOAD' not in hook:
+                warning = ("[%s]: shared reader is enabled but "
+                           "_MMU_SEQUENCE_VARS.variable_user_post_preload_extension "
+                           "does not contain _NFC_SHARED_PRELOAD" % self._name)
+                warnings = getattr(self, '_diagnostic_warnings', None)
+                if warnings is None:
+                    warnings = []
+                    self._diagnostic_warnings = warnings
+                if warning not in warnings:
+                    warnings.append(warning)
+                    logger.warning(warning)
+                    if self._gcode is not None:
+                        self._gcode.respond_info(color_console_tags(
+                            "[WARN] NFC[%s]: shared preload hook is not wired; "
+                            "set variable_user_post_preload_extension: "
+                            "'_NFC_SHARED_PRELOAD'" % self._name))
+
     def _handle_connect(self):
         global _shared_instance
         self._gcode = self.printer.lookup_object('gcode')
+        self._validate_startup_config()
         if self._shared:
             self._shared_pending_timeout = self._read_mmu_pending_timeout()
         if self._shared:
@@ -1209,6 +1398,13 @@ class NFCGate:
                     desc="Show NFC reader command help"
                 )
                 self._help_registered = True
+            if (self._defaults is None and _lane_instances
+                    and _lane_instances[0] is self):
+                self._gcode.register_command(
+                    'NFC_DOCTOR',
+                    self._cmd_NFC_DOCTOR_fallback,
+                    desc="Check NFC reader setup and common configuration problems"
+                )
 
             # Shared reader has no mmu_gate — all interaction goes through
             # NFC_SHARED.  Lane readers register the GATE mux command.
@@ -2006,6 +2202,9 @@ class NFCGate:
         return nfc_gate_for_gate_number(gate_number)
 
     def status_line(self):
+        if not getattr(self, '_enabled', True):
+            label = "shared" if self._shared else "Gate %d" % self._gate
+            return "  %s  [%s]:  disabled by config" % (label, self._name)
         if self._failed:
             return ("  Gate %d  [%s]:  READER FAILED (check wiring, address 0x24)"
                     % (self._gate, self._name))
@@ -2341,6 +2540,8 @@ class NFCGate:
         return coordinator
 
     def _shared_state_text(self):
+        if not getattr(self, '_enabled', True):
+            return "disabled by config"
         now = self.reactor.monotonic()
         if self._failed:
             return "READER FAILED (check wiring)"
@@ -2369,6 +2570,8 @@ class NFCGate:
             self._name, self._shared_state_text(), self._shared_next_action())
 
     def _shared_next_action(self):
+        if not getattr(self, '_enabled', True):
+            return "set enabled: True and restart Klipper"
         if self._failed:
             return "run NFC_SHARED INIT=1 after fixing wiring"
         if self._is_printing():
@@ -2586,6 +2789,21 @@ class NFCGate:
         )
 
     def get_status(self, _eventtime=None):
+        if not getattr(self, '_enabled', True):
+            return {
+                'gate':                self._gate,
+                'enabled':             False,
+                'tag_present':         False,
+                'spool_id':            -1,
+                'uid':                 '',
+                'failed':              False,
+                'resolution':          'disabled',
+                'pending_spool_id':    -1,
+                'pending_auto_created': False,
+                'preload_spool_id':    -1,
+                'preload_auto_created': False,
+                'has_per_lane_readers': False,
+            }
         tag = self._state.current_tag
         is_meta_direct = self._state.current_spool is DIRECT_METADATA_SPOOL
         tag_present = self._state.current_uid is not None
@@ -2607,6 +2825,7 @@ class NFCGate:
             if shared else False)
         return {
             'gate':                self._gate,
+            'enabled':             True,
             'tag_present':         tag_present,
             'spool_id':            (-1 if is_meta_direct
                                     else self._state.current_spool

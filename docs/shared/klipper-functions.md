@@ -14,6 +14,7 @@ For shared reader console and `nfc_reader.log` messages, see [Message Definition
 |---|---|
 | `NFC_HELP` | Show global NFC command help; add `ADVANCED=1 CALLBACKS=1 LOW_LEVEL=1` for the full command set |
 | `NFC_STATUS` | Show current state of every configured gate (includes shared reader if configured) |
+| `NFC_DOCTOR` | Check common config/setup problems: disabled lanes, Spoolman, shared-reader hook, and static warnings |
 | `NFC GATE=<#> STATUS` | Show one gate's state |
 | `NFC GATE=<#> INIT=1` | Initialize (or re-initialize) the PN532 reader |
 | `NFC GATE=<#> SCAN=1` | One raw read — shows UID, no Spoolman lookup |
@@ -164,6 +165,20 @@ factory spools derive it from `tray_uid` as `bambu_<tray_uid>`, so the two
 physical side tags on the same spool can have different UIDs while sharing the
 same `spool_identity`. Tags without a parser-supplied spool identity display
 `spool_identity=None`.
+
+---
+
+### `NFC_DOCTOR`
+
+Runs a no-motion setup check. It does not scan tags or move filament.
+
+```gcode
+NFC_DOCTOR
+```
+
+It reports enabled/disabled lane readers, shared-reader state, Spoolman
+availability, the shared-reader preload hook, and static config warnings such as
+`bambu_reads: True` without `tag_parsing: True`.
 
 ---
 

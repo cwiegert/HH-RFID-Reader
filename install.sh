@@ -430,7 +430,7 @@ for line in lines:
 
 with open(path, 'w') as f:
     f.write("# =============================================================================\n")
-    f.write("# EMU NFC Gate Reader — PN532 I2C Lane Hardware\n")
+    f.write("# ================= EMU NFC GATE READER - PN532 I2C LANE HARDWARE ==============\n")
     f.write("# =============================================================================\n")
     f.write("# Supported documented path:\n")
     f.write("#   one PN532 module per lane MCU / EBB42 board.\n")
@@ -442,6 +442,7 @@ with open(path, 'w') as f:
     f.write("#\n")
     f.write("# Each [nfc_gate laneN] section maps:\n")
     f.write("#   Happy Hare gate number -> Klipper lane MCU -> NFC reader hardware.\n")
+    f.write("# Set enabled: False on a lane to keep the template without creating hardware.\n")
     f.write("#\n")
     f.write("# i2c_mcu: is consumed by Klipper's I2C bus layer (MCU_I2C_from_config),\n")
     f.write("# not read explicitly by the plugin.  The MCU name must already exist in\n")
@@ -456,15 +457,21 @@ with open(path, 'w') as f:
         mcu = lane_existing.get('i2c_mcu', f'mmu{lane}')
         startup_delay = lane_existing.get('startup_poll_delay',
                                           f'{lane * 0.5:.1f}')
-        f.write(f"# ── Lane {lane} ────────────────────────────────────────────────────────────────────\n")
+        f.write("# =============================================================================\n")
+        f.write(f"# =============================== LANE {lane} =================================\n")
+        f.write("# =============================================================================\n")
         f.write(f"[nfc_gate lane{lane}]\n")
+        f.write("enabled:                True\n")
         f.write(f"mmu_gate:                {lane}\n")
         f.write(f"i2c_mcu:                 {mcu}\n")
         f.write(f"startup_poll_delay:      {startup_delay}\n\n")
 
     example_lane = lane_count
-    f.write(f"# ── Lane {example_lane} example ───────────────────────────────────────────────────────\n")
+    f.write("# =============================================================================\n")
+    f.write(f"# =========================== LANE {example_lane} EXAMPLE ============================\n")
+    f.write("# =============================================================================\n")
     f.write(f"# [nfc_gate lane{example_lane}]\n")
+    f.write("# enabled:                False\n")
     f.write(f"# mmu_gate:                {example_lane}\n")
     f.write(f"# i2c_mcu:                 mmu{example_lane}\n")
     f.write(f"# startup_poll_delay:      {example_lane * 0.5:.1f}\n")
@@ -670,7 +677,7 @@ path, i2c_mcu, i2c_bus, startup_polling = sys.argv[1:5]
 
 with open(path, 'w') as f:
     f.write("# =============================================================================\n")
-    f.write("# EMU NFC Gate Reader — Shared PN532 Hardware\n")
+    f.write("# =================== EMU NFC GATE READER - SHARED PN532 HARDWARE ==============\n")
     f.write("# =============================================================================\n")
     f.write("# Single reader mounted inside the MMU body.  Tap a tagged spool before\n")
     f.write("# loading; NFC stages the spool ID for the next pregate preload automatically.\n")
@@ -694,6 +701,7 @@ with open(path, 'w') as f:
     f.write(f"#    ({i2c_mcu}).  The MCU must be on the same Klipper version as the host.\n")
     f.write("# =============================================================================\n\n")
     f.write("[nfc_gate shared]\n")
+    f.write("enabled:                True\n")
     f.write(f"i2c_mcu:                {i2c_mcu}\n")
     f.write(f"i2c_bus:                {i2c_bus}\n")
     f.write(f"shared:                 true\n")

@@ -27,6 +27,7 @@ i2c_bus:          i2c3_PB3_PB4
 scan_enabled:     False
 
 [nfc_gate lane0]
+enabled:          True
 mmu_gate:         0
 i2c_mcu:          lane0
 # inherits i2c_address, i2c_bus, scan_enabled=False
@@ -266,6 +267,7 @@ One `[nfc_gate laneN]` section per physical gate. Most lanes only need two lines
 
 ```ini
 [nfc_gate lane0]
+enabled:   True
 mmu_gate:  0
 i2c_mcu:   lane0
 ```
@@ -274,6 +276,7 @@ i2c_mcu:   lane0
 
 | Key | Required | Description |
 |---|:---:|---|
+| `enabled` | — | `True` by default. Set `False` to leave a lane template in place without creating I2C hardware, registering `NFC GATE=<n>`, or running PN532 init. Disabled lanes still appear in `NFC_STATUS` and `NFC_DOCTOR`. |
 | `mmu_gate` | Yes | Happy Hare gate number (0-based integer). Gate 0 = first MMU gate. |
 | `i2c_mcu` | Yes | Klipper MCU name. Must exactly match an `[mcu laneN]` section in your config. |
 | `i2c_bus` | — | Override the base `[nfc_gate]` bus for this lane only. Omit when all readers share the same bus pin. |
@@ -283,10 +286,20 @@ Any other `nfc_reader.cfg` key can also be overridden per lane. Example — dela
 
 ```ini
 [nfc_gate lane2]
+enabled:           True
 mmu_gate:           2
 i2c_mcu:            lane2
 startup_poll_delay: 1.0
 debug:              3
+```
+
+To keep a future lane in the file without requiring its MCU or reader to exist:
+
+```ini
+[nfc_gate lane4]
+enabled: False
+mmu_gate: 4
+i2c_mcu:  mmu4
 ```
 
 ---
@@ -414,7 +427,7 @@ force_spool_id:         true
 | `shared_missed_limit` | `3` | Consecutive unresolvable UID reads before a console error advises the user to use `MMU_PRELOAD`. Minimum 1. |
 | `force_spool_id` | `true` | When `true`, `PRELOAD_CHECK` emits a red console advisory if no spool is staged, telling the user to scan a tag before loading. |
 
-`mmu_gate` and `scan_enabled` are not user-configurable — both are set internally by `shared: true`. Only one shared reader may be configured. The reader inherits `spoolman_url`, `spoolman_rfid_key`, `tag_parsing`, `spoolman_auto_create`, and all logging settings from the base `[nfc_gate]` section.
+`mmu_gate` and `scan_enabled` are not user-configurable — both are set internally by `shared: true`. Only one enabled shared reader may be configured. The reader inherits `spoolman_url`, `spoolman_rfid_key`, `tag_parsing`, `spoolman_auto_create`, and all logging settings from the base `[nfc_gate]` section. Set `enabled: False` to keep the shared-reader template installed without initializing hardware.
 
 **Rich tags** work with the shared reader only when they resolve to a real
 Spoolman spool ID. That can happen through an existing UID lookup, an embedded

@@ -40,6 +40,7 @@ def load_config(config):
     _current_printer = config.get_printer()
     del _lane_instances[:]
     _nfc_manager._shared_instance = None
+    del _nfc_manager._diagnostic_warnings[:]
     return NFCGateDefaults(config)
 
 
@@ -52,6 +53,7 @@ def load_config_prefix(config):
         _current_printer = printer
         del _lane_instances[:]
         _nfc_manager._shared_instance = None
+        del _nfc_manager._diagnostic_warnings[:]
     defaults = printer.lookup_object('nfc_gate', None)
     gate     = NFCGate(config, defaults)
     # Replace any existing entry for this lane name (guards against Klipper

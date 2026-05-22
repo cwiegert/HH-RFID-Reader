@@ -5,11 +5,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
-## [05/21/2026] - WoodWorker
+## [0.9.19] - 05/22/2026 - WoodWorker
 
-### Hardware
+### Reader Diagnostics
 
-- Removed stale README from the `NFC Mounting Bracket` folder; only the STEP file remains.
+- Added `NFC_DOCTOR`, a no-motion setup check that reports configured lane readers, the shared reader, disabled readers, Spoolman availability, shared-reader Happy Hare hook wiring, and static configuration warnings.
+- Added startup warnings for configuration combinations that are accepted by Klipper but unlikely to work as intended, including rich-tag reads with tag parsing disabled, auto-create with tag parsing disabled, and auto-create without a usable Spoolman URL.
+
+### Config Compatibility
+
+- Added `enabled: False` support for per-lane and shared `[nfc_gate ...]` sections. Disabled readers keep their config block in place but skip PN532/I2C initialization, command registration, polling, and scan setup while still appearing in status and doctor output.
+- Updated the hardware and shared-reader config templates, installer-generated configs, and configuration docs to show the new `enabled` option.
+
+### Documentation and Tests
+
+- Added `NFC_DOCTOR` to the README command list and the Klipper command reference.
+- Added regression coverage for doctor command registration, disabled-lane reporting, and static warning generation. Full test suite passes with `376` tests.
 
 ---
 
