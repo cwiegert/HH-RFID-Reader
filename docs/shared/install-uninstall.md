@@ -148,9 +148,9 @@ If you see errors, check [Troubleshooting](../i2c-pn532/troubleshooting.md).
 
 ---
 
-### Per-Lane Readers — Optional Hook (Recommended)
+### Per-Lane Readers — Required Hook
 
-If you are using per-lane readers and want scan-jog to trigger automatically after each Happy Hare preload, wire the post-preload hook. This requires the [igiannakas IG-dev branch](https://github.com/igiannakas/Happy-Hare/tree/IG-dev) of Happy Hare, which adds `variable_user_post_preload_extension` to `mmu_macro_vars.cfg`.
+Wire the Happy Hare post-preload hook so scan-jog triggers automatically after each preload. This requires the [igiannakas IG-dev branch](https://github.com/igiannakas/Happy-Hare/tree/IG-dev) of Happy Hare, which adds `variable_user_post_preload_extension` to `mmu_macro_vars.cfg`.
 
 **Wire the scan-jog hook.** Open `~/printer_data/config/mmu/base/mmu_macro_vars.cfg` and add:
 
@@ -159,20 +159,20 @@ If you are using per-lane readers and want scan-jog to trigger automatically aft
 variable_user_post_preload_extension: 'NFC JOG_SCAN=1'
 ```
 
-Happy Hare appends `GATE=<n>` automatically, so the final command becomes `NFC JOG_SCAN=1 GATE=<n>`. With this wired, disable gate-status-based scan-jog so Happy Hare is the sole trigger:
+Happy Hare appends `GATE=<n>` automatically, so the final command becomes `NFC JOG_SCAN=1 GATE=<n>`. With this wired, set `scan_enabled: False` so Happy Hare is the sole scan-jog trigger:
 
 ```ini
 [nfc_gate]
 scan_enabled: False
 ```
 
-Without this hook, scan-jog still works — it triggers on gate status change (spool inserted with no tag known) when `scan_enabled: True`. The hook is the cleaner path when IG-dev HH is available.
+Without this hook wired, scan-jog falls back to triggering on gate status change (`scan_enabled: True`), which is less reliable than the preload hook.
 
 ---
 
 ### Shared Reader — Additional Required Steps
 
-If you are using the shared reader (`[nfc_gate shared]`), two more things must be configured before it will work.
+If you are using the shared reader (`[nfc_gate shared]`), two more things must be configured before it will work. Both require the [igiannakas IG-dev branch](https://github.com/igiannakas/Happy-Hare/tree/IG-dev) of Happy Hare, which adds `variable_user_post_preload_extension` to `mmu_macro_vars.cfg`.
 
 **Wire the Happy Hare preload hook.** Open `~/printer_data/config/mmu/base/mmu_macro_vars.cfg` and add:
 
