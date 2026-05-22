@@ -448,7 +448,7 @@ with open(path, 'w') as f:
     f.write("# not read explicitly by the plugin.  The MCU name must already exist in\n")
     f.write("# Klipper / Happy Hare config.  Example: [mcu lane0], [mcu lane1], etc.\n")
     f.write("#\n")
-    f.write("# ⚠️ After updating Klipper, rebuild and flash the lane MCU / EBB42 firmware.\n")
+    f.write("# [WARN] After updating Klipper, rebuild and flash the lane MCU / EBB42 firmware.\n")
     f.write("# Updating the host alone is not enough for PN532 I2C troubleshooting.\n")
     f.write("# =============================================================================\n\n")
 
@@ -697,7 +697,7 @@ with open(path, 'w') as f:
     f.write("#   [include nfc/nfc_reader_hw.cfg]\n")
     f.write("#   [include nfc/nfc_reader_shared.cfg]\n")
     f.write("#\n")
-    f.write("# ⚠️ After updating Klipper, rebuild and flash the MCU hosting the PN532\n")
+    f.write("# [WARN] After updating Klipper, rebuild and flash the MCU hosting the PN532\n")
     f.write(f"#    ({i2c_mcu}).  The MCU must be on the same Klipper version as the host.\n")
     f.write("# =============================================================================\n\n")
     f.write("[nfc_gate shared]\n")
@@ -1222,13 +1222,12 @@ if [ ! -f "${MOONRAKER_CONF}" ]; then
 elif grep -qF "${MOONRAKER_SECTION}" "${MOONRAKER_CONF}"; then
     echo "  [skip]   moonraker.conf already has ${MOONRAKER_SECTION}"
 else
-    ORIGIN="$(git -C "${REPO_DIR}" remote get-url origin 2>/dev/null || echo 'https://github.com/YOUR_USERNAME/NFC-Reader.git')"
     cat >> "${MOONRAKER_CONF}" <<MOONRAKER
 
 ${MOONRAKER_SECTION}
 type:             git_repo
 path:             ${REPO_DIR}
-origin:           ${ORIGIN}
+origin:           https://github.com/cwiegert/HH-RFID-Reader.git
 primary_branch:   main
 managed_services: klipper
 install_script:   install.sh

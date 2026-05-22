@@ -5,6 +5,29 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.9.20] - 05/21/2026 - WoodWorker
+
+### Logging — Console Messages Now Mirrored to nfc_reader.log
+
+- `[CONNECTED]` startup message now logged at `INFO` alongside the Klipper console output.
+- Startup `[WARN] not ready — check wiring` now logged at `WARNING` (previously only the deeper init `ERROR` was logged; the console summary was silent in the log).
+- Startup `[OK] ready` message (including HH seed and poll-delay detail) now logged at `INFO` at `debug: 3`.
+- Per-lane `READ=1` / `READ=0` now logged at `INFO` (`gate N READ=1 — polling started` / `gate N READ=0 — polling stopped`). Shared-reader equivalents were already logged; per-lane was the gap.
+
+### Documentation — Console Prefix Colors
+
+- Added color reference table to `message_definition.md` with the hex color for each bracketed prefix as rendered in Fluidd/Mainsail: `[WARN]` yellow `#FFFF00`, `[OK]`/`[REWIND]` light green `#90EE90`, `[ERROR]` red `#FF6060`, `[SCAN]`/`[MOVE]` orange `#FFA040`, `NFC` prefix light blue `#4FC3F7`.
+- Added log-level mapping table showing which `debug:` setting gates each prefix (`[ERROR]` → level 1, `[WARN]` → level 2, `[OK]`/info → level 3).
+- Updated `[CONNECTED]`, per-lane polling start/stop, and startup ready rows in the message table to reflect their new `nfc_reader.log` entries.
+
+### Install — Public Repo URL
+
+- `install.sh` Moonraker `origin:` is now hardcoded to `https://github.com/cwiegert/HH-RFID-Reader.git` instead of being read dynamically from the local git remote (which silently used whatever private remote the dev machine had configured).
+- `install-uninstall.md` Step 2 clone simplified from a manual sparse-checkout sequence to a plain `git clone https://github.com/cwiegert/HH-RFID-Reader.git emu-nfc-reader` matching the Readme quick-install. The installer handles the sparse checkout automatically.
+- `install-uninstall.md` Moonraker section now notes that the installer adds the block automatically; manual instructions remain for cases where `moonraker.conf` was not found.
+
+---
+
 ## [0.9.19] - 05/22/2026 - WoodWorker
 
 ### Reader Diagnostics

@@ -51,21 +51,22 @@ Edit `~/printer_data/config/nfc/nfc_reader_hw.cfg`. The default file has four la
 
 ```ini
 [nfc_gate lane0]
+enabled:    True
 mmu_gate:   0
 i2c_mcu:    mmu0
-i2c_bus:    i2c3_PB3_PB4
 
 [nfc_gate lane1]
+enabled:    True
 mmu_gate:   1
 i2c_mcu:    mmu1
-i2c_bus:    i2c3_PB3_PB4
 ```
 
 | Key | Required | Value |
 |---|:---:|---|
 | `mmu_gate` | Yes | Happy Hare gate number (0-based integer) |
 | `i2c_mcu` | Yes | Klipper MCU name — must match an `[mcu laneN]` in your config |
-| `i2c_bus` | Yes | I2C bus name on that MCU — use `i2c3_PB3_PB4` for PB3/PB4 on EBB42 |
+| `enabled` | No | Defaults to `True`. Set `False` to keep a future lane template without creating hardware. |
+| `i2c_bus` | Inherited unless overridden | I2C bus name on that MCU — use `i2c3_PB3_PB4` for PB3/PB4 on EBB42 or set it once in `[nfc_gate]` |
 
 > [!NOTE]
 > `i2c_mcu` must exactly match the MCU name Klipper uses. These names come from Happy Hare's `mmu_hardware.cfg`, typically `lane0`, `lane1`, etc. A mismatch causes a Klipper startup error.
@@ -77,9 +78,9 @@ All polling, timing, and logging settings are inherited from the base `[nfc_gate
 
 ```ini
 [nfc_gate lane2]
+enabled:    True
 mmu_gate:   2
 i2c_mcu:    mmu2
-i2c_bus:    i2c3_PB3_PB4
 debug:      2              ; verbose logging on this lane only
 ```
 
@@ -123,13 +124,13 @@ NFC gate status  (4 gates configured):
 When Klipper connects, each lane initialises automatically and reports to the console. Look for:
 
 ```
-✅ NFC[lane0]: ready.  HH seed: spool_id=42  Startup polling is enabled; first poll in 0.0s.
+[OK] NFC[lane0]: ready.  HH seed: spool_id=42  Startup polling is enabled; first poll in 0.0s.
 ```
 
 or, if the gate was empty in Happy Hare:
 
 ```
-✅ NFC[lane0]: ready.  HH reports gate empty  Run NFC GATE=0 READ=1 to start polling.
+[OK] NFC[lane0]: ready.  HH reports gate empty  Run NFC GATE=0 READ=1 to start polling.
 ```
 
 **The HH seed line is important.** It means NFC_Manager read Happy Hare's gate map on startup and pre-loaded the lane cache with the spool HH already knows about. The first poll will verify the physical tag matches that spool — if it does, no redundant dispatch is sent to Happy Hare. If the spool was swapped while Klipper was down, the mismatch is detected and `_NFC_SPOOL_CHANGED` fires normally.
@@ -144,7 +145,7 @@ NFC GATE=0 INIT=1
 
 This runs the PN532 `GetFirmwareVersion` and `SAMConfiguration` handshake. Expected output:
 ```
-NFC[lane0]: reader OK
+[OK] NFC[lane0]: reader OK
 ```
 
 If it fails, check [Troubleshooting](troubleshooting.md).
@@ -167,9 +168,9 @@ With a registered tag (see [Spoolman Integration](../shared/spoolman-integration
 NFC GATE=0 POLL=1
 ```
 
-Expected console output:
+Expected result:
 ```
-NFC gate 0: spool 42 detected (UID 04AABBCCDD). Sending to Happy Hare.
+NFC[lane0]: one poll complete; Gate 0:  spool 42  UID 04AABBCCDD ...
 ```
 
 This runs the full chain: PN532 read → Spoolman lookup → state update → Happy Hare macro. If this works, the pipeline is complete.
@@ -184,7 +185,7 @@ Once a lane works end-to-end, start automatic polling:
 NFC GATE=0 READ=1
 ```
 
-To start all lanes, run `READ=1` for each. Polling runs at the `poll_interval` (default: 30 seconds).
+To start all lanes, run `READ=1` for each. Polling runs at the `poll_interval` (default: 10 seconds).
 
 **Optional: automatic polling on startup.**
 To have lanes start polling automatically after Klipper boots, set `startup_polling: 1`. The shipped `nfc_reader_hw.cfg` staggers the per-lane startup delays by 0.5 seconds so all readers don't poll simultaneously:

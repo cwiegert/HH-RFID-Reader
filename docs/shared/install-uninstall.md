@@ -20,6 +20,7 @@ The installer creates **symlinks** — it does not copy Python files into the Kl
 ~/printer_data/config/nfc/nfc_reader.cfg
 ~/printer_data/config/nfc/nfc_macros.cfg
 ~/printer_data/config/nfc/nfc_reader_hw.cfg
+~/printer_data/config/nfc/nfc_reader_shared.cfg
 ```
 
 Config files use a non-destructive merge: if a section already exists in your file, it is left alone. Only missing sections are appended.
@@ -41,12 +42,11 @@ SSH to the Pi:
 
 ```bash
 cd ~
-git clone --filter=blob:none --sparse git@github.com:<your-github-username>/NFC-Reader.git emu-nfc-reader
+git clone https://github.com/cwiegert/HH-RFID-Reader.git emu-nfc-reader
 cd ~/emu-nfc-reader
-git sparse-checkout set klippy config 
 ```
 
-The sparse checkout skips any large binary assets and keeps only what the Pi and Klipper need.
+The installer configures a sparse checkout automatically — documentation and other non-runtime files are excluded from the Pi.
 
 ### Step 3 — Run the Installer
 
@@ -58,12 +58,31 @@ The installer prints what it creates. If it cannot find the Klipper extras direc
 
 ### Step 4 — Add Includes to `printer.cfg`
 
-Open `~/printer_data/config/printer.cfg` and add these three lines **in this exact order**:
+Open `~/printer_data/config/printer.cfg` and add the matching includes in this order.
+
+Per-lane readers:
 
 ```ini
 [include nfc/nfc_reader.cfg]
 [include nfc/nfc_macros.cfg]
 [include nfc/nfc_reader_hw.cfg]
+```
+
+Shared-reader-only:
+
+```ini
+[include nfc/nfc_reader.cfg]
+[include nfc/nfc_macros.cfg]
+[include nfc/nfc_reader_shared.cfg]
+```
+
+Hybrid:
+
+```ini
+[include nfc/nfc_reader.cfg]
+[include nfc/nfc_macros.cfg]
+[include nfc/nfc_reader_hw.cfg]
+[include nfc/nfc_reader_shared.cfg]
 ```
 
 Order is required. `nfc_reader.cfg` defines the base `[nfc_gate]` section that each lane section inherits from. Including the lane file first causes a Klipper startup error.
@@ -92,12 +111,12 @@ Edit `~/printer_data/config/nfc/nfc_reader_hw.cfg`. The default file has four la
 
 ```ini
 [nfc_gate lane0]
-mmu_gate:   0
-i2c_mcu:    lane0
-i2c_bus:    i2c3_PB3_PB4
+enabled: True
+mmu_gate: 0
+i2c_mcu:  mmu0
 ```
 
-`i2c_mcu` must exactly match the MCU name in your Happy Hare config (from `mmu_hardware.cfg`), typically `mmu0`, `mmu1`, etc.
+`i2c_mcu` must exactly match the MCU name in your Happy Hare config (from `mmu_hardware.cfg`), typically `mmu0`, `mmu1`, etc. `i2c_bus` can be set once in the base `[nfc_gate]` section or overridden per lane.
 
 > [!IMPORTANT]
 > **Temperature sensor I2C bus must match.** If your lane MCU also has a thermistor or temperature sensor connected over I2C (e.g. an SHT3x), it must be configured on the **same hardware I2C bus** as the PN532. Set `i2c_bus` in your temperature sensor section to the same value as the `i2c_bus` in the matching `[nfc_gate laneN]` section (or the base `[nfc_gate]` if all lanes share one bus). Using a different bus, or using the Klipper software-emulated I2C bus (`i2c_software_*`), will cause collisions or read failures on both devices. Hardware I2C is required.
@@ -112,6 +131,7 @@ sudo systemctl restart klipper
 
 ```gcode
 NFC_STATUS
+NFC_DOCTOR
 ```
 
 Expected output with no tags loaded:
@@ -153,13 +173,13 @@ NFC reads this value automatically at connect time (falls back to 30 s if not se
 
 ## Moonraker Update Manager
 
-Add this block to `~/printer_data/config/moonraker.conf` so Fluidd/Mainsail can update the NFC reader alongside Klipper:
+The installer adds this block to `~/printer_data/config/moonraker.conf` automatically. If it was not found or you need to add it manually:
 
 ```ini
 [update_manager emu_nfc_reader]
 type:             git_repo
 path:             ~/emu-nfc-reader
-origin:           git@github.com:<your-github-username>/NFC-Reader.git
+origin:           https://github.com/cwiegert/HH-RFID-Reader.git
 primary_branch:   main
 managed_services: klipper
 install_script:   install.sh

@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git -C /Users/cory/Documents/GitHub/NFC-Reader remote get-url origin)"
+    ]
+  }
+}

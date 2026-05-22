@@ -120,14 +120,14 @@ class SharedPreloadCoordinator:
         gate._shared_preload_auto_created = auto_created
         _ac_note = " [new spool synced]" if auto_created else ""
         logger.info(
-            "[OK] NFC[%s]: spool %d approved%s — macro will send to Happy Hare",
+            "[OK] NFC[%s]: spool %d approved%s — ready for preload commit",
             gate._name, spool_id, _ac_note)
         gcmd.respond_info(color_console_tags(
-            "[OK] NFC[%s]: spool %d approved%s — macro will send to Happy Hare"
+            "[OK] NFC[%s]: spool %d approved%s — ready for preload commit"
             % (gate._name, spool_id, _ac_note)))
         logger.info(
             "[%s]: PRELOAD_CHECK — spool %d validated, "
-            "macro responsible for MMU_GATE_MAP NEXT_SPOOLID",
+            "waiting for PRELOAD_COMMIT",
             gate._name, spool_id)
         gate._shared_last_action = (
             "approved spool %d for NEXT_SPOOLID" % spool_id)

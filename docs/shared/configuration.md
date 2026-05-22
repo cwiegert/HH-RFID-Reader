@@ -14,6 +14,10 @@ Three files, included in this order from `printer.cfg`:
 [include nfc/nfc_reader_hw.cfg] ; one section per physical gate — edit this
 ```
 
+For a shared-reader-only install, include `nfc_reader_shared.cfg` instead of
+`nfc_reader_hw.cfg`. For a hybrid install, include both hardware files after
+`nfc_macros.cfg`.
+
 **How inheritance works:** `nfc_reader.cfg` defines the base `[nfc_gate]` section with all defaults. Each `[nfc_gate laneN]` in `nfc_reader_hw.cfg` inherits every key automatically. Override a key in a lane section only when that lane needs a different value.
 
 This includes hardware keys. `i2c_address` and `i2c_bus` set in the base `[nfc_gate]` section are inherited by all lanes — you only need to specify them per lane if a particular reader uses different hardware.
@@ -55,7 +59,7 @@ spoolman_cache_ttl: 300
 
 | Setting | Default | Description |
 |---|---|---|
-| `spoolman_url` | `auto` | `auto` reads the URL from Moonraker's `[spoolman]` config. Set to `http://host:port` to use a direct URL. Leave empty to disable Spoolman lookup. |
+| `spoolman_url` | `auto` | `auto` reads the URL from Moonraker's `[spoolman]` config. Set to `http://host:port` to use a direct URL. Set to `disabled` or leave empty to skip Spoolman lookup. |
 | `spoolman_rfid_key` | `rfid_tag` | Name of the extra field on Spoolman spool records that holds the tag UID. Must match exactly — case-sensitive. |
 | `spoolman_timeout` | `5.0` | HTTP request timeout in seconds. Increase if you see timeouts on a slow network. |
 | `spoolman_cache_ttl` | `300` | How long (seconds) a UID→spool lookup is cached. `0` disables caching. |
@@ -80,7 +84,7 @@ spoolman_auto_create: False
 | `tag_max_pages` | `16` | Fallback NTAG user-page window for non-NDEF/binary tags. NDEF text/JSON tags read the NDEF TLV length dynamically, so large OpenSpool/OpenPrintTag payloads do not need this increased. |
 
 > [!NOTE]
-> `bambu_reads: True` with `tag_parsing: False` logs a warning at startup and has no effect — the MIFARE path is never reached when tag parsing is disabled.
+> `bambu_reads: True` with `tag_parsing: False`, or `spoolman_auto_create: True` without tag parsing and a usable Spoolman URL, logs a startup warning and has no effect. Run `NFC_DOCTOR` after restart to see these warnings again.
 
 ---
 
@@ -96,7 +100,7 @@ absent_threshold:   3
 
 | Setting | Default | Description |
 |---|---|---|
-| `startup_polling` | `-1` | `-1` = manual start only. `1` = start polling automatically after PN532 init. `0` = explicitly disabled (useful as a lane override). |
+| `startup_polling` | `1` | `-1` = manual start only. `1` = start polling automatically after PN532 init. `0` = explicitly disabled (useful as a lane override). |
 | `startup_poll_delay` | `0.0` | Seconds to wait before the first automatic poll. The shipped hardware config staggers this by 0.5 seconds per lane. |
 | `poll_interval` | `10` | Seconds between polls while background polling is active. |
 | `absent_threshold` | `3` | Consecutive missed reads before `_NFC_SPOOL_REMOVED` fires. At 10s interval, default = ~30s before removal. |
@@ -117,23 +121,23 @@ poll_interval × absent_threshold = seconds before removal fires
 ```ini
 [nfc_gate]
 scan_enabled:          False
-scan_jog_mm:           75.0
-scan_reads_per_position: 3
+scan_jog_mm:           150.0
+scan_reads_per_position: 1
 scan_rewind_buffer_mm: 30.0
 scan_decode_retry_mm:     2.0
 scan_decode_retry_rounds: 5
-scan_poll_interval:    0.10
+scan_poll_interval:    0.25
 ```
 
 | Setting | Default | Description |
 |---|---|---|
 | `scan_enabled` | `False` | Controls the automatic Happy Hare gate-status edge trigger. `False` disables automatic 0→1 scan-jog, but manual or Happy Hare hook-triggered `NFC JOG_SCAN=1` still works. |
-| `scan_jog_mm` | `75.0` | Logical filament advance per scan chunk (mm). NFC divides this into three blocking MMU_TEST_MOVE substeps so it can read at stopped spool positions. |
-| `scan_reads_per_position` | `3` | Number of NFC read attempts at each stopped spool position before moving the next substep. Reads are spaced by `scan_poll_interval`. |
+| `scan_jog_mm` | `150.0` | Logical filament advance per scan chunk (mm). NFC divides this into three blocking MMU_TEST_MOVE substeps so it can read at stopped spool positions. For rich tags such as Bambu/MIFARE, a smaller value like `75.0` can improve payload-read reliability. |
+| `scan_reads_per_position` | `1` | Number of NFC read attempts at each stopped spool position before moving the next substep. Reads are spaced by `scan_poll_interval`. Increase for marginal tag alignment at the cost of scan time. |
 | `scan_rewind_buffer_mm` | `30.0` | Distance reserved for Happy Hare's final gate-parking step (`_MMU_STEP_UNLOAD_GATE`). After a tag is found, NFC fast-rewinds to within this buffer and then hands off to HH for sensor/encoder-based final parking. If the scan moved less than this value, the fast rewind is skipped. |
 | `scan_decode_retry_mm` | `2.0` | Distance between nearby retry positions after a UID is found but the rich tag payload is marked incomplete. |
 | `scan_decode_retry_rounds` | `5` | Nearby retry rounds before accepting the current UID/metadata result. Each round probes both sides of the first UID hit. |
-| `scan_poll_interval` | `0.10` | Seconds between stopped-position NFC read attempts during scan-jog. Since Happy Hare `MMU_TEST_MOVE` blocks by default, this is not a read-while-moving interval. |
+| `scan_poll_interval` | `0.25` | Seconds between stopped-position NFC read attempts during scan-jog. The shared reader also uses this value as its active polling cadence. Since Happy Hare `MMU_TEST_MOVE` blocks by default, this is not a read-while-moving interval. |
 
 There is no user setting for left-neighbor interference. During scan-jog, gate
 `N` checks only the cached UID on gate `N - 1`; if it exactly matches the UID
@@ -217,7 +221,7 @@ These are tuned for CAN bus round-trip latency on the EBB42. Leave them at defau
 log_file:          nfc_reader.log
 debug:             2
 console_output:    False
-console_log_level: warning
+console_log_level: 2
 ```
 
 | Setting | Default | Description |
@@ -225,7 +229,7 @@ console_log_level: warning
 | `log_file` | `nfc_reader.log` | Log filename. Relative paths resolve to `~/printer_data/logs/`. Set to an absolute path to write elsewhere. Leave empty to use the main Klipper log only. |
 | `debug` | `2` | `0` (or `off`) = no logging. `1` (or `error`) = errors only. `2` (or `warning`) = warnings and errors. `3` (or `info`) = state changes, Spoolman lookups, HH handoff. `4` (or `debug`) = full I2C protocol trace. |
 | `console_output` | `False` | Send NFC log messages to the Fluidd/Mainsail console. Errors always appear in the console regardless of this setting. |
-| `console_log_level` | `warning` | Minimum level to show in console when `console_output: True`. Accepts string (`error`, `warning`, `info`, `debug`) or numeric (`1`–`4`). |
+| `console_log_level` | `2` | Minimum level to show in console when `console_output: True`. Accepts string (`error`, `warning`, `info`, `debug`) or numeric (`1`-`4`). |
 
 Shared reader console messages and their matching `nfc_reader.log` entries are
 defined in [Message Definitions](message_definition.md).
@@ -233,13 +237,13 @@ defined in [Message Definitions](message_definition.md).
 **Recommended for normal printing:**
 ```ini
 console_output:    False
-console_log_level: warning
+console_log_level: 2
 ```
 
 **Recommended during setup or debugging:**
 ```ini
 console_output:    True
-console_log_level: info
+console_log_level: 3
 debug:             3
 ```
 
@@ -375,9 +379,8 @@ The `[nfc_gate shared]` section lives in `nfc_reader_shared.cfg`:
 
 ```ini
 [nfc_gate shared]
+enabled:                True
 i2c_mcu:                mmu
-i2c_bus:                i2c1
-i2c_address:            0x24
 shared:                 true
 startup_polling:        1
 ```
@@ -386,46 +389,50 @@ Full config with all optional keys shown:
 
 ```ini
 [nfc_gate shared]
+enabled:                True
 i2c_mcu:                mmu
-i2c_bus:                i2c1
-i2c_address:            0x24
 shared:                 true
 startup_polling:        1
 shared_read_timeout:    120.0
 shared_tag_read_effect: mmu_RFID_read
-read_effect_duration:   4.0
+read_effect_duration:   2.0
 shared_bypass_tag_read_effect: mmu_RFID_bypass_read
-bypass_read_effect_duration:   4.0
+bypass_read_effect_duration:   2.0
 shared_spool_ready_effect: mmu_RFID_ready
-ready_effect_duration:  4.0
+ready_effect_duration:  0.0
 shared_bypass_spool_ready_effect: mmu_RFID_bypass_ready
 bypass_ready_effect_duration: 2.0
 shared_tag_unresolved_effect: mmu_RFID_unresolved
 unresolved_effect_duration: 2.0
+shared_spool_warning_effect: mmu_RFID_warning
+shared_auto_create_effect:   mmu_RFID_creating
 shared_missed_limit:    3
 force_spool_id:         true
 ```
 
 | Setting | Default | Description |
 |---|---|---|
+| `enabled` | `True` | Set `False` to keep the shared-reader template installed without initializing hardware or registering `NFC_SHARED`. |
 | `shared` | `false` | Enable shared dispatch for this reader. Must be `true`. |
-| `startup_polling` | `0` | Set to `1` to poll at Klipper boot. Explicit user choice. |
-| `scan_poll_interval` | inherited from `[nfc_gate]` | Seconds between shared-reader tag reads while polling. The shipped default is `0.10`. |
+| `startup_polling` | `1` in the shipped template | Set to `1` to poll at Klipper boot. Set to `0` or `-1` if you want to start it manually with `NFC_SHARED READ=1`. |
+| `scan_poll_interval` | inherited from `[nfc_gate]` | Seconds between shared-reader tag reads while polling. The shipped default is `0.25`. |
 | `poll_interval` | inherited from `[nfc_gate]` | Ignored for shared-reader read cadence; lane readers still use it for normal background polling. |
 | `pending_spool_id_timeout` | set in `mmu_parameters.cfg` | Seconds a scanned spool remains eligible for the next preload. NFC reads this from Happy Hare's `[mmu]` section at connect time (falls back to 30 s). Set it in `~/printer_data/config/mmu/base/mmu_parameters.cfg`. |
 | `shared_read_timeout` | `120.0` | Seconds polling may run without resolving a valid tag before auto-stopping. No effect when started via `startup_polling` or PRELOAD_CHECK auto-restart. |
 | `shared_tag_read_effect` | `''` | Name of a `[mmu_led_effect]` to play as soon as the shared reader sees a tag. Leave empty to skip tag-detected LED feedback. |
-| `read_effect_duration` | `4.0` | Seconds before NFC stops `shared_tag_read_effect`. Use with the effect's strobe layer to control total animation length. |
+| `read_effect_duration` | `2.0` | Seconds before NFC stops `shared_tag_read_effect`. Use with the effect's strobe layer to control total animation length. |
 | `shared_bypass_tag_read_effect` | `mmu_RFID_bypass_read` | Name of a `[mmu_led_effect]` to play when a tag is seen while Happy Hare bypass is selected. |
-| `bypass_read_effect_duration` | `4.0` | Seconds before NFC stops `shared_bypass_tag_read_effect`. |
+| `bypass_read_effect_duration` | `2.0` | Seconds before NFC stops `shared_bypass_tag_read_effect`. |
 | `shared_spool_ready_effect` | `''` | Name of a `[mmu_led_effect]` to play when the tag resolves to a Spoolman spool and is ready to load. Leave empty to skip ready LED feedback. |
-| `ready_effect_duration` | `4.0` | Seconds before NFC stops `shared_spool_ready_effect` when it is used as the immediate bypass fallback confirmation. Normal staged-spool ready feedback still runs until preload commit/cancel/timeout. |
+| `ready_effect_duration` | `0.0` | Seconds before NFC stops `shared_spool_ready_effect` when it is used as the immediate bypass fallback confirmation. Normal staged-spool ready feedback still runs until preload commit/cancel/timeout. |
 | `shared_bypass_spool_ready_effect` | `mmu_RFID_bypass_ready` | Name of a `[mmu_led_effect]` to play when a bypass spool resolves. |
 | `bypass_ready_effect_duration` | `2.0` | Seconds before NFC stops `shared_bypass_spool_ready_effect`. |
 | `shared_tag_unresolved_effect` | `''` | Name of a `[mmu_led_effect]` to play when the tag UID does not resolve to a spool. Leave empty to skip unresolved LED feedback. |
 | `unresolved_effect_duration` | `2.0` | Seconds before NFC stops `shared_tag_unresolved_effect`. For example, `layers: strobe 2 2 ...` plus `unresolved_effect_duration: 1.0` plays two flashes and stops after 1 second. |
+| `shared_spool_warning_effect` | `mmu_RFID_warning` | Name of a `[mmu_led_effect]` to play when the staged spool reaches 80% of its pending timeout. |
+| `shared_auto_create_effect` | `mmu_RFID_creating` | Name of a `[mmu_led_effect]` to play while Spoolman auto-create is running. |
 | `shared_missed_limit` | `3` | Consecutive unresolvable UID reads before a console error advises the user to use `MMU_PRELOAD`. Minimum 1. |
-| `force_spool_id` | `true` | When `true`, `PRELOAD_CHECK` emits a red console advisory if no spool is staged, telling the user to scan a tag before loading. |
+| `force_spool_id` | `true` | When `true`, `PRELOAD_CHECK` emits a `[ERROR]` advisory if no spool is staged, telling the user to scan a tag before loading. |
 
 `mmu_gate` and `scan_enabled` are not user-configurable — both are set internally by `shared: true`. Only one enabled shared reader may be configured. The reader inherits `spoolman_url`, `spoolman_rfid_key`, `tag_parsing`, `spoolman_auto_create`, and all logging settings from the base `[nfc_gate]` section. Set `enabled: False` to keep the shared-reader template installed without initializing hardware.
 
@@ -445,7 +452,7 @@ Add one user extension hook to `mmu_macro_vars.cfg`:
 variable_user_post_preload_extension: '_NFC_SHARED_PRELOAD'
 ```
 
-`variable_user_post_preload_extension` fires at the start of every pregate load. `PRELOAD_CHECK` skips only while printing — it is safe to leave wired for all loads. If no spool is staged a console message advises the user; with `force_spool_id: true` that advisory is shown in red.
+`variable_user_post_preload_extension` fires at the start of every pregate load. `PRELOAD_CHECK` skips only while printing — it is safe to leave wired for all loads. If no spool is staged a console message advises the user; with `force_spool_id: true` that advisory uses the `[ERROR]` prefix.
 
 Shared polling pauses automatically when printing starts and resumes when printing completes via Klipper's `idle_timeout` events — no post-unload hook is needed.
 

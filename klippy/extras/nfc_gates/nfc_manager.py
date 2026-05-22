@@ -887,9 +887,15 @@ class NFCGate:
         try:
             target_info = self._reader.read_target()
             if target_info is None:
+                logger.info("[%s]: no tag detected", self._name)
                 gcmd.respond_info(color_console_tags(
                     "NFC[%s]: no tag detected" % self._name))
                 return
+            logger.info(
+                "[%s]: UID=%s Tg=%s SENS_RES=0x%04X SAK=0x%02X UIDLen=%d",
+                self._name, target_info['uid'], target_info['target'],
+                target_info['sens_res'], target_info['sak'],
+                target_info['uid_length'])
             gcmd.respond_info(
                 color_console_tags(
                     "NFC[%s]: UID=%s Tg=%s SENS_RES=0x%04X SAK=0x%02X UIDLen=%d"
@@ -1100,6 +1106,10 @@ class NFCGate:
                     self._name, self._shared_read_timeout)
             self._polling = True
             self.reactor.update_timer(self._poll_timer, self.reactor.NOW)
+            if not self._shared:
+                logger.info(
+                    "[%s]: gate %d READ=1 — polling started",
+                    self._name, self._gate)
             gcmd.respond_info(color_console_tags(
                 "NFC[%s]: polling started" % self._name))
         else:
@@ -1109,6 +1119,10 @@ class NFCGate:
                     "[%s]: shared READ=0 — polling stopped; "
                     "pending spool=%s kept",
                     self._name, self._shared_pending_spool)
+            else:
+                logger.info(
+                    "[%s]: gate %d READ=0 — polling stopped",
+                    self._name, self._gate)
             self._polling = False
             self.reactor.update_timer(self._poll_timer, self.reactor.NEVER)
             gcmd.respond_info(color_console_tags(
@@ -1229,9 +1243,10 @@ class NFCGate:
             return
         if gcmd.get_int("POLL", 0):
             self._poll()
+            status = self.status_line().strip()
+            logger.info("[%s]: one poll complete; %s", self._name, status)
             gcmd.respond_info(color_console_tags(
-                "NFC[%s]: one poll complete; %s"
-                % (self._name, self.status_line().strip())))
+                "NFC[%s]: one poll complete; %s" % (self._name, status)))
             return
         if gcmd.get_int("APPLY", 0):
             self._apply_current_spool(gcmd)
@@ -1427,6 +1442,7 @@ class NFCGate:
 
             self._commands_registered = True
 
+        logger.info("[%s]: connected", self._name)
         self._gcode.respond_info(f"[CONNECTED] NFC Gate [{self._name}] connected")
 
         # Schedule PN532 init after the rest of Klippy/I2C has settled
@@ -1473,14 +1489,33 @@ class NFCGate:
 
         if self._gcode is not None:
             if self._failed:
+                init_cmd = ("NFC_SHARED INIT=1" if self._shared
+                            else "NFC GATE=%d INIT=1" % self._gate)
+                logger.warning(
+                    "[%s]: not ready — check wiring. Run %s after fixing.",
+                    self._name, init_cmd)
                 self._gcode.respond_info(scan_jog._color_tags(
                     "[WARN] NFC[%s]: not ready — check wiring. "
-                    "Run NFC GATE=%d INIT=1 after fixing."
-                    % (self._name, self._gate)))
+                    "Run %s after fixing."
+                    % (self._name, init_cmd)))
             else:
-                seed_note = ("  HH seed: spool_id=%d" % self._hh_seed_spool_id
-                             if self._hh_seed_spool_id is not None
-                             else "  HH reports gate empty")
+                if self._shared:
+                    seed_note = ""
+                    read_cmd = "NFC_SHARED READ=1"
+                else:
+                    seed_note = ("  HH seed: spool_id=%d" % self._hh_seed_spool_id
+                                 if self._hh_seed_spool_id is not None
+                                 else "  HH reports gate empty")
+                    read_cmd = "NFC GATE=%d READ=1" % self._gate
+                if self._debug >= 3:
+                    logger.info(
+                        "[%s]: ready.%s  %s",
+                        self._name,
+                        seed_note,
+                        ("Startup polling is enabled; first poll in %.1fs."
+                         % self._startup_poll_delay)
+                        if self._startup_polling == 1
+                        else ("Run %s to start polling." % read_cmd))
                 self._gcode.respond_info(scan_jog._color_tags(
                     "[OK] NFC[%s]: ready.%s  %s"
                     % (self._name,
@@ -1488,8 +1523,7 @@ class NFCGate:
                        "Startup polling is enabled; first poll in %.1fs."
                        % self._startup_poll_delay
                        if self._startup_polling == 1
-                       else "Run NFC GATE=%d READ=1 to start polling."
-                            % self._gate)))
+                       else "Run %s to start polling." % read_cmd)))
 
         if not self._failed and self._startup_polling == 1:
             self._polling = True
@@ -1696,11 +1730,11 @@ class NFCGate:
                     self._scan_idle_ready_time = 0.0
                     if NFCGate._active_scan_gate is not None:
                         if not self._scan_deferred_notified:
-                            msg = ("[%d]: scan-jog waiting — "
+                            msg = ("[SCAN] NFC[%d]: scan-jog waiting — "
                                    "gate %d is already scanning"
                                    % (self._gate, NFCGate._active_scan_gate))
                             logger.info("[%s]: %s", self._name, msg)
-                            self._console("⏳ " + msg)
+                            self._console(msg)
                             self._scan_deferred_notified = True
                         self._scan_pending = True  # re-arm; retry after active scan has time to progress
                         self._scan_idle_ready_time = now + 3.0

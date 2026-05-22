@@ -38,7 +38,7 @@ For shared reader console and `nfc_reader.log` messages, see [Message Definition
 | <span style="color:orange">━━━ **Advanced Shared Reader** — internal/recovery commands, not low-level PN532 debug ━━━</span> | |
 | `NFC_SHARED CLEAR=1` | Clear pending spool, stop polling, reset shared state |
 | `NFC_SHARED PRELOAD_CHECK=1` | Approve the pending shared-reader spool for the HH preload hook |
-| `NFC_SHARED PRELOAD_COMMIT=1 SPOOL_ID=<id>` | Clear pending state after the hook macro successfully applies the gate assignment |
+| `NFC_SHARED PRELOAD_COMMIT=1 SPOOL_ID=<id>` | Clear pending state after the hook bridge accepts the staged spool |
 | `NFC_SHARED PRELOAD_CLEAR_ASSIGNED=1 SPOOL_ID=<id>` | Legacy/recovery command to clear shared pending state when HH already has this spool assigned |
 | `NFC_SHARED POLL=1` | Force one full read/resolve cycle on the shared reader; skips while printing |
 | `NFC_SHARED SCAN=1` | Raw hardware scan only — no Spoolman/HH dispatch; skips while printing |
@@ -114,8 +114,8 @@ The seed is always cleared after the first `CHANGED` event — it fires at most 
 
 **Console output at startup:**
 ```
-[OK] NFC[lane0]: reader ready.  HH seed: spool_id=42  Startup polling is enabled; first poll in 0.0s.
-[OK] NFC[lane1]: reader ready.  HH reports gate empty  Run NFC GATE=1 READ=1 to start polling.
+[OK] NFC[lane0]: ready.  HH seed: spool_id=42  Startup polling is enabled; first poll in 0.0s.
+[OK] NFC[lane1]: ready.  HH reports gate empty  Run NFC GATE=1 READ=1 to start polling.
 ```
 
 **If Happy Hare wasn't ready** when the NFC init ran (rare — both init at `klippy:connect`), the seed step is skipped and all first-poll reads dispatch normally. Run `NFC_HH_SYNC_CACHE` to manually re-seed.
@@ -559,11 +559,10 @@ The event macros are in `~/printer_data/config/nfc/nfc_macros.cfg`. Edit them to
 
 For lane readers, the Happy Hare-facing gate assignment commands live in
 `nfc_macros.cfg` so they remain visible and editable without touching Python.
-The shared reader uses a narrow bridge: Python validates pending state with
-`NFC_SHARED PRELOAD_CHECK=1`, the macro runs Happy Hare's public commands, and
-`NFC_SHARED PRELOAD_COMMIT=1` clears pending state only after the assignment is
-approved. The default macro then applies the local HH gate map and directly sets
-the Spoolman gate assignment.
+The shared reader stages `MMU_GATE_MAP NEXT_SPOOLID=<id>` in Python when the
+tag resolves. The hook macro is deliberately narrow: Python validates pending
+state with `NFC_SHARED PRELOAD_CHECK=1`, and `NFC_SHARED PRELOAD_COMMIT=1`
+clears pending state only after the same spool ID is approved.
 
 ### Happy Hare commands used by the defaults
 
@@ -594,8 +593,8 @@ The shared reader is a single PN532 mounted inside the MMU body. Tap a spool tag
 2. Tap your spool tag on the shared reader — NFC resolves the spool in Spoolman and stores it as pending. LED effect fires if configured.
 3. Drop the spool into an MMU lane and push the filament tip into the pregate sensor.
 4. Happy Hare detects the pregate load and fires `variable_user_post_preload_extension` → `_NFC_SHARED_PRELOAD`.
-5. The macro selects the hook-provided gate, runs `NFC_SHARED PRELOAD_CHECK=1`, commits the pending spool, applies `MMU_GATE_MAP GATE=<n> SPOOLID=<id>`, and directly sets `MMU_SPOOLMAN SPOOLID=<id> GATE=<n>`.
-6. Pending state is cleared only after Happy Hare accepts the preload commit. Polling restarts automatically for the next spool.
+5. The macro reads the pending spool from `printer['nfc_gate shared']`, runs `NFC_SHARED PRELOAD_CHECK=1 EXPECTED_SPOOL_ID=<id>`, then `NFC_SHARED PRELOAD_COMMIT=1 SPOOL_ID=<id>`.
+6. Pending state is cleared only after the commit command matches the approved spool. Polling restarts automatically for the next spool.
 
 ### Commands
 
@@ -633,20 +632,16 @@ PN532 debug commands, and they do not require `low_level_debug: True`.
 
 **`NFC_SHARED CLEAR=1`** — Clear pending state, stop polling, reset the reader. Use this to cancel a staged spool before the preload fires.
 
-**`NFC_SHARED PRELOAD_CHECK=1`** — Called automatically by `variable_user_post_preload_extension`. Approves the shared-reader preload if a valid pending spool exists. Skips only while printing. If no spool is staged, a console message advises tapping a tag first or using `MMU_PRELOAD`. With `force_spool_id: true`, that advisory is shown in red without raising a Klipper command error.
+**`NFC_SHARED PRELOAD_CHECK=1`** — Called automatically by `variable_user_post_preload_extension`. Approves the shared-reader preload if a valid pending spool exists. Skips only while printing. If no spool is staged, a console message advises tapping a tag first or using `MMU_PRELOAD`. With `force_spool_id: true`, the advisory uses the `[ERROR]` prefix without raising a Klipper command error.
 
-The default macro selects Happy Hare's hook-provided `GATE=<n>`, runs
-`PRELOAD_CHECK`, commits the pending spool, refreshes Happy Hare's Spoolman
-cache only when the pending spool was auto-created, applies the local gate map
-with `MMU_GATE_MAP GATE=<n> SPOOLID=<id> AVAILABLE=1 SYNC=1 QUIET=1`, and
-directly sets the Spoolman gate assignment with
-`MMU_SPOOLMAN SPOOLID=<id> GATE=<n> QUIET=1`.
+The default macro reads the pending spool from `printer['nfc_gate shared']`,
+runs `PRELOAD_CHECK` with `EXPECTED_SPOOL_ID=<id>`, and commits the same spool
+ID only after Python approves it. The Python side clears pending state only at
+commit.
 
-**`NFC_SHARED PRELOAD_CLEAR_ASSIGNED=1 SPOOL_ID=<id> GATE=<gate>`** — Legacy
-recovery command that clears shared pending state when Happy Hare already
-reports the pending spool in its gate map. The default `_NFC_SHARED_PRELOAD`
-macro no longer uses this branch; it selects the hook gate and applies the
-resolved spool directly.
+**`NFC_SHARED PRELOAD_CLEAR_ASSIGNED=1 SPOOL_ID=<id> GATE=<gate>`** — Recovery
+command that clears shared pending state when Happy Hare already reports the
+pending spool in its gate map.
 
 **`NFC_SHARED POLL=1`** — Force one full read/resolve cycle. Skips while printing and reports that no poll was run.
 
