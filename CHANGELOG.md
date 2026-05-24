@@ -22,6 +22,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Fixed default inheritance for the per-lane LED effect names so base `[nfc_gate]` values are available to lane instances unless explicitly overridden.
 
+### Installer
+
+- Stopped installing `nfc_reader_shared.cfg` during lane-reader installs. Shared-reader config is now written only when the user selects the shared-reader install path.
+- Reader-type detection now defaults to `shared` only when `printer.cfg` actively includes a shared-reader config, or when a shared-reader config exists without a lane hardware config. Old shared-reader template files no longer force a lane reinstall to default to shared.
+- Made interactive choice highlighting consistent: the default selection is highlighted in both the description text and bracket prompt; non-default choices remain unhighlighted.
+
 ---
 
 ## [0.9.20] - 05/23/2026 - WoodWorker

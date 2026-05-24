@@ -36,10 +36,12 @@ shift $(( OPTIND - 1 ))
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 KLIPPER_EXTRAS="${HOME}/klipper/klippy/extras"
 PRINTER_CONFIG="${HOME}/printer_data/config"
+PRINTER_CFG="${PRINTER_CONFIG}/printer.cfg"
 NFC_CONFIG_DIR="${PRINTER_CONFIG}/nfc"
 NFC_READER_CFG="${NFC_CONFIG_DIR}/nfc_reader.cfg"
 NFC_READER_HW_CFG="${NFC_CONFIG_DIR}/nfc_reader_hw.cfg"
 NFC_READER_SHARED_CFG="${NFC_CONFIG_DIR}/nfc_reader_shared.cfg"
+NFC_SHARED_READER_CFG="${NFC_CONFIG_DIR}/nfc_shared_reader.cfg"
 MMU_HW_CFG="${PRINTER_CONFIG}/mmu/base/mmu_hardware.cfg"
 
 if [ -t 1 ]; then
@@ -102,17 +104,11 @@ apply_profile_color() {
 }
 
 choice_style() {
-    case "$1" in
-        auto|spoolman|lane)
-            printf '%s%s%s%s' "${DEFAULT}" "${BOLD}" "$1" "${RESET}"
-            ;;
-        direct|rich|shared)
-            printf '%s' "$1"
-            ;;
-        *)
-            printf '%s%s%s' "${BOLD}" "$1" "${RESET}"
-            ;;
-    esac
+    if [ "$1" = "$2" ]; then
+        printf '%s%s%s%s' "${DEFAULT}" "${BOLD}" "$1" "${RESET}"
+    else
+        printf '%s' "$1"
+    fi
 }
 
 print_banner() {
@@ -191,11 +187,7 @@ prompt_choice() {
     local reply
 
     for choice in "$@"; do
-        if [ "${choice}" = "${default_value}" ]; then
-            choice_label="${DEFAULT}${BOLD}${choice}${RESET}"
-        else
-            choice_label="${choice}"
-        fi
+        choice_label="$(choice_style "${choice}" "${default_value}")"
         if [ -z "${choices_label}" ]; then
             choices_label="${choice_label}"
         else
@@ -479,17 +471,34 @@ PYEOF
 }
 
 detect_reader_type() {
-    local shared_cfg="$1"
-    python3 - "${shared_cfg}" <<'PYEOF'
-import re, sys
+    python3 - "$@" <<'PYEOF'
+import os
+import re
+import sys
+
+printer_cfg = sys.argv[1]
+lane_cfg = sys.argv[2]
+shared_paths = sys.argv[3:]
+include_re = re.compile(
+    r'^\s*\[include\s+nfc/(?:nfc_reader_shared|nfc_shared_reader)\.cfg\]\s*$',
+    re.M)
+section_re = re.compile(r'^\[nfc_gate shared\]\s*$', re.M)
 
 try:
-    text = open(sys.argv[1], 'r').read()
-    if re.search(r'^\[nfc_gate shared\]\s*$', text, flags=re.M):
+    if include_re.search(open(printer_cfg, 'r').read()):
         print('shared')
         raise SystemExit
 except FileNotFoundError:
     pass
+
+for path in shared_paths:
+    try:
+        text = open(path, 'r').read()
+    except FileNotFoundError:
+        continue
+    if section_re.search(text) and not os.path.exists(lane_cfg):
+        print('shared')
+        raise SystemExit
 print('lane')
 PYEOF
 }
@@ -842,10 +851,10 @@ if [ -f "${NFC_READER_CFG}" ]; then
 fi
 
 # ── Q1: Reader type ───────────────────────────────────────────────────────────
-DEFAULT_READER_TYPE="$(detect_reader_type "${NFC_READER_SHARED_CFG}")"
+DEFAULT_READER_TYPE="$(detect_reader_type "${PRINTER_CFG}" "${NFC_READER_HW_CFG}" "${NFC_READER_SHARED_CFG}" "${NFC_SHARED_READER_CFG}")"
 echo "1. Reader type"
-echo "   $(choice_style lane)   = per-lane PN532, one per EBB42 board"
-echo "   $(choice_style shared) = single reader inside the MMU body for staging spools"
+echo "   $(choice_style lane "${DEFAULT_READER_TYPE}")   = per-lane PN532, one per EBB42 board"
+echo "   $(choice_style shared "${DEFAULT_READER_TYPE}") = single reader inside the MMU body for staging spools"
 prompt_choice READER_TYPE \
     "   Select reader type" \
     "${DEFAULT_READER_TYPE}" \
@@ -867,8 +876,8 @@ if [ "${READER_TYPE}" = "lane" ]; then
     done
 
     echo "3. Spoolman connection"
-    echo "   $(choice_style auto)   = read the URL from Moonraker's [spoolman] section (recommended)"
-    echo "   $(choice_style direct) = enter a fixed URL such as http://127.0.0.1:7912"
+    echo "   $(choice_style auto auto)   = read the URL from Moonraker's [spoolman] section (recommended)"
+    echo "   $(choice_style direct auto) = enter a fixed URL such as http://127.0.0.1:7912"
     prompt_choice SPOOLMAN_MODE \
         "   Select Spoolman connection mode" \
         "auto" \
@@ -889,8 +898,8 @@ if [ "${READER_TYPE}" = "lane" ]; then
         "yes"
 
     echo "6. Tag read mode"
-    echo "   $(choice_style spoolman) = UID-only lookup in Spoolman's extra field (default)"
-    echo "   $(choice_style rich)     = read tag metadata, then resolve/create Spoolman records"
+    echo "   $(choice_style spoolman spoolman) = UID-only lookup in Spoolman's extra field (default)"
+    echo "   $(choice_style rich spoolman)     = read tag metadata, then resolve/create Spoolman records"
     prompt_choice TAG_MODE \
         "   Select tag read mode" \
         "spoolman" \
@@ -921,8 +930,8 @@ else
     SCAN_ENABLED="no"   # always disabled for shared reader
 
     echo "2. Spoolman connection"
-    echo "   $(choice_style auto)   = read the URL from Moonraker's [spoolman] section (recommended)"
-    echo "   $(choice_style direct) = enter a fixed URL such as http://127.0.0.1:7912"
+    echo "   $(choice_style auto auto)   = read the URL from Moonraker's [spoolman] section (recommended)"
+    echo "   $(choice_style direct auto) = enter a fixed URL such as http://127.0.0.1:7912"
     prompt_choice SPOOLMAN_MODE \
         "   Select Spoolman connection mode" \
         "auto" \
@@ -948,8 +957,8 @@ else
     prompt_i2c_bus_select I2C_BUS "${I2C_MCU}" "${PRINTER_CONFIG}" "${DEFAULT_I2C_BUS}"
 
     echo "6. Tag read mode"
-    echo "   $(choice_style spoolman) = UID-only lookup in Spoolman's extra field (default)"
-    echo "   $(choice_style rich)     = read tag metadata, then resolve/create Spoolman records"
+    echo "   $(choice_style spoolman spoolman) = UID-only lookup in Spoolman's extra field (default)"
+    echo "   $(choice_style rich spoolman)     = read tag metadata, then resolve/create Spoolman records"
     prompt_choice TAG_MODE \
         "   Select tag read mode" \
         "spoolman" \
@@ -1012,10 +1021,8 @@ echo "    ${DEFAULT}${NFC_READER_CFG}${RESET}"
 echo "    ${DEFAULT}${NFC_CONFIG_DIR}/nfc_macros.cfg${RESET}"
 if [ "${READER_TYPE}" = "shared" ]; then
     echo "    ${DEFAULT}${NFC_READER_SHARED_CFG}${RESET}  (settings applied)"
-    echo "    ${DEFAULT}${NFC_READER_HW_CFG}${RESET}  (template — ready for lane readers later)"
 else
     echo "    ${DEFAULT}${NFC_READER_HW_CFG}${RESET}  (settings applied)"
-    echo "    ${DEFAULT}${NFC_READER_SHARED_CFG}${RESET}  (template — ready for shared reader later)"
 fi
 echo "${DEFAULT}${BOLD}════════════════════════════════════════════════════════════════${RESET}"
 echo ""
@@ -1168,7 +1175,11 @@ if [ "${READER_TYPE}" != "shared" ]; then
 else
     echo "  [skip]     nfc_reader_hw.cfg — shared reader install does not need lane sections"
 fi
-merge_config "${REPO_DIR}/config/nfc_reader_shared.cfg"  "${NFC_READER_SHARED_CFG}"
+if [ "${READER_TYPE}" = "shared" ]; then
+    merge_config "${REPO_DIR}/config/nfc_reader_shared.cfg"  "${NFC_READER_SHARED_CFG}"
+else
+    echo "  [skip]     nfc_reader_shared.cfg — lane reader install does not need shared-reader config"
+fi
 
 echo ""
 echo "Applying selected settings..."
@@ -1291,13 +1302,11 @@ echo "    nfc_reader.cfg          ← Spoolman URL, tag parsing, debug settings"
 echo "    nfc_macros.cfg          ← Happy Hare handoff macros"
 if [ "${READER_TYPE}" = "shared" ]; then
     echo "    nfc_reader_shared.cfg   ← [nfc_gate shared] hardware config  (settings applied)"
-    echo "    nfc_reader_hw.cfg       ← [nfc_gate laneN] hardware layout   (template — not yet active)"
 else
     echo "    nfc_reader_hw.cfg       ← [nfc_gate laneN] hardware layout   (settings applied)"
-    echo "    nfc_reader_shared.cfg   ← [nfc_gate shared] hardware config  (template — not yet active)"
 fi
-echo "  To activate the other hardware config later, re-run install.sh with the"
-echo "  other reader type selected, or edit the template file and add the include."
+echo "  To add the other hardware config later, re-run install.sh with the other"
+echo "  reader type selected."
 echo ""
 echo "Next steps (first install only):"
 echo ""
