@@ -15,6 +15,7 @@ For shared reader console and `nfc_reader.log` messages, see [Message Definition
 | `NFC_HELP` | Show global NFC command help; add `ADVANCED=1 CALLBACKS=1 LOW_LEVEL=1` for the full command set |
 | `NFC_STATUS` | Show current state of every configured gate (includes shared reader if configured) |
 | `NFC_DOCTOR` | Check common config/setup problems: disabled lanes, Spoolman, shared-reader hook, and static warnings |
+| `NFC_REGISTER UID=HEX_UID SPOOL_ID=SPOOL_ID` | Assign a known NFC UID to an existing Spoolman spool and clear NFC's lookup cache |
 | `NFC GATE=<#> STATUS` | Show one gate's state |
 | `NFC GATE=<#> INIT=1` | Initialize (or re-initialize) the PN532 reader |
 | `NFC GATE=<#> SCAN=1` | One raw read — shows UID, no Spoolman lookup |
@@ -179,6 +180,30 @@ NFC_DOCTOR
 It reports enabled/disabled lane readers, shared-reader state, Spoolman
 availability, the shared-reader preload hook, and static config warnings such as
 `bambu_reads: True` without `tag_parsing: True`.
+
+---
+
+### `NFC_REGISTER UID=HEX_UID SPOOL_ID=SPOOL_ID`
+
+Writes a known tag UID to an existing Spoolman spool using the configured
+`spoolman_rfid_key` field. This is for cases where you already know the UID
+from a phone scan, a raw NFC scan, or an unresolved-tag console message and you
+do not want to open the browser-based Spoolman UI.
+
+```gcode
+NFC_REGISTER UID=04A1B2C3D4 SPOOL_ID=123
+```
+
+The command validates that Spoolman is enabled, confirms the spool exists,
+writes the UID to Spoolman, and clears NFC's UID lookup cache. It does not scan
+every spool for duplicate UIDs and does not call `MMU_SPOOLMAN REFRESH` from
+inside the command path. Happy Hare and Fluidd see the updated field through
+their normal Spoolman refresh/polling behavior.
+
+Expected success:
+```
+[OK] NFC: UID 04A1B2C3D4 assigned to Spoolman spool 123; NFC cache cleared. Happy Hare/Fluidd will refresh on their normal Spoolman polling cycle.
+```
 
 ---
 

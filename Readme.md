@@ -111,6 +111,7 @@ NFC_HELP                                      ; show normal command help
 NFC_HELP ADVANCED=1 CALLBACKS=1 LOW_LEVEL=1  ; show the full command set
 NFC_DOCTOR                                   ; check common config/setup problems
 NFC_STATUS                                   ; show every configured lane/shared reader
+NFC_REGISTER UID=04A1B2C3D4 SPOOL_ID=123     ; link a known UID to an existing Spoolman spool
 NFC GATE=0 INIT=1                            ; re-run PN532 init on one lane reader
 NFC GATE=0 SCAN=1                            ; raw UID scan, no Spoolman/HH dispatch
 NFC GATE=0 POLL=1                            ; read, resolve, and dispatch once

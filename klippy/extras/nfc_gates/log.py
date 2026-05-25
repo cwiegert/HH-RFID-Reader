@@ -142,6 +142,8 @@ def _respond_to_console(record):
     troubleshooting behavior we want during hardware bring-up.
     """
     global _console_gcode, _console_reactor
+    if getattr(record, 'nfc_no_console', False):
+        return
     if _console_gcode is None:
         return
     if record.levelno < logging.INFO:

@@ -116,6 +116,76 @@ def _flag_param(gcmd, name):
         return bool(value)
 
 
+def _gcmd_get_any(gcmd, names, default=None):
+    for name in names:
+        value = gcmd.get(name, None)
+        if value is not None:
+            return value
+    return default
+
+
+def _normalise_command_uid(uid):
+    uid_norm = SpoolmanClient._normalise_uid(str(uid or ''))
+    if not uid_norm:
+        return None
+    if len(uid_norm) % 2 != 0 or not re.match(r'^[0-9A-F]+$', uid_norm):
+        return None
+    return uid_norm
+
+
+def _respond_register_error(gcmd, msg):
+    logger.error(msg, extra={'nfc_no_console': True})
+    gcmd.respond_info(color_console_tags(msg))
+
+
+def _cmd_register_uid_to_spool(gcode, spoolman, gcmd):
+    uid = _normalise_command_uid(_gcmd_get_any(gcmd, ('UID', 'Uid', 'uid')))
+    spool_raw = _gcmd_get_any(
+        gcmd, ('SPOOL_ID', 'Spool_id', 'spool_id', 'SPOOLID', 'Spoolid'))
+
+    if not uid:
+        _respond_register_error(
+            gcmd, "[ERROR] NFC: NFC_REGISTER requires UID=HEX_UID")
+        return
+
+    try:
+        spool_id = int(spool_raw)
+    except Exception:
+        _respond_register_error(
+            gcmd, "[ERROR] NFC: NFC_REGISTER requires SPOOL_ID=SPOOL_ID")
+        return
+    if spool_id <= 0:
+        _respond_register_error(
+            gcmd, "[ERROR] NFC: SPOOL_ID must be greater than 0")
+        return
+
+    if spoolman is None:
+        msg = "[ERROR] NFC: Spoolman is disabled; cannot register UID %s" % uid
+        _respond_register_error(gcmd, msg)
+        return
+
+    spool = spoolman.lookup_spool_by_id(spool_id)
+    if not spool:
+        msg = "[ERROR] NFC: Spoolman spool %d was not found" % spool_id
+        _respond_register_error(gcmd, msg)
+        return
+
+    if not spoolman.set_spool_uid(spool_id, uid):
+        msg = ("[ERROR] NFC: failed to assign UID %s to Spoolman spool %d"
+               % (uid, spool_id))
+        _respond_register_error(gcmd, msg)
+        return
+
+    spoolman.clear_cache()
+
+    logger.info("NFC_Register: UID %s assigned to Spoolman spool %d",
+                uid, spool_id)
+    gcmd.respond_info(color_console_tags(
+        "[OK] NFC: UID %s assigned to Spoolman spool %d; NFC cache cleared. "
+        "Happy Hare/Fluidd will refresh on their normal Spoolman polling cycle."
+        % (uid, spool_id)))
+
+
 class _BusDefaultConfig:
     """Wraps a Klipper ConfigWrapper to supply an inherited default for i2c_bus."""
     def __init__(self, config, default_bus):
@@ -337,6 +407,7 @@ def _nfc_help(gcmd=None):
         "NFC_HELP : Display the complete set of NFC commands and functions",
         "NFC_STATUS : Show every configured NFC reader",
         "NFC_DOCTOR : Check NFC config, readers, Spoolman, and HH hooks",
+        "NFC_REGISTER UID=HEX_UID SPOOL_ID=SPOOL_ID : Assign a UID to an existing Spoolman spool",
         "NFC GATE=<#> HELP : Show commands for one per-lane reader",
         "NFC GATE=<#> STATUS : Show one per-lane reader state",
         "NFC GATE=<#> SCAN=1 : Scan hardware once, no Spoolman/HH dispatch",
@@ -481,6 +552,9 @@ class NFCGateDefaults:
         gcode.register_command(
             'NFC_DOCTOR', self.cmd_NFC_DOCTOR,
             desc="Check NFC reader setup and common configuration problems")
+        gcode.register_command(
+            'NFC_REGISTER', self.cmd_NFC_REGISTER,
+            desc="Assign an NFC UID to a Spoolman spool")
 
         log_file = config.get('log_file', '')
         try:
@@ -521,6 +595,10 @@ class NFCGateDefaults:
     def cmd_NFC_DOCTOR(self, gcmd):
         gcmd.respond_info(color_console_tags(
             '\n'.join(_doctor_lines(self._printer))))
+
+    def cmd_NFC_REGISTER(self, gcmd):
+        gcode = self._printer.lookup_object('gcode')
+        _cmd_register_uid_to_spool(gcode, self._spoolman, gcmd)
 
 
 class NFCGate:
@@ -881,6 +959,9 @@ class NFCGate:
     def _cmd_NFC_DOCTOR_fallback(self, gcmd):
         gcmd.respond_info(color_console_tags(
             '\n'.join(_doctor_lines(self.printer))))
+
+    def _cmd_NFC_REGISTER_fallback(self, gcmd):
+        _cmd_register_uid_to_spool(self._gcode, self._spoolman, gcmd)
 
     def _cmd_help(self, gcmd):
         lines = [
@@ -1445,6 +1526,11 @@ class NFCGate:
                     'NFC_DOCTOR',
                     self._cmd_NFC_DOCTOR_fallback,
                     desc="Check NFC reader setup and common configuration problems"
+                )
+                self._gcode.register_command(
+                    'NFC_REGISTER',
+                    self._cmd_NFC_REGISTER_fallback,
+                    desc="Assign an NFC UID to a Spoolman spool"
                 )
 
             # Shared reader has no mmu_gate — all interaction goes through

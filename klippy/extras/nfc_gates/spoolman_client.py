@@ -314,8 +314,12 @@ class SpoolmanClient:
             method='PATCH')
         if self._debug >= 3:
             logger.info("spoolman: PATCH %s payload=%s", url, payload)
-        with urlopen(req, timeout=self._timeout) as resp:
-            resp.read()
+        # Spoolman has applied the PATCH once urlopen returns a response.  Do
+        # not read the response body here: this command runs on Klipper's
+        # reactor thread, and waiting for a slow/kept-open body can make the
+        # whole host appear locked up after the RFID field has already changed.
+        with urlopen(req, timeout=self._timeout):
+            pass
         return True
 
     def set_spool_uid(self, spool_id, uid_hex):

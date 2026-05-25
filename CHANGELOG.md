@@ -5,6 +5,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.9.22] - 05/24/2026 - WoodWorker
+
+### Spoolman UID Registration
+
+- Added `NFC_Register UID=<uid> Spool_id=<id>` so a known NFC UID can be assigned to an existing Spoolman spool directly from the printer console.
+- The command validates Spoolman availability, confirms the target spool exists, writes the configured `spoolman_rfid_key`, and clears NFC's UID lookup cache. It intentionally does not call `MMU_SPOOLMAN REFRESH` inline because that Happy Hare path can block Klipper after the Spoolman write succeeds.
+- Avoided the full duplicate-UID scan from the Klipper command path so `NFC_REGISTER` stays light.
+- Stopped reading the Spoolman PATCH response body after UID registration. Spoolman applies the RFID field update before the body is needed, and waiting for a slow/kept-open body can freeze Klipper's reactor after the UID has already been saved.
+- Added command help, README, message documentation, and regression coverage for successful registration and missing-spool rejection.
+- Fixed `NFC_REGISTER` help/error rendering so the command appears with the same uppercase styling as other commands, avoids console-swallowed angle-bracket placeholders, and emits command errors once while still writing them to `nfc_reader.log`.
+
+---
+
 ## [0.9.21] - 05/23/2026 - WoodWorker
 
 ### Scan-Jog LED Reliability

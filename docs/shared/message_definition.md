@@ -60,6 +60,8 @@ These apply to both per-lane readers and the shared reader.
 | One manual poll complete | `NFC[<name>]: one poll complete; <status>` | Per-lane: `INFO     nfc_gate: [<name>] one poll complete; <status>`. Shared: see shared table. |
 | Status command | Per-lane `NFC GATE=<#> STATUS`, global `NFC_STATUS`, shared `NFC_SHARED STATUS=1`, and `SUMMARY=1` print status text. | Console command output only |
 | Help command | `NFC_HELP`, `NFC GATE=<#> HELP`, `NFC_SHARED HELP=1`, or low-level debug help prints command help. | Console command output only |
+| UID registered to existing spool | `[OK] NFC: UID <uid> assigned to Spoolman spool <spool>; NFC cache cleared. Happy Hare/Fluidd will refresh on their normal Spoolman polling cycle.` | `INFO     NFC_Register: UID <uid> assigned to Spoolman spool <spool>` |
+| UID registration failed | `[ERROR] NFC: <reason>` | Same message at `ERROR`; emitted once to the console by the command response. If the Spoolman update succeeded but Happy Hare refresh failed, the refresh failure is logged as `WARNING` |
 
 ## Per-Lane Reader Messages
 
